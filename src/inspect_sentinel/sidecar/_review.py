@@ -223,7 +223,9 @@ class Reviews:
         # None means no expiry. An infinite timeout is refused, because each
         # question tells the eval when it closes, and that time must be finite.
         if timeout is not None and not (timeout > 0 and math.isfinite(timeout)):
-            raise ValueError(f"The review timeout is some seconds, not {timeout}.")
+            raise ValueError(
+                f"The review timeout must be a positive, finite number of seconds, not {timeout}."
+            )
         self._timeout = timeout
         self._open: dict[str, Question] = {}
         self._receipts: OrderedDict[str, _Receipt] = OrderedDict()
@@ -273,14 +275,14 @@ class Reviews:
             return question.answer
         review.resolve("timed_out")
         logger.warning(
-            "Question %s expired unanswered, so the %s stage of the call to %s was answered with caution.",
+            "Question %s expired with no answer, so the sidecar gave the %s stage of the call to %s the cautious answer.",
             question.id,
             question.stage,
             question.call.function,
         )
         return cautious(
             question.choices,
-            "Nobody answered before the question expired, so the sidecar answered with caution.",
+            "Nobody answered before the question expired, so the sidecar gave the cautious answer.",
         )
 
     async def list_pending(
@@ -338,7 +340,7 @@ class Reviews:
         question = self._open.get(id)
         if receipt is not None or question is None or question.eval_id != eval_id:
             raise UnknownQuestionError(
-                f"The sidecar holds no question {id!r} for the eval {eval_id!r}. It may have closed unanswered, or its sample may have ended."
+                f"The sidecar holds no question {id!r} for the eval {eval_id!r}. It may have closed without an answer, or its sample may have ended."
             )
         if question.answer is not None:
             # Already answered, and the receipt has since been dropped. The
@@ -354,7 +356,7 @@ class Reviews:
             )
         if decision not in ANSWERABLE:
             raise ChoiceError(
-                f"An answer through the endpoint for evals is one of {', '.join(ANSWERABLE)}, not {decision!r}."
+                f"An answer sent through the endpoint for evals must be one of {', '.join(ANSWERABLE)}, not {decision!r}."
             )
         review = question.review
         review.decision, review.reason, review.answered = decision, reason, time.time()

@@ -40,7 +40,7 @@ from inspect_sentinel.sidecar.envoy._proto.envoy.service.ext_proc.v3 import (
     external_processor_pb2 as pb,
 )
 from tests.sidecar._traffic import (
-    NotingHandler,
+    RecordingHandler,
     every_call_rule,
     holding,
     inspect_headers,
@@ -402,8 +402,10 @@ async def test_providers_error_passes_through_unjudged_whatever_its_size_or_enco
 
 
 @pytest.mark.anyio
-async def test_providers_error_is_handed_over_with_its_headers_and_body() -> None:
-    handler = NotingHandler(weather_rule())
+async def test_a_providers_error_reaches_the_handler_with_its_headers_and_body() -> (
+    None
+):
+    handler = RecordingHandler(weather_rule())
     await holding(handler)
     error = b'{"type": "error", "error": {"type": "overloaded_error"}}'
     replied = _reply(error[:20], error[20:])
@@ -436,7 +438,7 @@ async def test_providers_error_is_handed_over_with_its_headers_and_body() -> Non
 
 @pytest.mark.anyio
 async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
-    handler = NotingHandler(weather_rule())
+    handler = RecordingHandler(weather_rule())
     await holding(handler)
     replied = _reply(b"\x1f\x8b compressed", b" error")
     replied[0] = pb.ProcessingRequest(
@@ -466,7 +468,7 @@ async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
     assert [body for _, body in handler.error_bodies] == [b""]
 
 
-class _SlowToBeShownAnError(NotingHandler):
+class _SlowOnAnError(RecordingHandler):
     """A handler whose `reply` is slow to return for a provider's error, and which records each call the shim makes to it about that error, in order."""
 
     def __init__(self, *args: Any, **options: Any) -> None:
@@ -494,10 +496,10 @@ class _SlowToBeShownAnError(NotingHandler):
 
 
 @pytest.mark.anyio(backends=["asyncio"])
-async def test_an_error_envoy_stops_waiting_for_while_it_is_shown_is_told_as_cut_off() -> (
+async def test_an_error_envoy_abandons_during_the_handover_is_reported_as_cut_off() -> (
     None
 ):
-    handler = _SlowToBeShownAnError(weather_rule())
+    handler = _SlowOnAnError(weather_rule())
     shim = EnvoyShim(handler, max_body_bytes=1024 * 1024)
 
     async def sent() -> AsyncIterator[pb.ProcessingRequest]:
@@ -533,8 +535,8 @@ async def test_an_error_envoy_stops_waiting_for_while_it_is_shown_is_told_as_cut
 
 
 @pytest.mark.anyio
-async def test_an_error_cut_off_after_it_was_shown_is_told_as_cut_off() -> None:
-    handler = _SlowToBeShownAnError(weather_rule())
+async def test_an_error_cut_off_after_the_handover_is_reported_as_cut_off() -> None:
+    handler = _SlowOnAnError(weather_rule())
     handler.go_on.set()
     await holding(handler)
 
@@ -565,7 +567,7 @@ async def test_an_error_cut_off_after_it_was_shown_is_told_as_cut_off() -> None:
 
 @pytest.mark.anyio
 async def test_a_reply_header_sent_more_than_once_keeps_every_value() -> None:
-    handler = NotingHandler(weather_rule())
+    handler = RecordingHandler(weather_rule())
     await holding(handler)
     sent = [
         (":status", "529"),

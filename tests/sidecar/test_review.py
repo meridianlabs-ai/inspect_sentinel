@@ -138,7 +138,7 @@ def _from_eval(
     )
 
 
-async def _pending(
+async def _list_pending(
     client: httpx.AsyncClient,
     eval_id: str = "eval_789",
     token: str = TOKEN,
@@ -243,7 +243,7 @@ async def _paused(
     assert answer is PENDING
 
 
-async def _asked(
+async def _paused_question(
     handler: Handler,
     client: httpx.AsyncClient,
     *content: dict[str, Any],
@@ -254,7 +254,7 @@ async def _asked(
     # Pause a call as `_paused` does, and return the question that the sentinel
     # asked a person about it
     await _paused(handler, *content, irid=irid, id=id, **sample)
-    (question,) = [q for q in await _pending(client) if q["request_id"] == irid]
+    (question,) = [q for q in await _list_pending(client) if q["request_id"] == irid]
     return question
 
 
@@ -263,7 +263,7 @@ def _result_request(id: str = "y") -> Request:
     return _from_eval(id, "irid-2", ran("Oslo", "Rain."))
 
 
-async def _asked_at_result(
+async def _paused_question_at_result(
     handler: Handler, client: httpx.AsyncClient
 ) -> dict[str, Any]:
     # The eval ran a call, and its next request holds the call's result. The
@@ -274,11 +274,11 @@ async def _asked_at_result(
     if first is PENDING:
         # this handler also asks a person about the call itself, so approve that
         # question first
-        (asked,) = await _pending(client)
+        (asked,) = await _list_pending(client)
         await _answer(client, asked["id"], "approve")
         await _result(client, until="decided")
     assert await handler.request(_result_request()) is PENDING
-    (question,) = await _pending(client)
+    (question,) = await _list_pending(client)
     return question
 
 
@@ -314,7 +314,7 @@ async def test_a_question_answers_the_model_call_pending_review_at_once() -> Non
         result = await _result(client)
         assert result["state"] == "awaiting_review"
         assert "outcome" not in result
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         assert question["request_id"] == "irid-1"
 
 
@@ -323,7 +323,7 @@ async def test_an_approved_call_is_decided_and_its_reply_is_kept_for_the_eval() 
     handler = _reviewed()
     body = message(weather("Oslo"))
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         answered = await _answer(client, question["id"], "approve", "Looks fine.")
 
@@ -336,7 +336,7 @@ async def test_an_approved_call_is_decided_and_its_reply_is_kept_for_the_eval() 
         held = await _held_reply(client)
         assert (held.status_code, held.headers["content-type"]) == (200, JSON)
         assert held.content == body
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
 
 
 @pytest.mark.anyio
@@ -381,7 +381,7 @@ async def test_a_held_reply_has_the_providers_headers_without_those_of_one_hop()
             },
         )
         assert await handler.reply(held) is PENDING
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
 
         await _result(client, until="decided")
@@ -403,7 +403,7 @@ async def test_a_held_reply_has_the_providers_headers_without_those_of_one_hop()
 async def test_a_question_says_what_the_person_decides_about() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client, irid="irid-42")
+        question = await _paused_question(handler, client, irid="irid-42")
 
     assert question["sample_uuid"] == "sample_123"
     assert question["request_id"] == "irid-42"
@@ -423,10 +423,10 @@ async def test_a_question_says_what_the_person_decides_about() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_person_who_rejects_has_the_model_told_their_reason() -> None:
+async def test_a_rejection_tells_the_model_the_persons_reason() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         await _answer(client, question["id"], "reject", "Not Oslo today.")
 
@@ -439,7 +439,7 @@ async def test_a_person_who_rejects_has_the_model_told_their_reason() -> None:
 async def test_a_person_who_terminates_ends_the_run() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         await _answer(client, question["id"], "terminate", "Stop here.")
 
@@ -454,7 +454,7 @@ async def test_a_person_who_terminates_ends_the_run() -> None:
 async def test_an_accepted_answer_is_not_the_end_while_another_call_is_judged() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        first = await _asked(
+        first = await _paused_question(
             handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
         )
         assert first["call"]["id"] == "toolu_1"
@@ -464,7 +464,7 @@ async def test_an_accepted_answer_is_not_the_end_while_another_call_is_judged() 
         # the sentinel asks a second question, about the turn's next call
         result = await _result(client, until="awaiting_review")
         assert "outcome" not in result
-        (second,) = await _pending(client)
+        (second,) = await _list_pending(client)
         assert second["call"]["id"] == "toolu_2"
         await _answer(client, second["id"], "approve")
         result = await _result(client, until="decided")
@@ -477,12 +477,12 @@ async def test_an_accepted_answer_is_not_the_end_while_another_call_is_judged() 
 async def test_a_held_reply_has_the_sentinels_edits_in_it() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        first = await _asked(
+        first = await _paused_question(
             handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
         )
         await _answer(client, first["id"], "approve")
         await _result(client, until="awaiting_review")
-        (second,) = await _pending(client)
+        (second,) = await _list_pending(client)
 
         await _answer(client, second["id"], "reject", "Not Bergen.")
 
@@ -499,24 +499,26 @@ async def test_a_held_reply_has_the_sentinels_edits_in_it() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_request_sent_again_while_a_person_decides_is_pending_too() -> None:
+async def test_a_request_resent_while_a_person_decides_gets_pending_review_too() -> (
+    None
+):
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         again = await handler.request(_from_eval("x2"))
 
         # the handler answers "pending review" again, and asks no second question
         assert again is PENDING
-        assert [q["id"] for q in await _pending(client)] == [question["id"]]
+        assert [q["id"] for q in await _list_pending(client)] == [question["id"]]
         assert (await _result(client))["state"] == "awaiting_review"
 
 
 @pytest.mark.anyio
-async def test_a_request_sent_again_once_its_call_is_decided_is_refused() -> None:
+async def test_a_request_resent_after_its_call_is_decided_is_refused() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "approve")
         decided = await _result(client, until="decided")
 
@@ -527,7 +529,7 @@ async def test_a_request_sent_again_once_its_call_is_decided_is_refused() -> Non
         assert isinstance(again, Refuse)
         assert "has ended" in again.message and "request_result" in again.message
         assert await _result(client) == decided
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
 
 
 @pytest.mark.anyio
@@ -537,7 +539,7 @@ async def test_another_request_under_the_same_irid_is_refused_and_inherits_nothi
 ) -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         before = await _result(client)
         other = _from_eval("x2")
         if change == "body":
@@ -553,16 +555,16 @@ async def test_another_request_under_the_same_irid_is_refused_and_inherits_nothi
         # the handler refuses a different request under the same `x-irid`.
         assert isinstance(refused, Refuse)
         assert refused is not PENDING
-        assert "not the same request" in refused.message
+        assert "does not match it" in refused.message
         assert await _result(client) == before
-        assert [q["id"] for q in await _pending(client)] == [question["id"]]
+        assert [q["id"] for q in await _list_pending(client)] == [question["id"]]
 
 
 @pytest.mark.anyio
 async def test_a_try_signed_afresh_is_the_same_request() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
         later = replace(
             request("x2"),
             headers=inspect_headers(irid="irid-1", timestamp=int(time.time()) + 30),
@@ -589,7 +591,7 @@ async def test_a_try_that_was_already_being_judged_reattaches_when_it_would_ask(
 
         # one model call, one question
         assert second is PENDING
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
         result = await _result(client, until="decided")
     assert [review["id"] for review in result["reviews"]] == [question["id"]]
@@ -616,7 +618,7 @@ async def test_a_try_that_finished_without_asking_follows_the_call_another_try_p
         # and `request_result` both see one call.
         assert second is PENDING
         assert (await _result(client))["state"] == "awaiting_review"
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
         assert (await _result(client, until="decided"))["outcome"] == "proceed"
         got = await _held_reply(client)
@@ -718,7 +720,7 @@ async def test_a_try_whose_judging_fails_still_follows_the_call_another_try_paus
         # "pending review", and doesn't return the error from its own judging.
         assert second is PENDING
         assert (await _result(client))["state"] == "awaiting_review"
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
         assert (await _result(client, until="decided"))["outcome"] == "proceed"
 
@@ -766,7 +768,7 @@ async def test_a_try_overtaken_by_a_later_one_that_was_answered_asks_nobody() ->
         # has ended. The call's result is unchanged.
         (answer,) = answers
         assert isinstance(answer, Refuse) and "has ended" in answer.message
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         assert await _result(client) == decided
     assert (decided["state"], decided["outcome"]) == ("decided", "proceed")
 
@@ -856,7 +858,7 @@ async def test_a_later_try_may_change_its_cache_ttl_and_nothing_the_model_reads(
         # the sentinel asks a person about the tool result in the request, and the
         # person approves it
         assert await handler.request(_cached("y")) is PENDING
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
 
@@ -872,7 +874,7 @@ async def test_a_later_try_may_change_its_cache_ttl_and_nothing_the_model_reads(
             # The handler refuses it. The change is to data that the model reads,
             # though its key is also named `cache_control`.
             assert isinstance(sent, Refuse) and sent is not PENDING
-            assert "not the same request" in sent.message
+            assert "does not match it" in sent.message
 
 
 # --- a question at a tool's result: the provider has not been called ---
@@ -884,7 +886,7 @@ async def test_a_question_at_a_tools_result_is_asked_before_the_provider_is_call
 ):
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
 
         assert question["stage"] == "tool_result"
         assert question["request_id"] == "irid-2"
@@ -917,7 +919,7 @@ def _other_call(id: str) -> Request:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("arrives", ["before the question", "after the question"])
-async def test_another_call_holding_a_result_under_review_is_refused_to_be_sent_again(
+async def test_another_call_holding_a_result_under_review_gets_a_503_so_its_client_retries(
     arrives: str,
 ) -> None:
     reached, release = anyio.Event(), anyio.Event()
@@ -956,12 +958,12 @@ async def test_another_call_holding_a_result_under_review_is_refused_to_be_sent_
             "not_judged",
             "result_under_review",
         )
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         assert question["request_id"] == "irid-2"
 
         # cancelling the other call leaves the first call's question open
         await _cancel(client, "irid-3")
-        assert [q["id"] for q in await _pending(client)] == [question["id"]]
+        assert [q["id"] for q in await _list_pending(client)] == [question["id"]]
 
         # once the person has answered, the handler passes on the other call's
         # request
@@ -997,17 +999,17 @@ async def test_a_try_waiting_on_its_own_calls_result_follows_the_call_once_it_as
         # one model call, one question
         assert answers == {"y": PENDING, "y2": PENDING}
         assert (await _result(client, "irid-2"))["state"] == "awaiting_review"
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y3")), Pass)
 
 
 @pytest.mark.anyio
-async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> None:
+async def test_an_approved_result_leaves_the_call_awaiting_resend() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
 
         await _answer(client, question["id"], "approve")
 
@@ -1019,7 +1021,7 @@ async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> No
         # handler passes it on to the provider without judging it again
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         assert (await _result(client, "irid-2"))["state"] == "awaiting_reply"
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
         assert isinstance(await handler.reply(reply(body, id="y2")), Pass)
         result = await _result(client, "irid-2")
@@ -1034,10 +1036,10 @@ async def test_an_approved_result_waits_for_the_request_to_be_sent_again() -> No
 
 
 @pytest.mark.anyio
-async def test_only_one_try_is_sent_on_to_the_provider() -> None:
+async def test_only_one_try_is_passed_on_to_the_provider() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         answers: list[Any] = []
@@ -1056,10 +1058,12 @@ async def test_only_one_try_is_sent_on_to_the_provider() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_reply_lost_on_its_way_to_the_eval_is_read_from_the_sidecar() -> None:
+async def test_a_reply_lost_on_its_way_to_the_eval_is_fetched_from_the_sidecar() -> (
+    None
+):
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1075,10 +1079,12 @@ async def test_a_reply_lost_on_its_way_to_the_eval_is_read_from_the_sidecar() ->
 
 
 @pytest.mark.anyio
-async def test_a_reply_the_sidecar_never_hears_of_lets_no_other_try_through() -> None:
+async def test_a_reply_that_never_reaches_the_sidecar_lets_no_other_try_through() -> (
+    None
+):
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1093,10 +1099,10 @@ async def test_a_reply_the_sidecar_never_hears_of_lets_no_other_try_through() ->
 
 
 @pytest.mark.anyio
-async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> None:
+async def test_a_providers_error_puts_the_call_back_at_awaiting_resend() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1126,7 +1132,7 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
         # the handler passes one more try on, and asks nobody about the result
         # again
         assert isinstance(await handler.request(_result_request("y3")), Pass)
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
         assert isinstance(await handler.reply(reply(body, id="y3")), Pass)
         result = await _result(client, "irid-2")
@@ -1137,12 +1143,10 @@ async def test_a_providers_error_sends_the_call_back_to_wait_for_a_request() -> 
 
 
 @pytest.mark.anyio
-async def test_a_providers_error_handed_over_whole_is_kept_without_a_body_over_the_bound() -> (
-    None
-):
+async def test_a_providers_error_over_the_size_bound_is_kept_without_its_body() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1166,7 +1170,7 @@ async def test_a_providers_error_handed_over_whole_is_kept_without_a_body_over_t
 async def test_a_failure_is_the_providers_whatever_error_the_eval_holds() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1189,7 +1193,7 @@ async def test_a_failure_is_the_providers_whatever_error_the_eval_holds() -> Non
 async def test_after_a_failed_exchange_the_new_reply_is_judged_and_may_ask() -> None:
     handler = Handler(human(stages=["tool_call", "tool_result"]))
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1203,7 +1207,7 @@ async def test_after_a_failed_exchange_the_new_reply_is_judged_and_may_ask() -> 
         )
 
         assert again is PENDING
-        (asked,) = await _pending(client)
+        (asked,) = await _list_pending(client)
         assert (asked["stage"], asked["call"]["id"]) == ("tool_call", "toolu_2")
         await _answer(client, asked["id"], "approve")
         result = await _result(client, "irid-2", until="decided")
@@ -1220,7 +1224,7 @@ async def test_after_a_failed_exchange_the_new_reply_is_judged_and_may_ask() -> 
 async def test_a_reply_cut_off_is_a_failure_without_a_reply() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1234,10 +1238,12 @@ async def test_a_reply_cut_off_is_a_failure_without_a_reply() -> None:
 
 
 @pytest.mark.anyio
-async def test_an_errors_body_that_passed_in_parts_is_handed_over_afterwards() -> None:
+async def test_an_errors_body_that_arrived_in_parts_reaches_the_handler_afterwards() -> (
+    None
+):
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1262,12 +1268,12 @@ async def test_an_errors_body_that_passed_in_parts_is_handed_over_afterwards() -
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("how", ["no copy", "cut off"])
-async def test_an_error_whose_body_isnt_handed_over_is_kept_without_it(
+async def test_an_error_whose_body_the_proxy_doesnt_send_is_kept_without_it(
     how: str,
 ) -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1301,12 +1307,12 @@ async def test_an_error_whose_body_isnt_handed_over_is_kept_without_it(
 
 
 @pytest.mark.anyio
-async def test_an_error_that_passes_after_its_call_was_cancelled_reopens_nothing() -> (
+async def test_an_error_that_arrives_after_its_call_was_cancelled_resumes_nothing() -> (
     None
 ):
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1324,7 +1330,7 @@ async def test_an_error_that_passes_after_its_call_was_cancelled_reopens_nothing
 async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         first = _result_request("y2")
@@ -1334,7 +1340,7 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
         retry = replace(
             first, headers={**first.headers, "x-stainless-retry-count": "1"}
         )
-        sent_on = await handler.request(retry)
+        passed_on = await handler.request(retry)
         # any other header may have shaped the sentinel's decision, so a request
         # that changes one is not the request the person approved
         other = replace(
@@ -1343,8 +1349,8 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
         )
         refused = await handler.request(other)
 
-    assert isinstance(sent_on, Pass)
-    assert isinstance(refused, Refuse) and "not the same request" in refused.message
+    assert isinstance(passed_on, Pass)
+    assert isinstance(refused, Refuse) and "does not match it" in refused.message
 
 
 # --- `cancel_paused_request` closes a paused call in any state ---
@@ -1354,7 +1360,7 @@ async def test_an_sdks_own_retry_is_the_same_request_whatever_its_retry_count() 
 async def test_cancelling_a_call_a_person_is_asked_about_closes_its_question() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         assert await _cancel(client) is True
 
@@ -1363,7 +1369,7 @@ async def test_cancelling_a_call_a_person_is_asked_about_closes_its_question() -
         assert "outcome" not in result
         (review,) = result["reviews"]
         assert (review["resolution"], review["cause"]) == ("cancelled", "cancelled")
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         late = await _answer(client, question["id"], "approve")
         assert late["error"]["code"] == UNKNOWN_QUESTION
         # a second cancel returns False, because it closed nothing; False doesn't
@@ -1397,7 +1403,7 @@ async def test_cancelling_between_questions_stops_the_next_from_being_asked() ->
         sequential([waits_at("toolu_2", reached, go), human(stages=["tool_call"])])
     )
     async with _serving(handler) as client:
-        first = await _asked(
+        first = await _paused_question(
             handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
         )
         await _answer(client, first["id"], "approve")
@@ -1409,17 +1415,17 @@ async def test_cancelling_between_questions_stops_the_next_from_being_asked() ->
         go.set()
         await anyio.sleep(0.1)
 
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         result = await _result(client)
     assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
     assert [review["call"] for review in result["reviews"]] == ["toolu_1"]
 
 
 @pytest.mark.anyio
-async def test_cancelling_a_call_that_waits_for_a_request_sends_nothing_on() -> None:
+async def test_cancelling_a_call_at_awaiting_resend_passes_nothing_on() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
 
@@ -1437,7 +1443,7 @@ async def test_a_reply_that_comes_after_its_call_was_cancelled_doesnt_revive_it(
 ):
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1454,14 +1460,14 @@ async def test_a_reply_that_comes_after_its_call_was_cancelled_doesnt_revive_it(
         result = await _result(client, "irid-2")
         assert (result["state"], result["reason"]) == ("not_judged", "cancelled")
         _refused(await _held_reply(client, "irid-2"))
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
 
 
 @pytest.mark.anyio
-async def test_a_call_cancelled_as_its_answer_is_taken_stays_cancelled() -> None:
+async def test_a_call_cancelled_as_its_answer_is_accepted_stays_cancelled() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
 
         # The test answers the question and cancels the call with no await in
         # between, so the cancel lands before the judging task runs again. The
@@ -1486,7 +1492,7 @@ async def test_a_call_cancelled_as_a_person_ends_the_run_leaves_the_run_going() 
     # taking the answer and reaching its decision.
     handler = Handler(human(stages=["tool_call"]))
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         # The test answers `terminate` and cancels the call with no await in
         # between, so the cancel lands before the judging task runs again. The
@@ -1510,7 +1516,7 @@ async def test_a_call_cancelled_as_a_person_ends_the_run_leaves_the_run_going() 
 async def test_a_call_cancelled_as_its_reply_arrives_doesnt_pass_the_reply_on() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -1552,7 +1558,7 @@ async def test_cancelling_closes_only_a_call_a_person_was_asked_about() -> None:
         # a call no person was asked about, whose request is still with the
         # provider
         assert isinstance(await handler.request(_from_eval("p", "irid-7")), Pass)
-        await _asked(handler, client)
+        await _paused_question(handler, client)
 
         assert await _cancel(client, "irid-7") is False
         assert await _cancel(client, "irid-never-sent") is False
@@ -1571,7 +1577,7 @@ async def test_cancelling_closes_only_a_call_a_person_was_asked_about() -> None:
 async def test_ending_the_sample_closes_its_calls_and_their_questions() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         ended = await _call(
             client,
@@ -1580,7 +1586,7 @@ async def test_ending_the_sample_closes_its_calls_and_their_questions() -> None:
         )
 
         assert ended["result"]["state"] == "ended"
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         late = await _answer(client, question["id"], "approve")
         assert late["error"]["code"] == UNKNOWN_QUESTION
         # `request_result` reports the call as it reports any request of an ended
@@ -1625,7 +1631,7 @@ async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ende
 ):
     handler = Handler(human(stages=["tool_result", "tool_call"]))
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         # the handler passes the second try on, and the sentinel asks a person
@@ -1633,7 +1639,7 @@ async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ende
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         held = reply(message(weather("Bergen", "toolu_2")), id="y2")
         assert await handler.reply(held) is PENDING
-        (second,) = await _pending(client)
+        (second,) = await _list_pending(client)
         await _answer(client, second["id"], "approve")
         before = await _result(client, "irid-2", until="decided")
 
@@ -1654,10 +1660,12 @@ async def test_a_question_keeps_the_try_it_was_asked_at_once_its_sample_has_ende
 
 
 @pytest.mark.anyio
-async def test_an_answer_sent_again_after_its_sample_ended_is_for_no_question() -> None:
+async def test_an_answer_repeated_after_its_sample_ended_gets_unknown_question() -> (
+    None
+):
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, until="decided")
 
@@ -1671,7 +1679,7 @@ async def test_an_answer_sent_again_after_its_sample_ended_is_for_no_question() 
 async def test_a_later_attempt_at_the_sample_closes_the_earlier_ones_calls() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
 
         # Inspect retries the sample: a new attempt, with a higher number
         retried = await handler.request(
@@ -1679,7 +1687,7 @@ async def test_a_later_attempt_at_the_sample_closes_the_earlier_ones_calls() -> 
         )
 
         assert isinstance(retried, Pass)
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         result = await _result(client)
     assert (result["state"], result["reason"]) == ("not_judged", "replaced_attempt")
     (review,) = result["reviews"]
@@ -1702,7 +1710,7 @@ def ends_at_bergen() -> Protocol:
 async def test_a_run_a_sentinel_ends_closes_its_other_calls() -> None:
     handler = Handler(sequential([ends_at_bergen(), human(stages=["tool_call"])]))
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
         assert isinstance(await handler.request(_from_eval("z", "irid-9")), Pass)
 
         # the sentinel ends the run at another call of the same sample
@@ -1711,7 +1719,7 @@ async def test_a_run_a_sentinel_ends_closes_its_other_calls() -> None:
         )
 
         assert isinstance(ended, Refuse) and "ended this run" in ended.message
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         result = await _result(client)
     assert (result["state"], result["outcome"]) == ("decided", "terminate")
     (review,) = result["reviews"]
@@ -1739,7 +1747,7 @@ async def test_a_sample_ended_before_its_first_question_is_never_asked_it() -> N
             assert await handler.end_sample("sample_123", "eval_789") == "ended"
             go.set()
 
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         found = await handler.request_result("irid-1", "eval_789")
 
     (answer,) = answers
@@ -1753,7 +1761,7 @@ async def test_a_sample_ended_before_its_first_question_is_never_asked_it() -> N
 async def test_a_closed_question_takes_no_answer_from_the_moment_it_closes() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         await handler.end_sample("sample_123", "eval_789")
 
@@ -1768,7 +1776,7 @@ async def test_a_closed_question_takes_no_answer_from_the_moment_it_closes() -> 
 async def test_stopping_the_sidecar_stops_what_waits() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
     # a restart loses a paused call: no question is left once the handler stops
     # serving
     assert handler.reviews._open == {}  # pyright: ignore[reportPrivateUsage]
@@ -1779,7 +1787,7 @@ async def test_stopping_the_sidecar_stops_what_waits() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_question_that_expires_is_answered_with_caution_and_judging_goes_on() -> (
+async def test_a_question_that_expires_gets_the_cautious_answer_and_judging_continues() -> (
     None
 ):
     handler = _reviewed(review_timeout=0.2)
@@ -1790,7 +1798,7 @@ async def test_a_question_that_expires_is_answered_with_caution_and_judging_goes
 
         result = await _result(client, until="decided")
 
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
     # an expired question doesn't cancel the call: the sidecar answers it with
     # caution, here `reject`, and the call is decided
     assert result["outcome"] == "reject"
@@ -1805,7 +1813,7 @@ async def test_a_question_that_expires_says_when() -> None:
     # question
     handler = _reviewed(review_timeout=3600)
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
     assert question["closes"] - question["asked"] == pytest.approx(3600)
 
@@ -1831,7 +1839,7 @@ async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit()
     # work, a few milliseconds, even on a busy machine.
     handler = _reviewed(time_limit=2)
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         # the person takes longer than the sentinel's time limit
         await anyio.sleep(2.2)
 
@@ -1860,22 +1868,22 @@ def _clocks(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     return now
 
 
-async def _waiting_for_its_request(handler: Handler, client: httpx.AsyncClient) -> None:
+async def _at_awaiting_resend(handler: Handler, client: httpx.AsyncClient) -> None:
     # A person was asked about a tool result and approved it. The call is now
     # at `awaiting_resend`: the sidecar waits for the eval to resend it.
-    question = await _asked_at_result(handler, client)
+    question = await _paused_question_at_result(handler, client)
     await _answer(client, question["id"], "approve")
     await _result(client, "irid-2", until="awaiting_resend")
 
 
 @pytest.mark.anyio
-async def test_a_call_that_waits_for_its_request_and_that_nothing_names_is_closed(
+async def test_an_idle_call_at_awaiting_resend_is_closed_after_the_expiry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = _clocks(monkeypatch)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        await _waiting_for_its_request(handler, client)
+        await _at_awaiting_resend(handler, client)
 
         now[0] += 9
         assert handler.sweep() == (0, 0)
@@ -1905,12 +1913,12 @@ async def test_a_call_begins_to_wait_when_the_person_has_answered_however_long_t
     now = _clocks(monkeypatch)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         # the person takes three days; the sweep never closes a call whose
         # question is open
         now[0] += 3 * 24 * 60 * 60
         assert handler.sweep() == (0, 0)
-        (still_open,) = await _pending(client)
+        (still_open,) = await _list_pending(client)
         assert still_open["id"] == question["id"]
 
         await _answer(client, question["id"], "approve")
@@ -1928,13 +1936,13 @@ async def test_a_call_begins_to_wait_when_the_person_has_answered_however_long_t
 
 
 @pytest.mark.anyio
-async def test_a_waiting_call_its_eval_asks_about_is_kept(
+async def test_a_waiting_call_that_its_eval_looks_up_is_kept(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = _clocks(monkeypatch)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        await _waiting_for_its_request(handler, client)
+        await _at_awaiting_resend(handler, client)
 
         # each `request_result` call comes within the expiry and restarts it, so
         # the sweep never closes the call
@@ -1951,7 +1959,7 @@ async def test_a_reply_is_judged_when_its_call_was_kept_longer_than_the_state_ke
     now = _clocks(monkeypatch)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        await _waiting_for_its_request(handler, client)
+        await _at_awaiting_resend(handler, client)
         assert isinstance(await handler.request(_result_request("y2")), Pass)
 
         # The provider takes longer than the state's expiry for an unused
@@ -1976,7 +1984,7 @@ async def test_a_call_keeps_the_request_of_its_latest_try_only(
     now = _clocks(monkeypatch)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        await _waiting_for_its_request(handler, client)
+        await _at_awaiting_resend(handler, client)
         # the handler passes one try on, its reply is cut off, and the handler
         # passes the next try on
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -2011,7 +2019,7 @@ async def test_a_serving_handler_closes_a_waiting_call_by_itself(
     monkeypatch.setattr(_handler, "_SWEEP_EVERY", 0.01)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        await _waiting_for_its_request(handler, client)
+        await _at_awaiting_resend(handler, client)
 
         # Nothing here calls `sweep`. Each `request_result` call restarts the
         # expiry of a call that still waits, so the test moves the clock a whole
@@ -2033,19 +2041,19 @@ async def test_a_call_whose_reply_is_still_coming_is_kept_and_one_with_no_reply_
     now = _clocks(monkeypatch)
     handler = _at_results(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        await _waiting_for_its_request(handler, client)
+        await _at_awaiting_resend(handler, client)
         assert isinstance(await handler.request(_result_request("y2")), Pass)
         body = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
-        sent_on = reply(body, id="y2")
+        provider_reply = reply(body, id="y2")
         stream = handler.reply_stream(
             ReplyStart(
-                id=sent_on.id,
-                provider=sent_on.provider,
-                model=sent_on.model,
-                user=sent_on.user,
-                status=sent_on.status,
-                content_type=sent_on.content_type,
-                format=sent_on.format,
+                id=provider_reply.id,
+                provider=provider_reply.provider,
+                model=provider_reply.model,
+                user=provider_reply.user,
+                status=provider_reply.status,
+                content_type=provider_reply.content_type,
+                format=provider_reply.format,
             )
         )
 
@@ -2066,7 +2074,7 @@ async def test_a_call_whose_reply_is_still_coming_is_kept_and_one_with_no_reply_
         # longer keeps the request. The reply is not judged or passed on, and the
         # call stays expired.
         with pytest.raises(UnreadableError, match="no longer keeps"):
-            await handler.reply(sent_on)
+            await handler.reply(provider_reply)
         assert (await _result(client, "irid-2"))["reason"] == "expired"
 
 
@@ -2077,7 +2085,7 @@ async def test_an_ended_call_is_kept_from_its_end_however_often_it_is_read(
     now = _clocks(monkeypatch)
     handler = _reviewed(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, until="decided")
 
@@ -2126,7 +2134,7 @@ async def test_a_call_that_waits_for_a_person_keeps_what_it_needs_past_its_expir
     now = _state_clock(monkeypatch)
     handler = _reviewed(state=MemoryState(expiry=10))
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         # the person takes longer than the state's expiry for the run, the eval's
         # token and the request's records
         now[0] = 100.0
@@ -2152,7 +2160,7 @@ async def test_a_paused_call_keeps_the_records_of_its_earlier_tries_past_their_e
         await handler.reply_not_judged("x1", "cut_off")
         # the eval tries again under the same `x-irid`, and the sentinel asks a
         # person
-        question = await _asked(handler, client, id="x2")
+        question = await _paused_question(handler, client, id="x2")
         # the person takes longer than the state's expiry for records
         now[0] = 100.0
 
@@ -2184,7 +2192,7 @@ async def test_the_time_a_person_takes_isnt_judging_time(
     now = _clocks(monkeypatch)
     handler = Handler(sequential([takes(now, 3), human(stages=["tool_call"])]))
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         # the person takes ten minutes, and no connection waits meanwhile
         now[0] += 600
         await _answer(client, question["id"], "approve")
@@ -2203,9 +2211,9 @@ async def test_another_eval_neither_sees_nor_answers_the_question() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
         await holding(handler, "eval_other", _OTHER_TOKEN)
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
-        assert await _pending(client, "eval_other", _OTHER_TOKEN) == []
+        assert await _list_pending(client, "eval_other", _OTHER_TOKEN) == []
         intruding = await _call(
             client,
             "answer_question",
@@ -2224,7 +2232,7 @@ async def test_another_eval_neither_sees_nor_answers_the_question() -> None:
 async def test_an_answer_is_refused_unless_its_mac_covers_the_choice_sent() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         # the `mac` signs a rejection, but the answer sent is an approval
         tampered = await _call(
@@ -2238,10 +2246,12 @@ async def test_an_answer_is_refused_unless_its_mac_covers_the_choice_sent() -> N
 
 
 @pytest.mark.anyio
-async def test_the_same_answer_sent_again_is_taken_and_another_is_refused() -> None:
+async def test_the_same_answer_repeated_is_accepted_and_a_different_one_is_refused() -> (
+    None
+):
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, until="decided")
 
@@ -2256,7 +2266,7 @@ async def test_the_same_answer_sent_again_is_taken_and_another_is_refused() -> N
 async def test_a_choice_the_question_doesnt_offer_is_refused() -> None:
     handler = _reviewed(choices=["approve", "terminate"])
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         refused = await _answer(client, question["id"], "reject")
 
@@ -2266,7 +2276,7 @@ async def test_a_choice_the_question_doesnt_offer_is_refused() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_run_no_eval_names_is_answered_with_caution_and_asks_nobody() -> None:
+async def test_a_run_with_no_eval_gets_the_cautious_answer_and_asks_nobody() -> None:
     handler = _reviewed()
     async with _serving(handler):
         await handler.request(request())
@@ -2332,17 +2342,17 @@ async def test_a_sidecar_that_sends_no_results_serves_no_review_method(
 async def test_list_pending_questions_can_be_asked_for_one_sample() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
-        assert await _pending(client, sample_uuid="sample_123") == [question]
-        assert await _pending(client, sample_uuid="sample_456") == []
+        assert await _list_pending(client, sample_uuid="sample_123") == [question]
+        assert await _list_pending(client, sample_uuid="sample_456") == []
 
 
 @pytest.mark.anyio
 async def test_a_sidecar_holding_nothing_of_the_eval_holds_no_question() -> None:
     handler = _reviewed()
     async with handler.serving(), _client(handler) as client:
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
         unknown = await _answer(client, "q1", "approve")
         assert await _cancel(client) is False
 
@@ -2372,10 +2382,10 @@ async def test_a_host_with_its_own_way_to_ask_a_person_is_still_asked() -> None:
 
 
 @pytest.mark.anyio
-async def test_request_result_says_what_became_of_each_question() -> None:
+async def test_request_result_reports_the_record_of_each_question() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "approve", "Looks fine.")
 
         result = await _result(client, until="decided")
@@ -2404,7 +2414,7 @@ async def test_request_result_says_what_became_of_each_question() -> None:
 async def test_only_a_receipt_is_kept_of_an_answered_question() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "approve", "Looks fine.")
         await _result(client, until="decided")
 
@@ -2424,25 +2434,25 @@ async def test_only_a_receipt_is_kept_of_an_answered_question() -> None:
 async def test_questions_are_listed_oldest_first() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        first = await _asked(handler, client)
-        second = await _asked(
+        first = await _paused_question(handler, client)
+        second = await _paused_question(
             handler, client, irid="irid-9", id="z", sample_uuid="sample_456"
         )
 
-        listed = await _pending(client)
+        listed = await _list_pending(client)
 
     assert [q["id"] for q in listed] == [first["id"], second["id"]]
     assert [q["sample_uuid"] for q in listed] == ["sample_123", "sample_456"]
 
 
 @pytest.mark.anyio
-async def test_an_answer_taken_isnt_replaced_once_its_question_closes() -> None:
+async def test_an_accepted_answer_isnt_replaced_once_its_question_closes() -> None:
     reached, go = anyio.Event(), anyio.Event()
     handler = Handler(
         sequential([waits_at("toolu_2", reached, go), human(stages=["tool_call"])])
     )
     async with _serving(handler) as client:
-        question = await _asked(
+        question = await _paused_question(
             handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
         )
         await _answer(client, question["id"], "approve", "Fine.")
@@ -2479,7 +2489,7 @@ def test_a_replaced_reply_is_what_is_held() -> None:
 
 
 @pytest.mark.anyio
-async def test_judging_whose_proxy_goes_away_before_anyone_is_asked_asks_nobody() -> (
+async def test_judging_whose_proxy_disconnects_before_anyone_is_asked_asks_nobody() -> (
     None
 ):
     reached, go = anyio.Event(), anyio.Event()
@@ -2500,11 +2510,11 @@ async def test_judging_whose_proxy_goes_away_before_anyone_is_asked_asks_nobody(
 
         # the judging was cancelled with the proxy's call, so the sentinel asked
         # no person
-        assert await _pending(client) == []
+        assert await _list_pending(client) == []
 
 
 @pytest.mark.anyio
-async def test_a_try_whose_proxy_goes_away_while_it_is_judged_reads_as_cut_off() -> (
+async def test_a_try_whose_proxy_disconnects_while_it_is_judged_is_reported_as_cut_off() -> (
     None
 ):
     reached, go = anyio.Event(), anyio.Event()
@@ -2529,7 +2539,9 @@ async def test_a_try_whose_proxy_goes_away_while_it_is_judged_reads_as_cut_off()
 
 
 @pytest.mark.anyio
-async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -> None:
+async def test_a_try_passed_on_whose_proxy_disconnects_lets_one_more_try_through() -> (
+    None
+):
     reached, go = anyio.Event(), anyio.Event()
     handler = Handler(
         sequential(
@@ -2540,7 +2552,7 @@ async def test_a_try_sent_on_whose_proxy_goes_away_lets_one_more_try_through() -
         )
     )
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         # the handler passes the second try on, and then starts judging its reply
@@ -2578,7 +2590,7 @@ async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> 
         time_limit=2,
     )
     async with _serving(handler) as client:
-        first = await _asked(
+        first = await _paused_question(
             handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
         )
         await _answer(client, first["id"], "approve")
@@ -2591,7 +2603,9 @@ async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> 
 
 
 @pytest.mark.anyio
-async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> None:
+async def test_the_sidecar_tells_the_proxy_to_refuse_a_call_paused_for_a_person() -> (
+    None
+):
     handler = _reviewed()
     asked = _from_eval()
     async with _serving(handler) as client:
@@ -2639,7 +2653,7 @@ async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> Non
         assert passed == {"action": "pass", "release": "whole"}
         assert refused["action"] == "refuse" and refused["status"] == 400
         assert "waiting for a person's review" in refused["message"]
-        (question,) = await _pending(client)
+        (question,) = await _list_pending(client)
         await _answer(client, question["id"], "approve")
         await _result(client, until="decided")
         got = await _held_reply(client)
@@ -2652,7 +2666,7 @@ async def test_a_proxy_is_told_to_refuse_a_call_that_waits_for_a_person() -> Non
 # --- the held reply, which the eval fetches from the held-reply path ---
 
 # the statuses that no provider SDK retries by itself
-_NOT_SENT_AGAIN = {400, 401, 404, 413}
+_NOT_RETRIED_BY_AN_SDK = {400, 401, 404, 413}
 
 
 async def _held_reply(
@@ -2680,7 +2694,7 @@ async def _approved(handler: Handler, client: httpx.AsyncClient, held: Reply) ->
     # person approves, and the call is decided.
     assert isinstance(await handler.request(_from_eval()), Pass)
     assert await handler.reply(held) is PENDING
-    (question,) = await _pending(client)
+    (question,) = await _list_pending(client)
     await _answer(client, question["id"], "approve")
     await _result(client, until="decided")
 
@@ -2690,7 +2704,7 @@ async def _failed_at_the_provider(
 ) -> None:
     # A person approves a tool result, the eval resends the request, the
     # handler passes it on, and the provider answers with `error`
-    question = await _asked_at_result(handler, client)
+    question = await _paused_question_at_result(handler, client)
     await _answer(client, question["id"], "approve")
     await _result(client, "irid-2", until="awaiting_resend")
     assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -2742,7 +2756,7 @@ async def test_no_refusal_of_the_held_reply_path_is_marked_as_a_providers_error(
 ):
     handler = _reviewed()
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
 
         # the person hasn't answered yet, so the fetch gets the sidecar's own 400
         refused = await _held_reply(client)
@@ -2771,7 +2785,7 @@ async def test_a_held_reply_never_carries_the_failed_try_header() -> None:
 async def test_a_reply_cut_off_has_no_error_to_serve() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
         assert isinstance(await handler.request(_result_request("y2")), Pass)
@@ -2785,7 +2799,7 @@ async def test_a_reply_cut_off_has_no_error_to_serve() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_wait_the_provider_asked_for_is_counted_from_when_the_error_came() -> (
+async def test_a_wait_the_provider_asked_for_is_counted_from_when_the_error_arrived() -> (
     None
 ):
     handler = _at_results()
@@ -2867,7 +2881,9 @@ async def test_a_held_stream_is_answered_with_its_events_from_first_to_last() ->
 
 
 @pytest.mark.anyio
-async def test_the_held_reply_can_be_got_again_and_getting_it_changes_nothing() -> None:
+async def test_the_held_reply_can_be_fetched_again_and_fetching_it_changes_nothing() -> (
+    None
+):
     handler = _reviewed()
     body = message(weather("Oslo"))
     async with _serving(handler) as client:
@@ -2906,21 +2922,21 @@ async def test_nothing_of_the_request_but_its_proof_is_read_for_the_held_reply()
 async def test_a_call_a_person_still_decides_has_no_held_reply_yet() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
 
         answered = await _held_reply(client)
 
         _refused(answered, "has not ended", "request_result")
         # the question is still open, and the eval can still answer it
-        assert [q["id"] for q in await _pending(client)] == [question["id"]]
+        assert [q["id"] for q in await _list_pending(client)] == [question["id"]]
         assert (await _result(client))["state"] == "awaiting_review"
 
 
 @pytest.mark.anyio
-async def test_asking_for_a_held_reply_never_sends_a_waiting_request_on() -> None:
+async def test_fetching_a_held_reply_never_passes_a_waiting_request_on() -> None:
     handler = _at_results()
     async with _serving(handler) as client:
-        question = await _asked_at_result(handler, client)
+        question = await _paused_question_at_result(handler, client)
         await _answer(client, question["id"], "approve")
         await _result(client, "irid-2", until="awaiting_resend")
 
@@ -2937,25 +2953,25 @@ async def test_asking_for_a_held_reply_never_sends_a_waiting_request_on() -> Non
 async def test_a_rejected_call_has_no_held_reply() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        question = await _asked(handler, client)
+        question = await _paused_question(handler, client)
         await _answer(client, question["id"], "reject", "Not Oslo.")
         await _result(client, until="decided")
 
         answered = await _held_reply(client)
 
-    _refused(answered, "ended without its turn going on", "request_result")
+    _refused(answered, "ended without its turn going ahead", "request_result")
 
 
 @pytest.mark.anyio
 async def test_a_cancelled_call_has_no_held_reply() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
         assert await _cancel(client) is True
 
         answered = await _held_reply(client)
 
-    _refused(answered, "ended without its turn going on")
+    _refused(answered, "ended without its turn going ahead")
 
 
 @pytest.mark.anyio
@@ -2992,7 +3008,7 @@ async def test_a_held_reply_is_not_kept_past_its_samples_end() -> None:
 
 
 @pytest.mark.anyio
-async def test_another_eval_cant_get_the_held_reply() -> None:
+async def test_another_eval_cant_fetch_the_held_reply() -> None:
     handler = _reviewed()
     async with _serving(handler) as client:
         await holding(handler, "eval_other", _OTHER_TOKEN)
@@ -3107,11 +3123,11 @@ async def test_a_request_for_a_held_reply_is_refused_on_its_headers_before_its_b
 
 
 @pytest.mark.anyio
-async def test_no_refusal_of_a_held_reply_is_a_status_an_sdk_sends_again() -> None:
+async def test_no_refusal_of_a_held_reply_is_a_status_an_sdk_retries() -> None:
     # 408, 409, 429 and 5xx are what the providers' SDKs retry by themselves
     handler = _reviewed()
     async with _serving(handler) as client:
-        await _asked(handler, client)
+        await _paused_question(handler, client)
 
         statuses = {
             (await _held_reply(client)).status_code,
@@ -3120,4 +3136,4 @@ async def test_no_refusal_of_a_held_reply_is_a_status_an_sdk_sends_again() -> No
             (await client.post(HELD_REPLY_PATH)).status_code,
         }
 
-    assert statuses <= _NOT_SENT_AGAIN
+    assert statuses <= _NOT_RETRIED_BY_AN_SDK

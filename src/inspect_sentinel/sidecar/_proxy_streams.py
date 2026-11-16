@@ -38,7 +38,7 @@ PENDING_BYTES = 1024 * 1024
 
 _PROVIDER = "The provider whose format the body is in, such as `anthropic` or `openai`. Where `format` is given, the body is read by `format`, and this can be any name the proxy has for the provider."
 _FORMAT = "Which API the body is written in: `anthropic-messages`, `openai-chat` or `openai-responses`. A proxy that knows says, and the body is then read as that, whatever `provider` is. Without it, the API is worked out from `provider` and the body."
-REPLY_HEADERS = "The reply's headers as the provider sent them, without credentials. A proxy hook that has them hands them over, for a provider's error too. The sidecar keeps them with the reply of a model call that waited for a person, which the eval then reads as the provider's own, and with a provider's error, where they say whether the call may be tried again."
+REPLY_HEADERS = "The reply's headers as the provider sent them, without credentials. A proxy hook that has them sends them, for a provider's error too. The sidecar keeps them with the reply it holds for a model call paused for a person, so that the eval can read that reply as the provider's own. It also keeps them with a provider's error, where they say whether the call may be retried."
 
 
 class BeginReplyParams(BaseModel):

@@ -306,7 +306,7 @@ def openai_ran(api: str, result: str) -> list[dict[str, Any]]:
     ]
 
 
-class NotingHandler(Handler):
+class RecordingHandler(Handler):
     """A handler that records each reply passed to `reply`, and each error body passed to `error_body`."""
 
     def __init__(self, *args: Any, **options: Any) -> None:

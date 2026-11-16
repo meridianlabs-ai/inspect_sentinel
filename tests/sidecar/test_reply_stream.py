@@ -29,7 +29,7 @@ from inspect_sentinel.sidecar._state import NotJudged
 from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     STREAM,
-    NotingHandler,
+    RecordingHandler,
     anthropic_recorded,
     holding,
     inspect_headers,
@@ -385,9 +385,9 @@ async def _not_judged(handler: Handler) -> tuple[str, str | None]:
 
 
 @pytest.mark.anyio
-async def test_a_provider_errors_headers_and_body_are_handed_over() -> None:
+async def test_a_provider_errors_headers_and_body_reach_the_handler() -> None:
     asked, answered = _exchange("anthropic stream", inspect=True)
-    handler = NotingHandler(weather_rule())
+    handler = RecordingHandler(weather_rule())
     await holding(handler)
     await handler.request(asked)
     start = replace(_start(answered, status=529), headers={"retry-after": "7"})
@@ -406,7 +406,7 @@ async def test_a_provider_errors_headers_and_body_are_handed_over() -> None:
     assert handler.error_bodies == [("x", error)]
 
 
-class _ToldOfAnErrorCutOff(NotingHandler):
+class _RecordsNotJudged(RecordingHandler):
     """A handler that records the reason given in each `reply_not_judged` call."""
 
     def __init__(self, *args: Any, **options: Any) -> None:
@@ -419,9 +419,9 @@ class _ToldOfAnErrorCutOff(NotingHandler):
 
 
 @pytest.mark.anyio
-async def test_a_provider_error_aborted_before_its_end_is_told_as_cut_off() -> None:
+async def test_a_provider_error_aborted_before_its_end_is_reported_as_cut_off() -> None:
     asked, answered = _exchange("anthropic stream", inspect=True)
-    handler = _ToldOfAnErrorCutOff(weather_rule())
+    handler = _RecordsNotJudged(weather_rule())
     await holding(handler)
     await handler.request(asked)
     stream = handler.reply_stream(_start(answered, status=529))
@@ -446,9 +446,9 @@ async def test_a_provider_error_aborted_before_its_end_is_told_as_cut_off() -> N
 
 
 @pytest.mark.anyio
-async def test_the_handler_is_told_an_error_has_passed_though_it_isnt_copied() -> None:
+async def test_the_handler_learns_an_error_has_arrived_though_it_isnt_copied() -> None:
     asked, answered = _exchange("anthropic stream", inspect=True)
-    handler = NotingHandler(weather_rule())
+    handler = RecordingHandler(weather_rule())
     await holding(handler)
     await handler.request(asked)
     # too large for the sidecar to keep a copy
@@ -467,7 +467,7 @@ async def test_the_handler_is_told_an_error_has_passed_though_it_isnt_copied() -
 @pytest.mark.anyio
 async def test_a_streamed_replys_headers_reach_the_handler_with_it() -> None:
     asked, answered = _exchange("anthropic stream")
-    handler = NotingHandler(weather_rule())
+    handler = RecordingHandler(weather_rule())
     await handler.request(asked)
     start = replace(_start(answered), headers={"request-id": "req_011"})
 

@@ -25,7 +25,7 @@ from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from tests.sidecar._traffic import (
     JSON,
     STREAM,
-    NotingHandler,
+    RecordingHandler,
     anthropic_recorded,
     holding,
     reply,
@@ -475,8 +475,8 @@ async def test_an_error_event_for_a_turn_not_judged_says_why() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_replys_headers_are_handed_over_as_it_begins() -> None:
-    handler = NotingHandler(weather_rule())
+async def test_a_replys_headers_reach_the_handler_as_it_begins() -> None:
+    handler = RecordingHandler(weather_rule())
     await handler.request(request())
 
     with anyio.fail_after(10):
@@ -527,13 +527,13 @@ async def test_a_reply_stream_begun_and_aborted_with_nothing_fed_is_recorded_as_
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("release", ["whole", "early"])
-async def test_an_error_handed_over_whole_is_kept_as_the_error_though_its_reply_stream_is_then_aborted(
+async def test_an_error_received_whole_is_kept_though_its_reply_stream_is_then_aborted(
     release: Literal["whole", "early"],
 ) -> None:
     # A proxy hook begins a reply stream before the provider's first chunk, so
     # that keepalives can flow. The provider then fails. The hook passes the
     # error to `judge_reply`, and aborts the stream afterwards.
-    handler = NotingHandler(weather_rule(), release=release)
+    handler = RecordingHandler(weather_rule(), release=release)
     await holding(handler)
     await handler.request(request(sample="sample_123"))
     error = b'{"type":"error","error":{"type":"overloaded_error"}}'

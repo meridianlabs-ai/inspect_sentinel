@@ -35,7 +35,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import (
 from inspect_sentinel.sidecar._registration import FileTask
 from tests.sidecar._traffic import (
     JSON,
-    NotingHandler,
+    RecordingHandler,
     holding,
     inspect_headers,
     message,
@@ -456,8 +456,8 @@ def test_calls_in_these_tests_fit_the_schema_file() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_replys_headers_are_handed_over_with_it() -> None:
-    handler = NotingHandler(weather_rule())
+async def test_a_replys_headers_reach_the_handler_with_it() -> None:
+    handler = RecordingHandler(weather_rule())
     async with _client(handler) as client:
         await _call(client, "judge_request", _REQUEST)
         answered = await _call(
@@ -472,8 +472,8 @@ async def test_a_replys_headers_are_handed_over_with_it() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_providers_error_is_handed_over_whole() -> None:
-    handler = NotingHandler(weather_rule())
+async def test_a_providers_error_reaches_the_handler_whole() -> None:
+    handler = RecordingHandler(weather_rule())
     error = b'{"type":"error","error":{"type":"overloaded_error"}}'
     async with _client(handler) as client:
         await _call(client, "judge_request", _REQUEST)
@@ -496,7 +496,7 @@ async def test_a_providers_error_is_handed_over_whole() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("release", ["whole", "early"])
-async def test_a_request_that_goes_on_is_answered_with_how_its_reply_is_released(
+async def test_a_passed_request_is_answered_with_how_its_reply_is_released(
     release: Literal["whole", "early"],
 ) -> None:
     handler = Handler(weather_rule("reject", "Oslo"), release=release)

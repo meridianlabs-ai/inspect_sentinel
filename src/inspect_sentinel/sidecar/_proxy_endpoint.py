@@ -96,22 +96,22 @@ class JudgeReplyParams(BaseModel):
         description=REPLY_HEADERS,
     )
     body: str = Field(
-        description="The reply's body, as base64. A provider's error is handed over with its body too."
+        description="The reply's body, as base64. A proxy hook sends a provider's error with its body too."
     )
 
 
-_RELEASE = "How the sidecar will release this request's reply, if it is streamed: `whole` holds the reply until it is judged, and `early` sends the text and reasoning before the turn's first tool call as they arrive, with keepalives while nothing goes out. A proxy hook that hands a streamed reply over as it arrives can tell from it whether its caller is sent anything while the provider is silent. A hook that doesn't need it ignores it, and a sidecar that doesn't say holds replies whole."
+_RELEASE = "How the sidecar will release this request's reply if the reply is streamed. `whole`: the sidecar holds the reply until the sentinel has judged it. `early`: the sidecar releases the text and reasoning before the turn's first tool call as they arrive, and sends keepalives while it releases nothing. A proxy hook that sends a streamed reply as it arrives can use this to know whether its caller receives anything while the provider is silent. A hook that doesn't need it can ignore it. A sidecar that leaves it out holds replies whole."
 
 
 class PassRequestResult(BaseModel):
-    """Send the request on as it is."""
+    """Pass the request on to the provider unchanged."""
 
     action: Literal["pass"] = "pass"
     release: Literal["whole", "early"] = Field(default="whole", description=_RELEASE)
 
 
 class PassResult(BaseModel):
-    """Send the reply on as it is."""
+    """Pass the reply on to the caller unchanged."""
 
     action: Literal["pass"] = "pass"
 

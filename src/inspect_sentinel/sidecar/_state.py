@@ -110,7 +110,7 @@ class Attempt:
     settled: anyio.Event = field(default_factory=anyio.Event)
     """Set once the attempt is decided or not judged, for a `request_result` that waits."""
 
-    stopped: Stopped | None = None
+    stop_cause: Stopped | None = None
     """Why nobody waits for the attempt any longer, once that is the case. After it is set, judging that reaches a question asks nobody. An attempt that is waiting on a person when it is set is stopped with no decision."""
 
     reviews: list[Review] = field(default_factory=list[Review])

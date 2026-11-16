@@ -158,37 +158,40 @@ class RequestResultParams(EvalCall):
     wait: float = Field(
         default=0,
         ge=0,
-        description=f"How long to wait, in seconds, while the request is still being judged, at most {MAX_RESULT_WAIT:g}. The answer comes as soon as the state is no longer `judging`. An eval asks again while it still is.",
+        description=f"How long to wait, in seconds, while the sentinel is still judging the request, at most {MAX_RESULT_WAIT:g}. The sidecar answers as soon as the state is no longer `judging`. If the state is still `judging`, the eval calls again.",
     )
 
 
 class ReviewRecord(BaseModel):
-    """What became of one question a sentinel asked a person while the request or its reply was judged."""
+    """The record of one question that a sentinel asked a person while it judged the request or its reply."""
 
     id: str = Field(
-        description="The question's id, as `list_pending_questions` gave it."
+        description="The question's id, as `list_pending_questions` returned it."
     )
     try_number: int = Field(
-        description="Which try of the request the question was asked at, from 1, in the order the sidecar was sent them: the try whose request or reply was being judged. A client that tries a request again sends it under the same `x-irid`."
+        description="The number of the try at which the sentinel asked the question, counting from 1 in the order the sidecar received the tries. It is the try whose request or reply the sentinel was judging. A client that retries a request sends it again under the same `x-irid`."
     )
     stage: Literal["tool_call", "tool_result"] = Field(
-        description="Where the step was judged."
+        description="The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run."
     )
-    call: str = Field(description="The id of the call the question was about.")
-    asked: float = Field(description="When it was asked, in seconds since the epoch.")
+    call: str = Field(description="The id of the tool call the question was about.")
+    asked: float = Field(
+        description="When the sentinel asked the question, in seconds since the epoch."
+    )
     decision: Literal["approve", "reject", "terminate"] | None = Field(
         default=None,
-        description="What the eval's answer picked, when the sidecar took one. The answer's `mac` shows that the eval sent it, not that a person chose it.",
+        description="The choice in the eval's answer, if the sidecar accepted an answer. The answer's `mac` proves that the eval sent it, not that a person chose it.",
     )
     reason: str | None = Field(
-        default=None, description="The reason the eval's answer gave, if any."
+        default=None, description="The reason in the eval's answer, if it gave one."
     )
     answered: float | None = Field(
-        default=None, description="When the answer was taken."
+        default=None,
+        description="When the sidecar accepted the answer, in seconds since the epoch.",
     )
     resolution: Literal["answered", "timed_out", "cancelled"] | None = Field(
         default=None,
-        description="How the wait ended. `answered`: on the eval's answer, which the sentinel was given. `timed_out`: the question expired, where the operator set a review timeout, and the sentinel was given the cautious answer. `cancelled`: the wait was stopped and the step came to no decision, so an answer taken just before took no effect. Left out while the step still waits.",
+        description="How the wait for an answer ended. `answered`: the sidecar gave the sentinel the eval's answer. `timed_out`: the question expired, because the operator set a review timeout, and the sidecar gave the sentinel the cautious answer: `reject` if the question offers it, otherwise `terminate`. `cancelled`: the sidecar stopped the wait and the step reached no decision, so an answer accepted just before had no effect. Left out while the step is still waiting.",
     )
     cause: (
         Literal[
@@ -201,36 +204,38 @@ class ReviewRecord(BaseModel):
         | None
     ) = Field(
         default=None,
-        description="Why the wait was cancelled: `replaced_attempt` when a later attempt at the sample began, `sample_ended` when the eval ended the sample, `run_ended` when a sentinel ended the run at another request, `cancelled` when the eval cancelled the request with `cancel_paused_request`, and `stopped` otherwise, as when the sidecar shuts down.",
+        description="Why the sidecar cancelled the wait. `replaced_attempt`: a later attempt at the sample began. `sample_ended`: the eval ended the sample. `run_ended`: a sentinel ended the run at another request. `cancelled`: the eval cancelled the request with `cancel_paused_request`. `stopped`: anything else, such as the sidecar shutting down. Present only when `resolution` is `cancelled`.",
     )
-    resolved: float | None = Field(default=None, description="When the wait ended.")
+    resolved: float | None = Field(
+        default=None, description="When the wait ended, in seconds since the epoch."
+    )
 
 
 class ReplyRecord(BaseModel):
-    """A provider's reply, as the proxy passes it on, for the eval to read with the code that reads that provider's replies from the network."""
+    """A provider's reply as the proxy passes it on. The eval reads it with the same code that reads that provider's replies from the network."""
 
     status: int = Field(description="The provider's HTTP status.")
     headers: dict[str, str] = Field(
-        description="The provider's headers, by lowercase name, without the headers of one hop, such as `content-length`. Empty but for `content-type` where the proxy hands the sidecar no reply headers."
+        description="The provider's headers, by lowercase name, without hop-by-hop headers such as `content-length`. It holds only `content-type` if the proxy gave the sidecar no reply headers."
     )
     body: str = Field(
-        description="The body, as base64: a JSON reply whole, or a streamed reply's events from first to last. A sentinel's edits are in it. Empty for a provider's error too large to keep."
+        description="The body, as base64: a whole JSON reply, or a streamed reply's events from first to last. It includes the sentinel's edits. Empty for a provider's error that was too large to keep."
     )
     format: Literal["anthropic-messages", "openai-chat", "openai-responses"] = Field(
-        description="The API the request was written in, and so the reply."
+        description="The API format of the request, which is also the format of the reply."
     )
     stream: bool = Field(description="Whether the body is a stream of events.")
 
 
 class FailureRecord(BaseModel):
-    """The provider's last failed exchange, for a request a person was asked about. The eval acts on this, and not on the error its own try got, which may be the sidecar's `pending review`."""
+    """The provider's most recent failure, for a request that is paused for a person. The eval acts on this record, not on the error that its own request returned, because that error may be the sidecar's `pending review`."""
 
     try_number: int = Field(
-        description="Which try of the request was sent on to the provider and failed, from 1. It tells a failure the eval has already acted on from a new one."
+        description="The number of the try that the proxy passed on to the provider and that failed, counting from 1. The eval uses it to tell a new failure from one it has already handled."
     )
     reply: ReplyRecord | None = Field(
         default=None,
-        description="The provider's error. Left out for a reply that was cut off, which the eval handles as a connection that failed.",
+        description="The provider's error. Left out if the provider's reply was cut off, which the eval treats as a failed connection.",
     )
 
 
@@ -253,14 +258,15 @@ class RequestResultResult(BaseModel):
         | None
     ) = Field(
         default=None,
-        description="Where the request stands. For a request no person was asked about, that is where its latest try stands. For one a person was asked about, it is where that one model call stands, whatever tries of it were sent since. `awaiting_review`: a question is open, and the eval answers it. `awaiting_resend`: the request may be sent on to the provider, so the eval sends the same request again under the same `x-irid`.",
+        description="The state of the request. For a request no person was asked about, it is the state of the latest try. For a request paused for a person, it is the state of the whole model call, however many tries the eval has sent. `awaiting_review`: a question is open, so the eval shows it to a person and sends the answer with `answer_question`. `awaiting_resend`: the provider still has to be called, so the eval resends the same request under the same `x-irid`, and the proxy passes it on to the provider.",
     )
     reason: NotJudged | None = Field(
         default=None,
-        description="With `not_judged`, why the request was not judged. With `awaiting_resend`, `provider_error` or `cut_off` where the request is there because the provider's last exchange failed, which `failure` describes. Left out where the request only waits to be sent.",
+        description="With `not_judged`: why the sentinel did not judge the request. With `awaiting_resend`: `provider_error` or `cut_off` if the provider failed the last try, which `failure` describes. Left out if the request is only waiting for the eval to resend it.",
     )
     outcome: Outcome | None = Field(
-        default=None, description="What the request came to, once decided."
+        default=None,
+        description="The sentinel's final decision on the request. Present once the state is `decided`.",
     )
     message: str | None = Field(
         default=None, description="What the model is told, for a rejection."
@@ -271,20 +277,20 @@ class RequestResultResult(BaseModel):
     )
     judgment: Judgment | None = Field(
         default=None,
-        description="What was decided of the request, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results.",
+        description="The sentinel's decisions on the request, which the eval acts on and logs. Present once the state is `decided`. Trimmed if the sidecar doesn't send results.",
     )
     reviews: list[ReviewRecord] | None = Field(
         default=None,
-        description="What became of each question a sentinel asked a person, in order, including one whose step was stopped before it came to a decision. A judged step names its questions in its `reviews`. Left out where nobody was asked.",
+        description="The record of each question a sentinel asked a person about the request, in order. It includes a question whose step the sidecar stopped before a decision. A judged step lists the ids of its questions in its own `reviews`. Left out if no person was asked.",
     )
     failure: FailureRecord | None = Field(
         default=None,
-        description="The provider's last failed exchange, with `awaiting_resend` and a `reason`.",
+        description="The provider's most recent failure. Present with `awaiting_resend` and a `reason`.",
     )
     judging_time: float | None = Field(
         default=None,
         ge=0,
-        description="How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. For a call a person was asked about, it is added up over the call's tries, each counted only while it was open. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+        description="How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. For a request paused for a person, it is the total over the request's tries, and each try counts only while its client was waiting on it. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
     )
     judging_usage: list[JudgingUsage] | None = Field(
         default=None,
@@ -330,63 +336,65 @@ class EndSampleResult(BaseModel):
 
 
 class ListPendingQuestionsParams(EvalCall):
-    """Parameters of `list_pending_questions`: the eval's questions for a person that nobody has answered yet."""
+    """Parameters of `list_pending_questions`: lists the eval's questions for a person that have no answer yet."""
 
     sample_uuid: str | None = Field(
         default=None,
-        description="Only this sample's questions, if given, by its uuid as `x-inspect-context` gives it. Inspect asks for the sample whose model call is waiting.",
+        description="If given, the sidecar lists only this sample's questions. It is the sample's uuid, as `x-inspect-context` carries it. Inspect passes the sample whose model call is paused.",
     )
     wait: float = Field(
         default=0,
         ge=0,
-        description=f"How long to wait, in seconds, while there are none, at most {MAX_QUESTIONS_WAIT:g}. The answer comes as soon as there is one.",
+        description=f"How long to wait, in seconds, while there are no questions, at most {MAX_QUESTIONS_WAIT:g}. The sidecar answers as soon as there is one.",
     )
 
 
 class Escalation(BaseModel):
-    """An escalation the asking protocol was handed."""
+    """An escalation that a monitor or protocol passed to the protocol that asked the person."""
 
-    name: str = Field(description="The escalating monitor's or protocol's name.")
+    name: str = Field(description="The name of the monitor or protocol that escalated.")
     explanation: str | None = Field(
         default=None,
-        description="Why it escalated, if it said.",
+        description="Why it escalated, if it gave a reason.",
     )
 
 
 class QuestionAsked(BaseModel):
-    """A question a sentinel asked a person, about a tool call in one of the eval's model requests, which the step waits on."""
+    """A question that a sentinel asked a person about a tool call in one of the eval's model requests. The step waits for the answer."""
 
-    id: str = Field(description="The question's id, which `answer_question` names.")
-    sample_uuid: str = Field(description="The sample whose run asked.")
+    id: str = Field(description="The question's id. `answer_question` takes it.")
+    sample_uuid: str = Field(
+        description="The uuid of the sample whose run the question belongs to."
+    )
     request_id: str = Field(
-        description="The eval's id for the model request the call was found in, its `x-irid`. That request waits on the answer."
+        description="The `x-irid` of the model request that the question paused. The request stays paused until the question has an answer."
     )
     stage: Literal["tool_call", "tool_result"] = Field(
-        description="`tool_call` before the call runs, `tool_result` once it has run and its result is about to reach the model."
+        description="`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model."
     )
     call: dict[str, Any] = Field(
-        description="The call, as Inspect writes a `ToolCall`, with its arguments. Show it to the person; it is not to be put into the agent's conversation."
+        description="The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation."
     )
-    message: str = Field(description="The assistant's text alongside the call.")
+    message: str = Field(description="The assistant's text that came with the call.")
     view: dict[str, Any] = Field(
-        description="How the call is shown, as Inspect writes a `ToolCallView`."
+        description="How to display the call, as Inspect writes a `ToolCallView`."
     )
     result: dict[str, Any] | None = Field(
         default=None,
-        description="The call's result, as Inspect writes a `ChatMessageTool`, at `tool_result`.",
+        description="The call's result, as Inspect writes a `ChatMessageTool`. Present at `tool_result`.",
     )
     escalations: list[Escalation] = Field(
-        description="The escalations the asking protocol was handed, in order: who escalated, and why."
+        description="The escalations passed to the protocol that asked the person, in order: who escalated, and why."
     )
     choices: list[str] = Field(
-        description=f"What the person may pick. An answer is one of these, and one of {', '.join(ANSWERABLE)}."
+        description=f"The choices the person may pick from. An answer must be one of these, and one of {', '.join(ANSWERABLE)}."
     )
     asked: float = Field(
-        description="When the question was asked, in seconds since the epoch, for showing how long it has waited."
+        description="When the sentinel asked the question, in seconds since the epoch. A client can show how long the question has waited."
     )
     closes: float | None = Field(
         default=None,
-        description="When the question expires, in seconds since the epoch, where the operator set a review timeout. The step is then answered with caution, `reject` if offered and otherwise `terminate`, and the judging goes on. Left out where the question has no expiry.",
+        description="When the question expires, in seconds since the epoch, if the operator set a review timeout. At expiry the sidecar gives the sentinel the cautious answer, `reject` if the question offers it and otherwise `terminate`, and the sentinel continues judging. Left out if the question has no expiry.",
     )
 
 
@@ -397,46 +405,46 @@ class ListPendingQuestionsResult(BaseModel):
 
 
 class AnswerQuestionParams(EvalCall):
-    """Parameters of `answer_question`: what the person picked.
+    """Parameters of `answer_question`: the person's choice.
 
-    For now the answer comes on the eval's token, and the sidecar takes it only for a question from one of the eval's own runs. Reviewers are to answer on credentials of their own, which the sidecar checks: until then, a client that holds the eval's token can answer that eval's questions.
+    For now the eval sends the answer, signed with the eval's token, and the sidecar accepts it only for a question from one of that eval's own runs. So any client that holds the eval's token can answer that eval's questions. Later, reviewers will answer with credentials of their own, which the sidecar will check.
     """
 
     id: str = Field(description="The question's id.")
     decision: Literal["approve", "reject", "terminate"] = Field(
-        description="What the person picked, one of the question's `choices`."
+        description="The person's choice, one of the question's `choices`."
     )
     reason: str | None = Field(
         default=None,
-        description="The person's reason, if they gave one. At `reject` it is what the model is told.",
+        description="The person's reason, if they gave one. For `reject`, the sidecar tells the model this reason.",
     )
     mac: str = Field(
-        description='An HMAC-SHA256, in hex, made with the eval\'s token over `json.dumps([str(v) for v in [method, eval_id, timestamp, id, decision, reason or ""]], separators=(",", ":"))`. Unlike other calls\' `mac`, it covers the answer, so one copied from an answer can\'t send another.'
+        description='An HMAC-SHA256, in hex, made with the eval\'s token over `json.dumps([str(v) for v in [method, eval_id, timestamp, id, decision, reason or ""]], separators=(",", ":"))`. Unlike the `mac` of other calls, it covers the answer, so a `mac` copied from one answer cannot sign a different answer.'
     )
 
 
 class AnswerQuestionResult(BaseModel):
-    """The answer the step was given. Sending the same answer again gives the same result."""
+    """The answer that the sidecar gave the step. Sending the same answer again returns the same result."""
 
     id: str
     decision: Literal["approve", "reject", "terminate"]
 
 
 class CancelPausedRequestParams(EvalCall):
-    """Parameters of `cancel_paused_request`: a model request a sentinel asked a person about, which the eval no longer waits for.
+    """Parameters of `cancel_paused_request`: cancels a request paused for a person, which the eval has given up on.
 
-    The request is closed wherever it stands before its end, with nothing decided: its judging is stopped and its questions close, no try of it is sent on to the provider, and the reply to a try already with the provider is not judged, kept or passed on. It then reads as `not_judged`, with the reason `cancelled`, and nothing opens it again.
+    The sidecar closes the request in whatever state it is, with nothing decided. It stops the judging and closes the request's questions. It lets no further try through to the provider. If a try is already with the provider, the sidecar does not judge, keep or pass on its reply. `request_result` then answers `not_judged` with the reason `cancelled`, and the request cannot be resumed.
     """
 
     id: str = Field(description="The request's `x-irid`.")
 
 
 class CancelPausedRequestResult(BaseModel):
-    """Whether this call closed the request."""
+    """Whether this call cancelled the request."""
 
     id: str
     cancelled: bool = Field(
-        description="Whether this call was what closed the request. False for a request that had already ended, one no person was asked about, and one the sidecar doesn't know. A second `cancel_paused_request` for a request is answered false too, so false doesn't say the request is still open: `request_result` says where it stands."
+        description="Whether this call is what closed the request. False if the request had already ended, if no person was asked about it, or if the sidecar doesn't know it. A second `cancel_paused_request` for the same request also answers false. So false does not mean the request is still paused: call `request_result` for its state."
     )
 
 
@@ -482,15 +490,15 @@ _ERRORS: dict[int, tuple[str, str]] = {
     ),
     UNKNOWN_QUESTION: (
         "unknown_question",
-        "The sidecar holds no such question for the eval. It was never asked, or it was another eval's. Or it closed unanswered: nobody answered in time, and the step was answered with caution, or its model call was closed first, as when the eval cancelled the call or ended the sample. Or it was answered, and the receipt of its answer is no longer kept, as once the eval has ended the sample.",
+        "The sidecar holds no such question for the eval. Either the question was never asked, or it belongs to another eval. Or it closed without an answer: it expired and the sidecar gave the sentinel the cautious answer, or its model call was closed first, for example because the eval cancelled the call or ended the sample. Or it was answered, and the sidecar no longer keeps the record of that answer, for example after the eval ended the sample.",
     ),
     QUESTION_ANSWERED: (
         "question_answered",
-        "The question was already answered, with another choice or reason. The first answer stands.",
+        "The question already has an answer with a different choice or reason. The sidecar keeps the first answer.",
     ),
     ANSWER_REFUSED: (
         "answer_refused",
-        "The answer picks a choice the question doesn't offer.",
+        "The answer's choice is not one the question offers.",
     ),
     UNAUTHORIZED: (
         "unauthorized",
@@ -567,7 +575,7 @@ def eval_routes(
             if not results and asked.method in _REVIEW:
                 raise RpcError(
                     METHOD_NOT_FOUND,
-                    f"This sidecar doesn't send results, so it asks no person through an eval, and there is no method {asked.method!r}.",
+                    f"This sidecar sends an eval no results, so it asks no person through an eval and does not serve the method {asked.method!r}.",
                 )
             result = await _answer(handler, asked.method, asked.params, results)
         except RpcError as ex:
@@ -816,7 +824,7 @@ async def _answer_question(
     ):
         raise RpcError(
             UNKNOWN_QUESTION,
-            f"The sidecar holds nothing of the eval {given.eval_id!r}, so no question of it.",
+            f"The sidecar holds nothing for the eval {given.eval_id!r}, so it holds no question for it.",
         )
     try:
         handler.answer_question(given.eval_id, given.id, given.decision, given.reason)
@@ -888,7 +896,7 @@ def schema() -> dict[str, Any]:
     _, definitions = models_json_schema(
         [(model, "validation") for model in models],
         title="Inspect Sentinel: the endpoint for evals",
-        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}, with a probe at GET {INFO_PATH}. A model call's request POSTed to {HELD_REPLY_PATH} is not a method: it is answered with the reply held for that call, as the provider sent it. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
+        description=f"JSON-RPC 2.0 methods, POSTed to {PATH}, with a probe at GET {INFO_PATH}. A POST of a paused call's model request to {HELD_REPLY_PATH} is not a method: it fetches the provider's reply that the sidecar holds for that call, in the provider's format. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
     )
     return {
         "$schema": GenerateJsonSchema.schema_dialect,

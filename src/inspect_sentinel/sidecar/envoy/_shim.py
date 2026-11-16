@@ -176,11 +176,11 @@ class _Exchange:
         # a copy of a provider's error body, built as the body passes through,
         # or None when the shim keeps no copy
         self._error_body: bytearray | None = None
-        # `_error_follows`: whether the shim still has to tell the handler
-        # that a provider's error has all arrived. `_error_shown`: the call
+        # `_error_end_pending`: whether the shim still has to tell the handler
+        # that a provider's error has all arrived. `_error_handover`: the call
         # that hands the handler that error, while the call is running.
-        self._error_follows = False
-        self._error_shown: asyncio.Future[Answer] | None = None
+        self._error_end_pending = False
+        self._error_handover: asyncio.Future[Answer] | None = None
         self._declared_length = False
         self._request_encoding = "identity"
         self._replied = False
@@ -233,12 +233,12 @@ class _Exchange:
         """Stop the reply's stream if it hasn't ended, as when Envoy has stopped waiting. A request sent on whose reply never began is recorded as cut off."""
         if self._delivery is not None:
             self._delivery.cancel()
-        if self._error_follows:
+        if self._error_end_pending:
             # The error's body didn't all arrive, so there is no whole error
             # to give an eval. The call failed as a reply that is cut off does.
-            self._error_follows = False
+            self._error_end_pending = False
             self._error_body = None
-            shown, self._error_shown = self._error_shown, None
+            shown, self._error_handover = self._error_handover, None
             if shown is not None and not shown.done():
                 # Envoy stopped waiting while the shim was still handing the
                 # error to the handler. Once that call returns, the shim
@@ -460,15 +460,15 @@ class _Exchange:
         # Set before the shim hands the error to the handler. If Envoy stops
         # the exchange during that call, `close` then tells the handler that
         # the error was cut off.
-        self._error_follows = not end_of_stream
+        self._error_end_pending = not end_of_stream
         shown = asyncio.ensure_future(
             self._handler.reply(self._reply_of(b"", body_follows=not end_of_stream))
         )
-        self._error_shown = shown
+        self._error_handover = shown
         answer = await self._judge(shown, "reply", reply=True)
-        self._error_shown = None
+        self._error_handover = None
         if isinstance(answer, Refuse):
-            self._error_follows = False
+            self._error_end_pending = False
             return [self._refusal(answer)]
         self.finished = end_of_stream
         # The shim doesn't copy a compressed error. The sidecar drops
@@ -545,9 +545,9 @@ class _Exchange:
         # handler, so that the handler knows the error is whole. The body it
         # gives is empty if there was none, or if it was too large or
         # compressed to copy.
-        if not self._error_follows:
+        if not self._error_end_pending:
             return
-        self._error_follows = False
+        self._error_end_pending = False
         copy, self._error_body = self._error_body, None
         await self._handler.error_body(self._id, bytes(copy) if copy else b"")
 
