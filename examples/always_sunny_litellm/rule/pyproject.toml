@@ -4,7 +4,7 @@
 [project]
 name = "weather-rules"
 version = "0.1.0"
-description = "The always_sunny example's rule: it's always sunny in Philadelphia."
+description = "The always_sunny_litellm example's rule: it's always sunny in Philadelphia."
 requires-python = ">=3.11"
 dependencies = ["inspect_sentinel"]
 
