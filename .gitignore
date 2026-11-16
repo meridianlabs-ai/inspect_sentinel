@@ -203,6 +203,7 @@ src/inspect_sentinel/_version.py
 # Inspect logs and scans
 /logs/
 /logs-*/
+/scans/
 
 # MacOS
 .DS_Store

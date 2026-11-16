@@ -13,7 +13,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, cast
 
-from inspect_ai.model import ChatMessage, GenerateConfig, Model
+from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelUsage
 from inspect_ai.tool import (
     Tool,
     ToolCall,
@@ -60,6 +60,37 @@ def get_model_input_budget(model: Model, config: GenerateConfig | None = None) -
     )
 
     return _get_model_input_budget(model, config)
+
+
+@dataclass
+class Billed:
+    """What the provider billed for a model's calls within a `billing()` block, once it is left."""
+
+    usage: ModelUsage | None = None
+    """The calls' usage as inspect_ai counts it, or None where nothing was billed."""
+
+
+@contextmanager
+def billing(model: Model) -> Generator[Billed]:
+    """Read what the provider billed for `model`'s calls in the block, as inspect_ai counts it.
+
+    inspect_ai counts a call's usage, priced, in the dict bound to `model_usage_context_var`, which an eval binds. Where none is bound, as in the sidecar, it counts nothing: it reads the variable with a default of None, not the variable's own default. A reply from its cache isn't counted, and a call a fallback model served is priced at that model's rates. So the block binds a dict of its own, for inspect_ai to count the block's calls in, and `usage` is read from it once the block is left: it is None inside the block.
+
+    Args:
+        model: The model whose usage to read.
+
+    Asked of inspect_ai: a public way to read what a model call was billed.
+    """
+    from inspect_ai.model._model import model_usage_context_var
+
+    counted: dict[str, ModelUsage] = {}
+    token = model_usage_context_var.set(counted)
+    billed = Billed()
+    try:
+        yield billed
+    finally:
+        model_usage_context_var.reset(token)
+        billed.usage = counted.get(str(model))
 
 
 def tool_call_view(call: ToolCall, tool: str | None = None) -> ToolCallView:

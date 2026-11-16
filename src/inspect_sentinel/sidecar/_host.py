@@ -4,7 +4,7 @@ import logging
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 from inspect_ai.model import (
@@ -12,6 +12,7 @@ from inspect_ai.model import (
     GenerateConfig,
     Model,
     ModelOutput,
+    ModelUsage,
     get_model,
 )
 from inspect_ai.tool import ToolChoice, ToolInfo
@@ -20,7 +21,7 @@ from .._context import Context, EvalContext
 from .._host import HostNative, HumanAnswer
 from .._report import Decision, Escalations, Failed, Report, Reported
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
-from ._inspect_ai import get_model_input_budget
+from ._inspect_ai import Billed, billing, get_model_input_budget
 
 logger = logging.getLogger(__name__)
 
@@ -39,19 +40,44 @@ class ModelUsed:
     """The model the call went to, as Inspect names it."""
 
 
-# the models called while one step is judged, in the order first called
-_models_used: ContextVar[list[ModelUsed] | None] = ContextVar(
+def add_usage(
+    totals: dict[ModelUsed, ModelUsage], used: ModelUsed, usage: ModelUsage
+) -> None:
+    """Add `usage` to what `totals` holds for `used`, which keeps each model in the order it was first added."""
+    totals[used] = totals.get(used, ModelUsage()) + usage
+
+
+@dataclass
+class NotedModels:
+    """The models the sidecar's host called within a `noting_models()` block."""
+
+    called: list[ModelUsed] = field(default_factory=list[ModelUsed])
+    """Each model called, once each, in the order first called."""
+
+    billed: dict[ModelUsed, ModelUsage] = field(
+        default_factory=dict[ModelUsed, ModelUsage]
+    )
+    """Where what the provider billed for each model's calls is added up as each call is done, in the order first billed: the block's own, or what `noting_models()` was given, such as an attempt's `judging_usage`. A reply from inspect_ai's cache and a call that failed weren't billed, so they add nothing."""
+
+
+_models_used: ContextVar[NotedModels | None] = ContextVar(
     "sidecar_models_used", default=None
 )
 
 
 @contextmanager
-def noting_models() -> Generator[list[ModelUsed]]:
-    """Note each model the sidecar's host calls in the block, once each, in the order first called."""
-    used: list[ModelUsed] = []
-    token = _models_used.set(used)
+def noting_models(
+    billed: dict[ModelUsed, ModelUsage] | None = None,
+) -> Generator[NotedModels]:
+    """Note each model the sidecar's host calls in the block, and what the provider billed for its calls.
+
+    Args:
+        billed: Where to add what each call was billed, as soon as the call is done, such as an attempt's `judging_usage`, so that it counts there while the rest of the block still runs. A dict of the block's own if None.
+    """
+    noted = NotedModels(billed=billed if billed is not None else {})
+    token = _models_used.set(noted)
     try:
-        yield used
+        yield noted
     finally:
         _models_used.reset(token)
 
@@ -98,17 +124,27 @@ class SidecarHost:
             config: Generation configuration.
         """
         resolved = self._resolve(model, role)
-        used = _models_used.get()
-        if used is not None:
-            noted = ModelUsed(_asked(model, role), str(resolved))
-            if noted not in used:
-                used.append(noted)
-        return await resolved.generate(
-            input,
-            tools=tools or [],
-            tool_choice=tool_choice,
-            config=config or GenerateConfig(),
-        )
+        noted = _models_used.get()
+        used = ModelUsed(_asked(model, role), str(resolved))
+        if noted is not None and used not in noted.called:
+            noted.called.append(used)
+        # What inspect_ai counts as billed, so a reply from its cache counts
+        # nothing. `billing()` fills in `billed.usage` as its block is left,
+        # so it is read in this outer `finally`, not one inside the `with`,
+        # where it is still None; and read even when the call raised, as a
+        # call billed before it was cancelled was still billed.
+        billed = Billed()
+        try:
+            with billing(resolved) as billed:
+                return await resolved.generate(
+                    input,
+                    tools=tools or [],
+                    tool_choice=tool_choice,
+                    config=config or GenerateConfig(),
+                )
+        finally:
+            if noted is not None and billed.usage is not None:
+                add_usage(noted.billed, used, billed.usage)
 
     async def input_budget(
         self,

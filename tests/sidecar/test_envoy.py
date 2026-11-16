@@ -34,6 +34,7 @@ from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
     every_call_rule,
+    holding,
     inspect_headers,
     message,
     openai_recorded,
@@ -258,6 +259,7 @@ def test_inspect_client_is_handed_the_reply_and_asks_what_was_decided(
 ) -> None:
     handler = Handler(rejects("Tokyo"))
     stack.use(handler)
+    stack.run(holding(handler))
     _answer_with(stack, api, stream)
 
     answered = httpx.post(
@@ -280,6 +282,7 @@ def test_refusal_of_an_inspect_client_is_the_providers_error_alone(
 ) -> None:
     handler = Handler(every_call_rule())
     stack.use(handler)
+    stack.run(holding(handler))
     _answer_with(stack, api, False)
 
     answered = httpx.post(
@@ -321,6 +324,7 @@ def test_reply_in_a_success_status_other_than_200_is_judged(
     # on unjudged
     handler = Handler(rejects("Tokyo"))
     stack.use(handler)
+    stack.run(holding(handler))
     content_type, body = _recorded("anthropic", stream)
     stack.provider.script = lambda _: Scripted(
         body=_split(body) if stream else [body],
@@ -686,7 +690,9 @@ def test_sentinel_is_shown_inspects_headers_and_never_a_credential(
     stack: Stack,
 ) -> None:
     seen: list[dict[str, str]] = []
-    stack.use(Handler(notes_headers(seen)))
+    handler = Handler(notes_headers(seen))
+    stack.use(handler)
+    stack.run(holding(handler))
     _answer_with(stack, "anthropic", False)
 
     httpx.post(
@@ -815,6 +821,7 @@ def test_inspect_client_asks_what_was_decided_of_a_reply_released_early(
 ) -> None:
     handler = Handler(rejects("Tokyo"), release="early")
     stack.use(handler)
+    stack.run(holding(handler))
     _answer_with(stack, api, True)
 
     answered = httpx.post(

@@ -1,0 +1,6 @@
+# only what the build copies; local environments stay out
+*
+!sidecar/pyproject.toml
+!sidecar/uv.lock
+!rule
+**/__pycache__

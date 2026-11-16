@@ -7,10 +7,7 @@ updates:
   # (meridianlabs-ai/actions, until a release tag has the shared Python
   # actions) moves to that branch's head, with no cooldown.
   - package-ecosystem: "github-actions"
-    # / covers the workflows; the local composite actions pin actions too.
-    directories:
-      - "/"
-      - "/.github/actions/*"
+    directory: "/"
     schedule:
       interval: "weekly"
     cooldown:
@@ -25,13 +22,12 @@ updates:
     commit-message:
       prefix: "ci"
   # Bumps uv.lock. The cooldown matches `exclude-newer` in pyproject.toml, and
-  # its exclude list matches the "6 hours" entries in `exclude-newer-package`
-  # there (a dated emergency entry is locked by hand): Dependabot's cooldown
-  # counts whole days, so those packages' 6-hour cooldown is left to uv. They
-  # get their own group, so a broken update elsewhere can't hold them up. It
-  # comes first because a package that matches both groups goes to the first.
-  # inspect-ai and inspect-scout are ignored: they come from their main
-  # branches, which CI moves to the latest commit on every run.
+  # its exclude list matches the `false` (Inspect packages) and "6 hours"
+  # (provider SDKs) entries in `exclude-newer-package` there (a dated emergency
+  # entry is locked by hand): Dependabot's cooldown counts whole days, so those
+  # packages' short or no cooldown is left to uv. They get their own group, so
+  # a broken update elsewhere can't hold them up. It comes first because a
+  # package that matches both groups goes to the first.
   - package-ecosystem: "uv"
     versioning-strategy: "lockfile-only"
     directory: "/"
@@ -41,14 +37,15 @@ updates:
       default-days: 7
       exclude:
         - "anthropic"
+        - "inspect-ai"
+        - "inspect-scout"
         - "openai"
-    ignore:
-      - dependency-name: "inspect-ai"
-      - dependency-name: "inspect-scout"
     groups:
       six-hour-cooldown:
         patterns:
           - "anthropic"
+          - "inspect-ai"
+          - "inspect-scout"
           - "openai"
       python-packages:
         patterns:

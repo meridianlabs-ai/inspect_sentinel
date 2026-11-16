@@ -29,6 +29,7 @@ from tests.sidecar._traffic import (
     OPENAI_RECORDED,
     STREAM,
     every_call_rule,
+    holding,
     inspect_headers,
     openai_ran,
     openai_recorded,
@@ -810,7 +811,7 @@ def _function_calls(body: bytes) -> list[tuple[str, str, str]]:
 
 @pytest.mark.anyio
 async def test_a_rejected_turn_is_put_back_as_its_own_run_was_handed_it() -> None:
-    handler = Handler(every_call_rule())
+    handler = await holding(Handler(every_call_rule()))
     await handler.request(
         replace(
             _request("responses", "a"), headers=inspect_headers(sample_uuid="run_a")
@@ -1470,7 +1471,7 @@ def _chat_asked(id: str, *then: dict[str, Any]) -> Request:
 @pytest.mark.anyio
 async def test_a_summary_after_a_result_does_not_make_the_result_new() -> None:
     # inspect_ai merges the summary into the turn that made the call
-    handler = Handler(ends_at_a_second_result())
+    handler = await holding(Handler(ends_at_a_second_result()))
 
     first = await handler.request(_chat_asked("a", _CALLED, _RESULT))
     second = await handler.request(
@@ -1488,7 +1489,7 @@ async def test_a_summary_after_a_result_does_not_make_the_result_new() -> None:
 
 @pytest.mark.anyio
 async def test_a_result_beside_changed_words_from_the_model_is_new() -> None:
-    handler = Handler(ends_at_a_second_result())
+    handler = await holding(Handler(ends_at_a_second_result()))
 
     await handler.request(_chat_asked("a", _CALLED, _RESULT))
     second = await handler.request(
@@ -1501,7 +1502,7 @@ async def test_a_result_beside_changed_words_from_the_model_is_new() -> None:
 @pytest.mark.anyio
 async def test_a_result_beside_a_changed_refusal_is_new() -> None:
     # with no content, inspect_ai reads the refusal as what the model said
-    handler = Handler(ends_at_a_second_result())
+    handler = await holding(Handler(ends_at_a_second_result()))
 
     await handler.request(_chat_asked("a", _CALLED | {"refusal": "Fine."}, _RESULT))
     second = await handler.request(
@@ -1525,7 +1526,7 @@ def ends_at_a_storm_the_model_mentions() -> Protocol:
 
 @pytest.mark.anyio
 async def test_a_result_beside_changed_words_is_judged_again() -> None:
-    handler = Handler(ends_at_a_storm_the_model_mentions())
+    handler = await holding(Handler(ends_at_a_storm_the_model_mentions()))
 
     first = await handler.request(
         _chat_asked("a", _CALLED | {"content": "Fine."}, _RESULT)
@@ -1809,7 +1810,7 @@ async def test_a_span_inside_reasoning_is_read_in_the_reasoning() -> None:
 @pytest.mark.anyio
 async def test_two_calls_alike_but_for_their_ids_are_each_judged() -> None:
     # the same call can give the same result twice: each ran
-    handler = Handler(ends_at_a_second_result())
+    handler = await holding(Handler(ends_at_a_second_result()))
 
     answer = await handler.request(
         _chat_asked("a", _CALLED, _RESULT, _CALLED_2, _RESULT_2)
@@ -1820,7 +1821,7 @@ async def test_two_calls_alike_but_for_their_ids_are_each_judged() -> None:
 
 @pytest.mark.anyio
 async def test_a_conversation_with_two_calls_under_one_id_is_unreadable() -> None:
-    handler = Handler(ends_at_a_second_result())
+    handler = await holding(Handler(ends_at_a_second_result()))
 
     # which call each result is of can't be told, so neither is judged on a
     # guess
@@ -1873,7 +1874,7 @@ async def test_each_result_is_judged_with_what_its_models_was_sent_while_kept(
     from inspect_sentinel.sidecar import _handler
 
     monkeypatch.setattr(_handler, "MADE_KEPT", kept)
-    handler = Handler(notes_what_the_model_was_sent())
+    handler = await holding(Handler(notes_what_the_model_was_sent()))
     # the model is handed a call in each of two turns
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
@@ -1943,7 +1944,7 @@ def notes_each_result() -> Protocol:
 @pytest.mark.anyio
 async def test_each_result_is_judged_once() -> None:
     then = [_CALLED, _RESULT, _CALLED_2, _RESULT_2]
-    handler = Handler(notes_each_result())
+    handler = await holding(Handler(notes_each_result()))
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
     await handler.request(_chat_asked("b", _CALLED, _RESULT))
@@ -1970,7 +1971,7 @@ def test_a_code_interpreter_in_a_container_the_provider_keeps_is_unreadable() ->
 
 @pytest.mark.anyio
 async def test_a_retried_request_may_be_handed_the_same_call_again() -> None:
-    handler = Handler(notes_each_result())
+    handler = await holding(Handler(notes_each_result()))
     await handler.request(_chat_asked("a"))
     await handler.reply(_chat_reply_calling("a"))
     # the client retries the same request, and keeps the second reply only

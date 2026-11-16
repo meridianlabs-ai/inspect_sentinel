@@ -41,6 +41,7 @@ from inspect_sentinel.sidecar.envoy._proto.envoy.service.ext_proc.v3 import (
 )
 from tests.sidecar._traffic import (
     every_call_rule,
+    holding,
     inspect_headers,
     message,
     weather,
@@ -261,7 +262,7 @@ async def _not_judged(handler: Handler) -> tuple[str, str | None]:
 async def test_compressed_request_is_refused_and_the_eval_told_it_wasnt_judged() -> (
     None
 ):
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     answers = await _process(
         [
             _from_inspect(**{"content-encoding": "gzip"}),
@@ -287,7 +288,7 @@ async def test_compressed_request_is_refused_and_the_eval_told_it_wasnt_judged()
 async def test_reply_refused_unread_tells_the_eval_it_wasnt_judged(
     max_body_bytes: int, headers: dict[str, str]
 ) -> None:
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     body = message(weather("Paris"))
     answers = await _process(
         [
@@ -365,7 +366,7 @@ def test_eval_endpoint_left_out_is_not_routed() -> None:
 async def test_providers_error_passes_through_unjudged_whatever_its_size_or_encoding(
     max_body_bytes: int, headers: dict[str, str]
 ) -> None:
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     error = (
         b'{"type": "error", "error": {"type": "api_error", "message": "'
         + b"x" * 200
@@ -589,7 +590,7 @@ async def test_nothing_is_left_delivering_once_envoy_stops_reading() -> None:
 async def test_a_request_sent_on_whose_reply_never_began_is_recorded_as_cut_off() -> (
     None
 ):
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     shim = EnvoyShim(handler, max_body_bytes=1024 * 1024)
 
     async def sent() -> AsyncIterator[pb.ProcessingRequest]:

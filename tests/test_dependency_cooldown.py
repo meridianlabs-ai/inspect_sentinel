@@ -1,14 +1,12 @@
-# pyproject.toml holds back releases younger than seven days, or six hours for
-# a list of model provider SDKs and Inspect packages. Dependabot applies the
-# seven days to its uv.lock bumps and leaves that list to uv. Every CI job
-# installs from uv.lock, except that inspect-ai and inspect-scout move to their
-# main's latest commit first. The build toolchain comes from a hashed
-# requirements file, and the LiteLLM guardrail's environments take a pinned
-# LiteLLM with no cooldown. Every install goes through the shared action.
-# Testing against the newest releases happens in meridianlabs-ai/canaries,
-# outside this repository.
+# pyproject.toml holds back releases younger than seven days, six hours for a
+# list of model provider SDKs, and not at all for Inspect packages. Dependabot
+# applies the seven days to its uv.lock bumps and leaves that list to uv. Every
+# CI job installs the versions in uv.lock, all from PyPI. The build toolchain
+# comes from a hashed requirements file, and the LiteLLM guardrail's
+# environments take a pinned LiteLLM with no cooldown. Every install goes
+# through the shared action. Testing against the newest releases happens in
+# meridianlabs-ai/canaries, outside this repository.
 
-import importlib.util
 import pathlib
 import re
 import tomllib
@@ -21,20 +19,25 @@ import yaml
 REPO = pathlib.Path(__file__).parents[1]
 GITHUB = REPO / ".github"
 WORKFLOWS = GITHUB / "workflows"
-UV_SYNC_ACTION = "./.github/actions/uv-sync"
 SHARED_ACTIONS = "meridianlabs-ai/actions/"
-RELEASE_BRANCH = "release-please--branches--main"
+SHARED_INSTALL = SHARED_ACTIONS + "install-python-dependencies@"
 MATRIX_PYTHON = "${{ matrix.python-version }}"
 LOCKED_JOBS = {
-    "py-ruff": {"python-version": "3.13", "extras": "dev"},
-    "py-pyright": {"python-version": MATRIX_PYTHON, "extras": "dev"},
-    "py-test": {"python-version": MATRIX_PYTHON, "extras": "dev"},
+    "py-ruff": {"versions": "locked", "python-version": "3.13", "extras": "dev"},
+    "py-pyright": {
+        "versions": "locked",
+        "python-version": MATRIX_PYTHON,
+        "extras": "dev",
+    },
+    "py-test": {"versions": "locked", "python-version": MATRIX_PYTHON, "extras": "dev"},
     "litellm-guardrail": {
+        "versions": "locked",
         "python-version": MATRIX_PYTHON,
         "extras": "dev",
         "actions-cache": "none",
     },
     "py-build": {
+        "versions": "locked",
         "python-version": MATRIX_PYTHON,
         "project-install": "skip",
         "actions-cache": "none",
@@ -42,16 +45,15 @@ LOCKED_JOBS = {
     },
 }
 BUILD_REQUIREMENTS = "scripts/build-dist/requirements.txt"
-EXEMPT_COOLDOWN = "6 hours"
-# CI moves these to their main, so Dependabot leaves them alone.
-MAIN_TRACKED = ["inspect-ai", "inspect-scout"]
-
-spec = importlib.util.spec_from_file_location(
-    "release_floors", GITHUB / "scripts" / "release_floors.py"
-)
-assert spec and spec.loader
-release_floors = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(release_floors)
+SHARED_BUILD = SHARED_ACTIONS + ".github/workflows/build-python-dist.yml@"
+PUBLISH_STEPS = ("actions/download-artifact@", "pypa/gh-action-pypi-publish@")
+DOWNLOAD_INPUTS = {
+    "artifact-ids": "${{ needs.build.outputs.artifact-id }}",
+    "path": "dist/",
+}
+# Provider SDKs get a short cooldown, Inspect packages none (tomllib reads
+# `false` as False).
+EXEMPT_COOLDOWNS: list[str | bool] = ["6 hours", False]
 
 
 def pyproject() -> dict[str, Any]:
@@ -150,11 +152,11 @@ def workflow_run_lines() -> list[tuple[str, str]]:
 def verify_exclude_newer_package(
     config: dict[str, Any], direct: set[str], now: datetime
 ) -> None:
-    # Each entry is "6 hours" or a dated entry younger than the cooldown.
+    # Each entry is "6 hours", false or a dated entry younger than the cooldown.
     max_age = timedelta(days=cooldown_days(config["exclude-newer"]))
     for package, cooldown in config["exclude-newer-package"].items():
         assert normalize(package) in direct, f"{package} is not a direct dependency"
-        if cooldown != EXEMPT_COOLDOWN:
+        if cooldown not in EXEMPT_COOLDOWNS:
             age = now - datetime.fromisoformat(cooldown)
             assert timedelta(0) <= age < max_age, (
                 f'dated entry {package} = "{cooldown}" is in the future or stale'
@@ -166,13 +168,13 @@ def verify_dependabot_cooldown(
 ) -> None:
     cooldown = dependabot["cooldown"]
     assert cooldown["default-days"] == cooldown_days(config["exclude-newer"])
-    assert dependabot["ignore"] == [{"dependency-name": p} for p in MAIN_TRACKED]
-    # Dependabot's cooldown counts whole days, so it leaves the "6 hours"
-    # entries to uv. Dated entries are locked by hand.
+    assert "ignore" not in dependabot
+    # Dependabot's cooldown counts whole days, so it leaves the "6 hours" and
+    # false entries to uv. Dated entries are locked by hand.
     exempt = sorted(
         package
         for package, cooldown in config["exclude-newer-package"].items()
-        if cooldown == EXEMPT_COOLDOWN and package not in MAIN_TRACKED
+        if cooldown in EXEMPT_COOLDOWNS
     )
     assert sorted(cooldown["exclude"]) == exempt
     # The exempt packages have their own group, listed before the catch-all.
@@ -201,13 +203,14 @@ def test_fresh_dated_entry_passes() -> None:
 @pytest.mark.parametrize(
     "package,cooldown,error",
     [
-        ("certifi", EXEMPT_COOLDOWN, "not a direct dependency"),
+        ("certifi", "6 hours", "not a direct dependency"),
+        ("certifi", False, "not a direct dependency"),
         ("jinja2", timedelta(days=-7), "dated entry"),
         ("jinja2", timedelta(days=1), "dated entry"),
     ],
 )
 def test_bad_exclude_newer_package_entry_is_caught(
-    package: str, cooldown: str | timedelta, error: str
+    package: str, cooldown: str | bool | timedelta, error: str
 ) -> None:
     config = uv_config()
     now = datetime.now(UTC)
@@ -236,7 +239,7 @@ def test_uv_comes_from_the_shared_setup_uv() -> None:
         if ref.startswith(
             (
                 SHARED_ACTIONS + "setup-uv@",
-                SHARED_ACTIONS + "install-python-dependencies@",
+                SHARED_INSTALL,
             )
         )
     }
@@ -252,57 +255,11 @@ def test_locked_jobs_install_from_the_lockfile(
     installs = [
         step.get("with", {})
         for step in job["steps"]
-        if step.get("uses") == UV_SYNC_ACTION
+        if step.get("uses", "").startswith(SHARED_INSTALL)
+        and step["with"]["versions"] == "locked"
     ]
     assert installs == [inputs]
     assert not [line for line in run_lines(job) if line.startswith("uv sync")]
-
-
-def test_uv_sync_action_moves_only_the_main_tracked_packages() -> None:
-    # Moving them re-locks, which would also absorb a pyproject.toml change
-    # nobody locked, so the committed lock is checked first. The release PR
-    # resolves without sources, and later steps see the committed uv.lock.
-    action = yaml.safe_load((GITHUB / "actions" / "uv-sync" / "action.yml").read_text())
-    setup, move, install, restore = action["runs"]["steps"]
-    assert setup["uses"].startswith(SHARED_ACTIONS + "setup-uv@")
-    # A job that installed through the shared action first already ran setup-uv.
-    assert setup["if"] == "env.MERIDIAN_SETUP_UV == ''"
-    assert setup["with"] == {
-        "python-version": "${{ inputs.python-version }}",
-        "actions-cache": "${{ inputs.actions-cache }}",
-    }
-    assert move["env"]["HEAD_REF"] == "${{ github.head_ref }}"
-    assert run_lines({"steps": [move]}) == [
-        "uv lock --check",
-        f'if [ "$HEAD_REF" = "{RELEASE_BRANCH}" ]; then',
-        "export UV_NO_SOURCES=1",
-        'echo "UV_NO_SOURCES=1" >> "$GITHUB_ENV"',
-        "fi",
-        "uv lock --upgrade-package inspect-ai --upgrade-package inspect-scout",
-    ]
-    assert install["uses"].startswith(SHARED_ACTIONS + "install-python-dependencies@")
-    assert install["with"] == {
-        "versions": "locked",
-        "python-version": "${{ inputs.python-version }}",
-        "extras": "${{ inputs.extras }}",
-        "project-install": "${{ inputs.project-install }}",
-        "actions-cache": "${{ inputs.actions-cache }}",
-        "also-install-without-deps": "${{ inputs.also-install-without-deps }}",
-    }
-    assert run_lines({"steps": [restore]}) == ["git checkout -- uv.lock"]
-
-
-def test_release_branch_name_matches_everywhere() -> None:
-    # A misspelt name silently runs the release PR as a dev PR.
-    names = {
-        where: set(re.findall(r"release-please--branches--[\w-]+", text))
-        for where, text in [
-            *[(path.name, path.read_text()) for path in workflows()],
-            ("uv-sync", (GITHUB / "actions" / "uv-sync" / "action.yml").read_text()),
-        ]
-    }
-    assert set().union(*names.values()) == {RELEASE_BRANCH}
-    assert names["uv-sync"] and names["release-pin-deps.yml"]
 
 
 # A bare `uv run` or `uv sync` re-resolves an out-of-date uv.lock and installs
@@ -330,20 +287,47 @@ def test_no_install_bypasses_the_shared_action(command: str) -> None:
 
 
 # The build toolchain comes from the hashed file, as wheels, and the build
-# resolves nothing more.
+# resolves nothing more. The release build runs in the shared workflow, which
+# does the same.
 def test_builds_use_the_hashed_toolchain_without_isolation() -> None:
     hashed = [
         step["with"]
         for _, step in all_steps()
         if step.get("with", {}).get("versions") == "hashed-requirements"
     ]
-    assert len(hashed) == 2
+    assert len(hashed) == 1
     for inputs in hashed:
         assert inputs["requirements-file"] == BUILD_REQUIREMENTS
         assert inputs["package-format"] == "wheels-only"
     builds = [line for _, line in workflow_run_lines() if " -m build" in line]
-    assert len(builds) == 3
+    assert len(builds) == 2
     assert [line for line in builds if "--no-isolation" not in line.split()] == []
+
+
+# A job with `id-token: write` only downloads the shared build's dist and
+# publishes it. A job that calls a shared workflow, such as a docs deploy, has
+# no steps here.
+def test_publish_jobs_only_upload_the_shared_build() -> None:
+    publishers = [
+        (f"{path.name}:{name}", job)
+        for path in workflows()
+        for name, job in yaml.safe_load(path.read_text())["jobs"].items()
+        if isinstance(job.get("permissions"), dict)
+        and job["permissions"].get("id-token") == "write"
+        and "uses" not in job
+    ]
+    assert publishers, "no job holds id-token: write"
+    for where, job in publishers:
+        uses = [step.get("uses", "") for step in job["steps"]]
+        assert len(uses) == len(PUBLISH_STEPS), where
+        for action, prefix in zip(uses, PUBLISH_STEPS, strict=True):
+            assert action.startswith(prefix), where
+        needs = job.get("needs", [])
+        assert "build" in ([needs] if isinstance(needs, str) else needs), where
+        assert job["steps"][0].get("with") == DOWNLOAD_INPUTS, where
+    build = yaml.safe_load((WORKFLOWS / "publish.yaml").read_text())["jobs"]["build"]
+    assert build["uses"].startswith(SHARED_BUILD), build["uses"]
+    assert re.fullmatch(r"[0-9a-f]{40}", build["uses"].split("@")[1].split()[0])
 
 
 # pip installs skip uv.lock, so they may only add local packages without their
@@ -368,27 +352,3 @@ def test_no_workflow_opts_out_of_the_cooldown() -> None:
         if re.search(r"--exclude-newer(=|\s+)false", line)
     ]
     assert floating == []
-
-
-def test_floor_script_raises_the_main_tracked_floors() -> None:
-    # push-floor rewrites each "<package>>=<version>" in pyproject.toml.
-    assert list(release_floors.PACKAGES) == MAIN_TRACKED
-    dependencies = pyproject()["project"]["dependencies"]
-    for package in MAIN_TRACKED:
-        assert len([d for d in dependencies if d.startswith(f"{package}>=")]) == 1
-
-
-def test_floor_script_requires_a_released_package() -> None:
-    lock = """
-[[package]]
-name = "inspect-scout"
-version = "0.6.3.dev20"
-source = { git = "https://github.com/meridianlabs-ai/inspect_scout?branch=main#abc" }
-"""
-    with pytest.raises(ValueError, match="not locked from PyPI"):
-        release_floors.locked_version(lock, "inspect-scout")
-    released = lock.replace('version = "0.6.3.dev20"', 'version = "0.6.2"').replace(
-        'git = "https://github.com/meridianlabs-ai/inspect_scout?branch=main#abc"',
-        'registry = "https://pypi.org/simple"',
-    )
-    assert release_floors.locked_version(released, "inspect-scout") == "0.6.2"

@@ -53,6 +53,39 @@ def test_before_tool_call_holds_the_hosts_lists() -> None:
     )
     assert step.input is model_input
     assert step.agent_messages is history
+    assert step.assistant_message is None
+
+
+def test_tool_steps_hold_the_assistant_message_that_made_the_call() -> None:
+    made = ChatMessageAssistant(
+        id="msg_1",
+        content="checking",
+        tool_calls=[_call(), ToolCall(id="c2", function="bash", arguments={})],
+    )
+    before = BeforeToolCall(
+        conversation="conv",
+        message="checking",
+        message_id="msg_1",
+        assistant_message=made,
+        call=_call(),
+        view=ToolCallView(),
+        input=_input(),
+        agent_messages=None,
+    )
+    after = AfterToolCall(
+        conversation="conv",
+        message="checking",
+        message_id="msg_1",
+        assistant_message=made,
+        call=_call(),
+        result=ChatMessageTool(content="ok", tool_call_id="c1"),
+        output="ok",
+        view=ToolCallView(),
+        input=_input(),
+        agent_messages=None,
+    )
+    assert before.assistant_message is made
+    assert after.assistant_message is made
 
 
 def test_after_tool_call_holds_result_and_untruncated_output() -> None:

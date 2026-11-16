@@ -1,7 +1,7 @@
 # What the sidecar runs, and how it serves. Envoy's side is envoy.yaml.
 sentinel:
   # the always_sunny rule: `weather_rules` is the package in rule/, which
-  # Dockerfile.sidecar installs, and inspect_ai finds by its entry point
+  # sidecar/Dockerfile installs, and inspect_ai finds by its entry point
   name: weather_rules/always_sunny
 server:
   # inside the stack, where only Envoy reaches the sidecar

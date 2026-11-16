@@ -1,4 +1,5 @@
 import json
+import time
 from dataclasses import replace
 from typing import Any
 
@@ -26,9 +27,12 @@ from inspect_sentinel.sidecar import (
     Reply,
     Request,
     UnreadableError,
+    _handler,
+    _sign,
+    _state,
     read_reply,
 )
-from inspect_sentinel.sidecar._handler import _ENDED, SampleResult
+from inspect_sentinel.sidecar._handler import _ENDED, RequestResult, SampleResult
 from inspect_sentinel.sidecar._host import ListRecorder, SidecarHost
 from inspect_sentinel.sidecar._inspect_client import judgment, withheld_turn
 from inspect_sentinel.sidecar._state import MemoryState
@@ -38,6 +42,7 @@ from tests.sidecar._traffic import (
     STREAM,
     anthropic_recorded,
     every_call_rule,
+    holding,
     inspect_headers,
     message,
     openai_recorded,
@@ -52,8 +57,8 @@ from tests.sidecar._traffic import (
 
 
 def _from_inspect(asked: Request, irid: str | None = None, **changes: Any) -> Request:
-    headers = inspect_headers(**changes)
-    return replace(asked, headers=headers | ({"x-irid": irid} if irid else {}))
+    headers = inspect_headers(**({"irid": irid} if irid else {}), **changes)
+    return replace(asked, headers=headers)
 
 
 async def _not_judged(handler: Handler, irid: str) -> tuple[str, str | None, bool]:
@@ -126,7 +131,7 @@ async def _judgments(
 ) -> list[dict[str, Any]]:
     # what an eval is told of each attempt at the request, as `request_result`
     # writes the latest's
-    attempts = await handler._state.attempts(irid)  # pyright: ignore[reportPrivateUsage]
+    attempts = await handler._state.attempts(irid, "eval_789")  # pyright: ignore[reportPrivateUsage]
     assert isinstance(attempts, list)
     return [
         judgment(
@@ -151,7 +156,7 @@ def _stages(field: dict[str, Any]) -> list[tuple[str, str]]:
 async def test_a_reply_that_goes_on_is_judged_at_every_step(
     name: str,
 ) -> None:
-    handler = Handler(weather_rule("reject", "Cairo"))
+    handler = await holding(Handler(weather_rule("reject", "Cairo")))
     asked, answered = _exchange(name)
     assert await handler.request(asked) == Pass()
 
@@ -185,7 +190,7 @@ async def test_a_refused_turn_is_told_redacted_with_what_was_recorded(
     calls = output.message.tool_calls or []
     # the recorded streams name the cities in more than one way
     cities = [call.arguments["location"] for call in calls]
-    handler = Handler(every_call_rule())
+    handler = await holding(Handler(every_call_rule()))
     await handler.request(asked)
 
     answer = await handler.reply(answered)
@@ -236,7 +241,7 @@ async def test_a_turn_with_a_call_taken_out_is_told_with_the_call_redacted(
     output = await read_reply(answered.provider, answered.content_type, answered.body)
     calls = output.message.tool_calls or []
     city = calls[1].arguments["location"]
-    handler = Handler(weather_rule("reject", city))
+    handler = await holding(Handler(weather_rule("reject", city)))
     await handler.request(asked)
 
     answer = await handler.reply(answered)
@@ -275,7 +280,7 @@ async def test_a_turn_with_a_call_taken_out_is_told_with_the_call_redacted(
 
 @pytest.mark.anyio
 async def test_a_run_ended_at_a_call_is_the_last_step() -> None:
-    handler = Handler(weather_rule("terminate", "Tokyo"))
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
     asked, answered = _exchange("anthropic")
     await handler.request(asked)
 
@@ -327,7 +332,7 @@ def acts_on_paris_and_ends_at_tokyo(action: str = "reject") -> Protocol:
 async def test_a_run_ended_at_a_call_redacts_the_calls_decided_before_it(
     action: str,
 ) -> None:
-    handler = Handler(acts_on_paris_and_ends_at_tokyo(action))
+    handler = await holding(Handler(acts_on_paris_and_ends_at_tokyo(action)))
     asked, answered = _exchange("anthropic")
     await handler.request(asked)
 
@@ -367,7 +372,7 @@ def ends_at_the_reply() -> Protocol:
 
 @pytest.mark.anyio
 async def test_a_run_ended_at_the_reply_carries_the_turn() -> None:
-    handler = Handler(ends_at_the_reply())
+    handler = await holding(Handler(ends_at_the_reply()))
     asked, answered = _exchange("anthropic")
     await handler.request(asked)
 
@@ -386,7 +391,7 @@ async def test_a_run_ended_at_the_reply_carries_the_turn() -> None:
 
 @pytest.mark.anyio
 async def test_the_rejection_that_ends_the_run_says_the_run_ended() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
     answers: list[Any] = []
     for id in ("a", "b", "c"):
         await handler.request(_from_inspect(request(id)))
@@ -405,7 +410,7 @@ async def test_the_rejection_that_ends_the_run_says_the_run_ended() -> None:
 
 @pytest.mark.anyio
 async def test_a_run_ended_at_a_result_is_refused_with_the_result_step() -> None:
-    handler = Handler(storm_rule())
+    handler = await holding(Handler(storm_rule()))
     asked = _from_inspect(request(then=ran("Oslo", "A storm.")))
 
     answer = await handler.request(asked)
@@ -462,7 +467,7 @@ def watches_every_stage() -> Protocol:
 
 @pytest.mark.anyio
 async def test_a_reply_is_told_with_the_request_steps_before_its_own() -> None:
-    handler = Handler(watches_every_stage())
+    handler = await holding(Handler(watches_every_stage()))
     asked, answered = _exchange("anthropic")
     await handler.request(replace(asked, body=request(then=ran("Oslo", "Sunny.")).body))
 
@@ -481,7 +486,7 @@ async def test_a_reply_is_told_with_the_request_steps_before_its_own() -> None:
 
 @pytest.mark.anyio
 async def test_a_run_ended_before_the_model_is_refused_with_the_request_steps() -> None:
-    handler = Handler(ends_before_the_model())
+    handler = await holding(Handler(ends_before_the_model()))
 
     answer = await handler.request(_from_inspect(request(then=ran("Oslo", "Sunny."))))
 
@@ -494,7 +499,7 @@ async def test_a_run_ended_before_the_model_is_refused_with_the_request_steps() 
 
 @pytest.mark.anyio
 async def test_a_request_of_an_ended_run_is_refused_with_no_steps() -> None:
-    handler = Handler(storm_rule())
+    handler = await holding(Handler(storm_rule()))
     await handler.request(_from_inspect(request("a", then=ran("Oslo", "A storm."))))
 
     answer = await handler.request(_from_inspect(request("b", "Something else")))
@@ -510,7 +515,7 @@ async def test_a_request_of_an_ended_run_is_refused_with_no_steps() -> None:
 
 @pytest.mark.anyio
 async def test_each_sample_is_a_run_of_its_own() -> None:
-    handler = Handler(storm_rule())
+    handler = await holding(Handler(storm_rule()))
     await handler.request(_from_inspect(request("a", then=ran("Oslo", "A storm."))))
 
     # another epoch of the same sample opens the same way
@@ -541,7 +546,7 @@ def _turn(location: str, id: str, told: str) -> list[dict[str, Any]]:
 
 @pytest.mark.anyio
 async def test_a_client_that_put_a_withheld_turn_back_is_not_told_of_it_again() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Tokyo", "toolu_9")), id="a"))
 
@@ -557,7 +562,7 @@ async def test_a_client_that_put_a_withheld_turn_back_is_not_told_of_it_again() 
 
 @pytest.mark.anyio
 async def test_a_client_that_didnt_put_a_withheld_turn_back_is_told_of_it() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Tokyo", "toolu_9")), id="a"))
 
@@ -593,7 +598,7 @@ async def test_a_header_that_cant_be_read_is_refused(value: str) -> None:
 
 @pytest.mark.anyio
 async def test_a_new_attempt_is_not_told_of_a_turn_rejected_in_the_last() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Tokyo", "toolu_9")), id="a"))
 
@@ -610,7 +615,7 @@ async def test_a_new_attempt_is_not_told_of_a_turn_rejected_in_the_last() -> Non
 
 @pytest.mark.anyio
 async def test_a_new_attempt_counts_its_rejected_turns_in_a_row_afresh() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
 
     async def rejected(id: str, attempt: int) -> Refuse:
         await handler.request(
@@ -656,7 +661,7 @@ def counts_lookups_and_ends_at_storms() -> Protocol:
 
 @pytest.mark.anyio
 async def test_a_new_attempt_starts_the_runs_store_and_its_end_afresh() -> None:
-    handler = Handler(counts_lookups_and_ends_at_storms())
+    handler = await holding(Handler(counts_lookups_and_ends_at_storms()))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Oslo", "toolu_1")), id="a"))
 
@@ -689,7 +694,7 @@ async def test_a_new_attempt_starts_the_runs_store_and_its_end_afresh() -> None:
 
 @pytest.mark.anyio
 async def test_a_replaced_attempts_requests_and_replies_are_refused_unjudged() -> None:
-    handler = Handler(counts_lookups_and_ends_at_storms())
+    handler = await holding(Handler(counts_lookups_and_ends_at_storms()))
     await handler.request(_from_inspect(request("a"), "irid-a"))
     await handler.request(
         _from_inspect(request("b"), "irid-b", attempt="attempt_2", attempt_number=2)
@@ -741,7 +746,7 @@ def waits_at_oslo_and_ends_at_paris() -> Protocol:
 @pytest.mark.anyio
 async def test_a_judgment_that_outlives_its_attempt_leaves_the_next_alone() -> None:
     _GATE.update(started=anyio.Event(), release=anyio.Event())
-    handler = Handler(waits_at_oslo_and_ends_at_paris())
+    handler = await holding(Handler(waits_at_oslo_and_ends_at_paris()))
     await handler.request(_from_inspect(request("a")))
     answers: dict[str, object] = {}
 
@@ -801,7 +806,7 @@ async def test_a_request_held_up_while_a_retry_begins_keeps_its_attempts_store()
     None
 ):
     _GATE.update(started=anyio.Event(), release=anyio.Event())
-    handler = Handler(counts_requests(), state=_SlowRecorders())
+    handler = await holding(Handler(counts_requests(), state=_SlowRecorders()))
 
     # the retry begins while the first attempt's request waits on the state
     async with anyio.create_task_group() as group:
@@ -820,7 +825,7 @@ async def test_a_request_held_up_while_a_retry_begins_keeps_its_attempts_store()
 
 @pytest.mark.anyio
 async def test_an_earlier_attempt_first_seen_after_a_later_one_is_refused() -> None:
-    handler = Handler(counts_lookups_and_ends_at_storms())
+    handler = await holding(Handler(counts_lookups_and_ends_at_storms()))
     await handler.request(
         _from_inspect(request("b"), attempt="attempt_2", attempt_number=2)
     )
@@ -838,7 +843,7 @@ async def test_an_earlier_attempt_first_seen_after_a_later_one_is_refused() -> N
 
 @pytest.mark.anyio
 async def test_two_attempts_with_the_same_number_are_told_apart_by_refusal() -> None:
-    handler = Handler(counts_lookups_and_ends_at_storms())
+    handler = await holding(Handler(counts_lookups_and_ends_at_storms()))
     await handler.request(_from_inspect(request("a"), "irid-a"))
 
     other = await handler.request(
@@ -860,7 +865,7 @@ async def test_two_attempts_with_the_same_number_are_told_apart_by_refusal() -> 
 
 @pytest.mark.anyio
 async def test_a_sample_the_eval_ended_stays_ended_for_a_new_attempt() -> None:
-    handler = Handler(counts_lookups_and_ends_at_storms())
+    handler = await holding(Handler(counts_lookups_and_ends_at_storms()))
     await handler.request(_from_inspect(request("a")))
     await handler.end_sample("sample_123", "eval_789")
 
@@ -886,7 +891,7 @@ def reports_the_proxy() -> Protocol:
 
 @pytest.mark.anyio
 async def test_sentinel_is_given_what_the_proxy_and_the_header_say() -> None:
-    handler = Handler(concurrent({"reports": reports_the_proxy()}))
+    handler = await holding(Handler(concurrent({"reports": reports_the_proxy()})))
     # a sample id outside ASCII arrives escaped, as a header value must be ASCII
     asked = _from_inspect(request(), sample_id="Zürich")
     await handler.request(asked)
@@ -915,7 +920,7 @@ async def test_sentinel_is_given_what_the_proxy_and_the_header_say() -> None:
 
 @pytest.mark.anyio
 async def test_a_client_without_the_header_is_handed_the_reply_as_it_was() -> None:
-    handler = Handler(weather_rule("reject", "Cairo"))
+    handler = await holding(Handler(weather_rule("reject", "Cairo")))
     asked, answered = _exchange("anthropic stream")
     await handler.request(replace(asked, headers={}))
 
@@ -936,7 +941,7 @@ async def test_a_client_without_the_header_is_refused_as_an_evals_would_be() -> 
 
 @pytest.mark.anyio
 async def test_a_provider_error_goes_on_as_it_was() -> None:
-    handler = Handler(weather_rule())
+    handler = await holding(Handler(weather_rule()))
     await handler.request(_from_inspect(request()))
 
     assert await handler.reply(reply(b"overloaded", status=529)) == Pass()
@@ -944,7 +949,7 @@ async def test_a_provider_error_goes_on_as_it_was() -> None:
 
 @pytest.mark.anyio
 async def test_without_eval_results_only_what_inspect_acts_on_is_sent() -> None:
-    handler = Handler(every_call_rule(), eval_results=False)
+    handler = await holding(Handler(every_call_rule(), eval_results=False))
     asked, answered = _exchange("anthropic")
     await handler.request(asked)
 
@@ -985,10 +990,12 @@ def asks_models() -> Protocol:
 @pytest.mark.parametrize("eval_results", [True, False], ids=["sent", "trimmed"])
 async def test_each_step_says_which_models_judged_it(eval_results: bool) -> None:
     # the sidecar's roles, not the eval's: so the eval can tell which judged
-    handler = Handler(
-        asks_models(),
-        host=SidecarHost({"monitor": "mockllm/monitor"}),
-        eval_results=eval_results,
+    handler = await holding(
+        Handler(
+            asks_models(),
+            host=SidecarHost({"monitor": "mockllm/monitor"}),
+            eval_results=eval_results,
+        )
     )
     asked, answered = _exchange("anthropic")
     await handler.request(asked)
@@ -1010,7 +1017,7 @@ async def test_each_step_says_which_models_judged_it(eval_results: bool) -> None
 
 @pytest.mark.anyio
 async def test_a_stream_without_its_last_event_is_judged_and_goes_on() -> None:
-    handler = Handler(weather_rule("reject", "Tokyo"))
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
     sent = anthropic_recorded("single-tool-call")
     # a stream whose last event never came, which is read all the same
     cut = b"".join(
@@ -1054,7 +1061,7 @@ def rejects_tokyo_and_ends_at_its_result() -> ProtocolGroup:
 
 @pytest.mark.anyio
 async def test_a_rejection_the_client_put_back_is_not_judged_as_a_result() -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(
         reply(message(weather("Tokyo", "toolu_1"), weather("Paris", "toolu_2")), id="a")
@@ -1088,7 +1095,7 @@ async def test_a_rejection_the_client_put_back_is_not_judged_as_a_result() -> No
 
 @pytest.mark.anyio
 async def test_a_result_for_a_call_taken_out_is_refused() -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(
         reply(message(weather("Tokyo", "toolu_1"), weather("Paris", "toolu_2")), id="a")
@@ -1137,7 +1144,7 @@ def changes_tokyo_and_ends_at_its_result() -> ProtocolGroup:
 
 @pytest.mark.anyio
 async def test_a_changed_calls_result_is_judged_as_the_call_that_ran() -> None:
-    handler = Handler(changes_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(changes_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     answer = await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
     assert isinstance(answer, Replace)
@@ -1180,7 +1187,7 @@ def _refused_turn_put_back(told: str) -> list[dict[str, Any]]:
 
 @pytest.mark.anyio
 async def test_a_refused_turns_rejection_the_client_put_back_is_not_judged() -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     refused = await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
     assert isinstance(refused, Refuse)
@@ -1197,7 +1204,7 @@ async def test_a_refused_turns_rejection_the_client_put_back_is_not_judged() -> 
 
 @pytest.mark.anyio
 async def test_another_result_for_a_refused_call_is_unreadable() -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
 
@@ -1211,7 +1218,7 @@ async def test_another_result_for_a_refused_call_is_unreadable() -> None:
 async def test_a_changed_call_the_eval_holds_as_it_ran_goes_to_the_model_as_made() -> (
     None
 ):
-    handler = Handler(changes_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(changes_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
 
@@ -1244,7 +1251,7 @@ def _calls_sent(body: bytes) -> list[tuple[str, Any]]:
 async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made() -> (
     None
 ):
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     await handler.reply(
         reply(message(weather("Tokyo", "toolu_1"), weather("Paris", "toolu_2")), id="a")
@@ -1359,7 +1366,7 @@ def _openai_calls_sent(api: str, body: bytes) -> list[tuple[str, Any]]:
 async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made_on_openai(
     api: str,
 ) -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_openai_from_inspect(api, "a"))
     content_type, body = openai_recorded(api)
     await handler.reply(
@@ -1402,7 +1409,7 @@ async def test_a_call_taken_out_that_the_eval_holds_redacted_goes_back_as_made_o
 
 @pytest.mark.anyio
 async def test_a_refused_turn_that_the_eval_holds_redacted_goes_back_as_made() -> None:
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     await handler.request(_from_inspect(request("a")))
     refused = await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
     assert isinstance(refused, Refuse)
@@ -1419,7 +1426,7 @@ async def test_a_refused_turn_that_the_eval_holds_redacted_goes_back_as_made() -
 @pytest.mark.anyio
 async def test_a_call_no_decision_acted_on_is_never_put_back() -> None:
     # an empty call of the eval's own is left as it is
-    handler = Handler(rejects_tokyo_and_ends_at_its_result())
+    handler = await holding(Handler(rejects_tokyo_and_ends_at_its_result()))
     held = [
         {"role": "assistant", "content": [_redacted("toolu_9")]},
         {
@@ -1433,3 +1440,552 @@ async def test_a_call_no_decision_acted_on_is_never_put_back() -> None:
     answer = await handler.request(_from_inspect(request("a", then=held)))
 
     assert answer == Pass()
+
+
+def _signed_header(irid: str, **changes: Any) -> dict[str, Any]:
+    # the header Inspect sends with the request `irid`, signed, as a dict to
+    # change after signing
+    signed = inspect_headers(irid=irid, **changes)
+    header: dict[str, Any] = json.loads(signed["x-inspect-context"])
+    return header
+
+
+def _sent(header: dict[str, Any], id: str, irid: str) -> Request:
+    return replace(
+        request(id), headers={"x-inspect-context": json.dumps(header), "x-irid": irid}
+    )
+
+
+async def _reason(handler: Handler, irid: str) -> str | None:
+    attempts = await handler._state.attempts(irid, "eval_789")  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(attempts, list)
+    return attempts[-1].reason
+
+
+async def _kept(handler: Handler, irid: str, eval_id: str = "eval_789") -> bool:
+    # whether anything was kept under the eval and the request id, for
+    # `request_result`
+    attempts = await handler._state.attempts(irid, eval_id)  # pyright: ignore[reportPrivateUsage]
+    return attempts is not None
+
+
+async def _terminated() -> Handler:
+    # a handler whose run of `SAMPLE` a sentinel has ended
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    ended = await handler.sample_result("sample_123", "eval_789")
+    assert ended is not None and ended.outcome == "terminate"
+    return handler
+
+
+_NAMES_THE_RUN = (
+    "task",
+    "sample_id",
+    "epoch",
+    "sample_uuid",
+    "attempt",
+    "attempt_number",
+)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("task", "another_task"),
+        ("sample_id", 2),
+        ("epoch", 1),
+        ("sample_uuid", "sample_999"),
+        ("attempt", "attempt_2"),
+        ("attempt_number", 2),
+        ("timestamp", None),
+    ],
+)
+async def test_a_header_changed_after_it_was_signed_is_refused(
+    field: str, value: Any
+) -> None:
+    handler = await _terminated()
+    header = _signed_header("irid-b")
+    header[field] = header["timestamp"] + 1 if field == "timestamp" else value
+
+    answer = await handler.request(_sent(header, "b", "irid-b"))
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "mac isn't one made with the eval's token" in answer.message
+    # never told the mac that would have matched
+    matching = _signed_header(
+        "irid-b",
+        **{name: header[name] for name in _NAMES_THE_RUN},
+        timestamp=header["timestamp"],
+    )
+    assert matching["mac"] not in answer.message
+    assert not await _kept(handler, "irid-b")
+    # the run is as it was: still ended, and no other run was begun
+    assert (await handler.sample_result("sample_123", "eval_789")) == SampleResult(
+        "terminate", {}
+    )
+    assert await handler.sample_result("sample_999", "eval_789") is None
+    still = await handler.request(_from_inspect(request("c"), "irid-c"))
+    assert isinstance(still, Refuse)
+    assert await _reason(handler, "irid-c") is None
+
+
+@pytest.mark.anyio
+async def test_a_raised_attempt_number_doesnt_start_a_terminated_run_afresh() -> None:
+    # signed as the attempt it was, then raised, as a retry would be
+    handler = await _terminated()
+    header = _signed_header("irid-b")
+    header |= {"attempt": "attempt_2", "attempt_number": 2}
+
+    answer = await handler.request(_sent(header, "b", "irid-b"))
+    retried = await handler.request(_from_inspect(request("c"), "irid-c"))
+
+    assert isinstance(answer, Refuse)
+    assert not await _kept(handler, "irid-b")
+    assert isinstance(retried, Refuse)
+    ended = await handler.sample_result("sample_123", "eval_789")
+    assert ended is not None and ended.outcome == "terminate"
+
+
+@pytest.mark.anyio
+async def test_a_mac_made_with_another_evals_token_is_refused() -> None:
+    handler = await holding(Handler(weather_rule()))
+    await holding(handler, "eval_other", "eval_other-token-made-for-these-tests")
+    signed_by_other = inspect_headers(token="eval_other-token-made-for-these-tests")
+
+    answer = await handler.request(replace(request("x"), headers=signed_by_other))
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert not await _kept(handler, "request_456")
+    assert await handler.sample_result("sample_123", "eval_789") is None
+
+
+@pytest.mark.anyio
+async def test_a_request_naming_another_evals_sample_is_refused() -> None:
+    # the eval's run, and a request that names it from another eval, signed
+    # with the token of the eval it names, which the sender doesn't hold
+    handler = await holding(Handler(weather_rule("terminate", "Tokyo")))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    header = _signed_header("irid-b", eval_id="eval_other")
+
+    answer = await handler.request(_sent(header, "b", "irid-b"))
+
+    # the sidecar holds no token for that eval, so it can't check the request
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "holds no registration of the eval" in answer.message
+    assert not await _kept(handler, "irid-b", "eval_other")
+    # and nothing of the other eval's run changed or became readable
+    assert await handler.sample_result("sample_123", "eval_other") is None
+
+
+@pytest.mark.anyio
+async def test_an_eval_of_the_clients_own_cant_reach_another_evals_run() -> None:
+    # a client that registered an eval of its own holds that eval's token, so
+    # it can sign a header that names the terminated sample of another eval,
+    # with a later attempt that would otherwise start the run afresh
+    handler = await _terminated()
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    answer = await handler.request(
+        _from_inspect(
+            request("b"),
+            "irid-b",
+            token=own_token,
+            eval_id="eval_own",
+            attempt="attempt_2",
+            attempt_number=2,
+        )
+    )
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert not await _kept(handler, "irid-b", "eval_own")
+    ended = await handler.sample_result("sample_123", "eval_789")
+    assert ended is not None and ended.outcome == "terminate"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("ended", [False, True], ids=["kept run", "ended run"])
+async def test_a_request_refused_for_naming_another_evals_run_keeps_it_no_longer(
+    monkeypatch: pytest.MonkeyPatch, ended: bool
+) -> None:
+    # The run, or what is left of it once its eval ended it, is kept for 100
+    # seconds after its eval last named it. A request from an eval of the
+    # client's own that names the run is refused as another eval's, keeps
+    # nothing of its own, and must not keep the run past its expiry.
+    monkeypatch.setattr(_state, "time", _ExpiryClock)
+    _ExpiryClock.now = 0.0
+    handler = await holding(
+        Handler(weather_rule("terminate", "Tokyo"), state=MemoryState(expiry=100))
+    )
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    if ended:
+        assert await handler.end_sample("sample_123", "eval_789") == "ended"
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    _ExpiryClock.now = 60.0
+    answer = await handler.request(
+        _from_inspect(request("b"), "irid-b", token=own_token, eval_id="eval_own")
+    )
+    _ExpiryClock.now = 120.0
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "names a sample of another eval" in answer.message
+    assert not await _kept(handler, "irid-b", "eval_own")
+    # `end_sample` reads an ended run, which `sample_result` doesn't
+    assert await handler.end_sample("sample_123", "eval_789") == "unknown"
+    assert await handler.sample_result("sample_123", "eval_789") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "attempt",
+    [("attempt_1", 1), ("attempt_2", 2)],
+    ids=["same attempt", "later attempt"],
+)
+async def test_another_eval_naming_a_run_as_it_begins_is_refused(
+    monkeypatch: pytest.MonkeyPatch, attempt: tuple[str, int]
+) -> None:
+    # Two evals name the same new sample at once. Each passes the check that
+    # the run isn't another eval's before either request is read, as the run
+    # hasn't begun. The request read second finds the run begun by the other
+    # eval: it is refused and kept nowhere, and a later attempt number
+    # doesn't start the other eval's run afresh.
+    handler = await holding(Handler(weather_rule()))
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    # each request waits to be read until it is let through, in order
+    gates = [anyio.Event(), anyio.Event()]
+    waiting = iter(gates)
+    read_opening = _handler.read_opening
+
+    async def held_up(*args: Any, **kwargs: Any) -> Any:
+        await next(waiting).wait()
+        return await read_opening(*args, **kwargs)
+
+    monkeypatch.setattr(_handler, "read_opening", held_up)
+    answers: dict[str, Any] = {}
+
+    async def send(name: str, sent: Request) -> None:
+        answers[name] = await handler.request(sent)
+
+    name, number = attempt
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(send, "first", _from_inspect(request("a"), "irid-a"))
+        await anyio.wait_all_tasks_blocked()
+        tasks.start_soon(
+            send,
+            "second",
+            _from_inspect(
+                request("b"),
+                "irid-b",
+                token=own_token,
+                eval_id="eval_own",
+                attempt=name,
+                attempt_number=number,
+            ),
+        )
+        await anyio.wait_all_tasks_blocked()
+        gates[0].set()
+        await anyio.wait_all_tasks_blocked()
+        gates[1].set()
+
+    assert isinstance(answers["first"], Pass)
+    second = answers["second"]
+    assert isinstance(second, Refuse) and second.status == 400
+    assert "names a sample of another eval" in second.message
+    assert not await _kept(handler, "irid-b", "eval_own")
+    assert await handler.request_result("irid-b", "eval_own") == "unknown"
+    # the run is the first eval's, at the attempt it began
+    run = await handler._state.peek_run("sample:sample_123")  # pyright: ignore[reportPrivateUsage]
+    assert run is not None
+    assert (run.eval_id, run.attempt, run.attempt_number) == (
+        "eval_789",
+        "attempt_1",
+        1,
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "asked",
+    [
+        "sample_result",
+        "end_sample",
+        "sample_result of an ended run",
+        "end_sample of an ended run",
+    ],
+)
+async def test_another_eval_asking_of_a_run_keeps_it_no_longer(
+    monkeypatch: pytest.MonkeyPatch, asked: str
+) -> None:
+    # The run, or what is left of it once its eval ended it, is kept for 100
+    # seconds after its eval last named it. Another eval asking of it, or
+    # ending it, is told nothing and must not keep it past that.
+    monkeypatch.setattr(_state, "time", _ExpiryClock)
+    _ExpiryClock.now = 0.0
+    handler = await holding(Handler(weather_rule(), state=MemoryState(expiry=100)))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    if asked.endswith("of an ended run"):
+        assert await handler.end_sample("sample_123", "eval_789") == "ended"
+
+    _ExpiryClock.now = 60.0
+    if asked.startswith("sample_result"):
+        assert await handler.sample_result("sample_123", "eval_own") is None
+    else:
+        assert await handler.end_sample("sample_123", "eval_own") == "unknown"
+    _ExpiryClock.now = 120.0
+
+    assert await handler.sample_result("sample_123", "eval_789") is None
+    assert await handler.end_sample("sample_123", "eval_789") == "unknown"
+
+
+@pytest.mark.anyio
+async def test_the_eval_asking_of_its_own_run_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_state, "time", _ExpiryClock)
+    _ExpiryClock.now = 0.0
+    handler = await holding(Handler(weather_rule(), state=MemoryState(expiry=100)))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+
+    _ExpiryClock.now = 60.0
+    assert await handler.sample_result("sample_123", "eval_789") is not None
+    _ExpiryClock.now = 120.0
+
+    assert await handler.sample_result("sample_123", "eval_789") is not None
+
+
+@pytest.mark.anyio
+async def test_another_evals_request_with_the_same_id_leaves_the_result_as_it_was() -> (
+    None
+):
+    # A client that registered an eval of its own signs a header that passes
+    # the check, with the id of another eval's request. A request is kept
+    # under its eval and its id together, so the other eval's is untouched.
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
+    await handler.request(replace(request("a"), headers=inspect_headers(irid="irid-a")))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    before = await handler.request_result("irid-a", "eval_789")
+    own_token = "eval-own-token-the-client-registered-with"
+    await holding(handler, "eval_own", own_token)
+
+    await handler.request(
+        replace(
+            request("b"),
+            headers=inspect_headers(
+                irid="irid-a",
+                token=own_token,
+                eval_id="eval_own",
+                sample_uuid="sample_own",
+            ),
+        )
+    )
+    after = await handler.request_result("irid-a", "eval_789")
+
+    assert not isinstance(before, str) and not isinstance(after, str)
+    assert after.latest is before.latest
+    assert after.latest.outcome == "reject"
+
+
+class _ExpiryClock:
+    # what the state's expiry reads
+    now = 0.0
+
+    @classmethod
+    def monotonic(cls) -> float:
+        return cls.now
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("left_out", ["mac", "timestamp", "an unknown version"])
+async def test_a_header_without_its_credentials_is_unreadable(left_out: str) -> None:
+    handler = await holding(Handler(weather_rule()))
+    header = _signed_header("irid-x")
+    if left_out == "an unknown version":
+        header["version"] = 2
+    else:
+        del header[left_out]
+
+    answer = await handler.request(_sent(header, "x", "irid-x"))
+
+    assert answer == Refuse(
+        400, "The request's x-inspect-context header isn't one this sidecar can read."
+    )
+    assert not await _kept(handler, "irid-x")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("irid", [None, ""], ids=["left out", "empty"])
+async def test_a_header_without_a_request_id_is_unreadable(irid: str | None) -> None:
+    # the mac signs the request's id, so without one it can't be checked
+    handler = await holding(Handler(weather_rule()))
+    header = inspect_headers()["x-inspect-context"]
+    headers = {"x-inspect-context": header} | (
+        {"x-irid": irid} if irid is not None else {}
+    )
+
+    answer = await handler.request(replace(request("x"), headers=headers))
+
+    assert answer == Refuse(
+        400,
+        "The request has an x-inspect-context header and no x-irid header, which Inspect sends with it.",
+    )
+    assert await handler.sample_result("sample_123", "eval_789") is None
+
+
+async def _with_a_judged_request() -> tuple[Handler, RequestResult]:
+    # a handler that judged the eval's request `irid-a`, and what
+    # `request_result` answers for it
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
+    await handler.request(_from_inspect(request("a"), "irid-a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    before = await handler.request_result("irid-a", "eval_789")
+    assert not isinstance(before, str) and before.latest.outcome == "reject"
+    return handler, before
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sample", ["the same sample", "another sample"])
+async def test_a_mac_made_for_one_request_id_is_refused_with_another(
+    sample: str,
+) -> None:
+    # signed for `irid-b`, and sent as `irid-a`, so that what is decided of
+    # it would be filed under `irid-a`
+    handler, before = await _with_a_judged_request()
+    other = {"sample_id": 2, "sample_uuid": "sample_999"}
+    header = _signed_header("irid-b", **(other if sample == "another sample" else {}))
+
+    answer = await handler.request(_sent(header, "b", "irid-a"))
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "mac isn't one made with the eval's token" in answer.message
+    assert await handler.request_result("irid-a", "eval_789") == before
+    assert not await _kept(handler, "irid-b")
+    assert await handler.sample_result("sample_999", "eval_789") is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "junk", ["a wrong mac", "a stale timestamp", "an unreadable header", "no header"]
+)
+async def test_a_junk_request_with_another_requests_id_leaves_its_result_as_it_was(
+    junk: str,
+) -> None:
+    handler, before = await _with_a_judged_request()
+    headers = {
+        "a wrong mac": inspect_headers(
+            irid="irid-a", token="a-token-the-eval-never-made-for-these-tests"
+        ),
+        "a stale timestamp": inspect_headers(
+            irid="irid-a", timestamp=int(time.time()) - 1000
+        ),
+        "an unreadable header": {"x-inspect-context": "{not json", "x-irid": "irid-a"},
+        "no header": {"x-irid": "irid-a"},
+    }[junk]
+
+    await handler.request(replace(request("b"), headers=headers))
+
+    assert await handler.request_result("irid-a", "eval_789") == before
+
+
+class _Clock:
+    now = 1_794_182_400.0
+
+    @classmethod
+    def time(cls) -> float:
+        return cls.now
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("off", "accepted"),
+    [(-300, True), (300, True), (-301, False), (301, False)],
+    ids=["just inside, behind", "just inside, ahead", "behind", "ahead"],
+)
+async def test_a_header_is_accepted_only_within_the_window(
+    monkeypatch: pytest.MonkeyPatch, off: int, accepted: bool
+) -> None:
+    # the signature's own clock only
+    monkeypatch.setattr(_sign, "time", _Clock)
+    handler = await holding(Handler(weather_rule()))
+    header = _signed_header("irid-x", timestamp=int(_Clock.now) + off)
+
+    answer = await handler.request(_sent(header, "x", "irid-x"))
+
+    if accepted:
+        assert answer == Pass()
+    else:
+        assert isinstance(answer, Refuse) and answer.status == 400
+        way = "behind" if off < 0 else "ahead of"
+        assert f"301 seconds {way} the sidecar's clock" in answer.message
+        assert not await _kept(handler, "irid-x")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("timestamp", [10**400, -(10**400)], ids=["ahead", "behind"])
+async def test_a_timestamp_too_large_for_a_float_is_refused(timestamp: int) -> None:
+    handler = await holding(Handler(weather_rule()))
+    header = _signed_header("irid-x", timestamp=timestamp)
+
+    answer = await handler.request(_sent(header, "x", "irid-x"))
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert "far" in answer.message
+    assert not await _kept(handler, "irid-x")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("field", "raw"),
+    [
+        ("epoch", "1" + "0" * 4400),
+        ("attempt_number", "1" + "0" * 4400),
+        ("sample_id", "1" + "0" * 4400),
+        ("timestamp", "1" + "0" * 4400),
+        ("epoch", "1" + "0" * 400),
+        ("mac", '""'),
+        ("mac", '"*"'),
+        ("mac", '"\\ud800"'),
+        ("task", '"\\ud800"'),
+    ],
+)
+async def test_a_header_with_an_odd_value_is_refused_not_failed(
+    field: str, raw: str
+) -> None:
+    # a value too large to turn into text or a float, or text that can't be
+    # encoded, is refused like any wrong header, and never raises: a proxy
+    # that lets through what the sentinel failed on would let it through
+    handler = await holding(Handler(weather_rule()))
+    header = _signed_header("irid-x")
+    header[field] = 0
+    text = json.dumps(header).replace(f'"{field}": 0', f'"{field}": {raw}')
+
+    answer = await handler.request(
+        replace(request("x"), headers={"x-inspect-context": text, "x-irid": "irid-x"})
+    )
+
+    assert isinstance(answer, Refuse) and answer.status == 400
+    assert not await _kept(handler, "irid-x")
+
+
+@pytest.mark.anyio
+async def test_the_window_is_the_handlers_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_sign, "time", _Clock)
+    handler = await holding(Handler(weather_rule(), timestamp_window=10))
+
+    inside = await handler.request(
+        _sent(_signed_header("irid-a", timestamp=int(_Clock.now) - 10), "a", "irid-a")
+    )
+    outside = await handler.request(
+        _sent(_signed_header("irid-b", timestamp=int(_Clock.now) - 11), "b", "irid-b")
+    )
+
+    assert inside == Pass()
+    assert isinstance(outside, Refuse)

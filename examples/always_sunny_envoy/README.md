@@ -6,7 +6,7 @@ The task is a weather reporter. It looks up Philadelphia's weather, which is hea
 
 The task itself knows nothing about the sentinel. There is no `sentinel=` in `task.py`. Every model call goes through Envoy, and Envoy hands each request and reply to the sidecar before passing it on. No code of ours runs in Envoy: its `ext_proc` filter calls the sidecar's Envoy shim over gRPC.
 
-[`../always_sunny`](../always_sunny) is the same example behind LiteLLM.
+[`../always_sunny_litellm`](../always_sunny_litellm) is the same example behind LiteLLM.
 
 | File | What it is |
 |------|------------|
@@ -14,6 +14,7 @@ The task itself knows nothing about the sentinel. There is no `sentinel=` in `ta
 | `sentinel.yaml` | the sidecar's file: the sentinel, which names that rule, and how the sidecar serves |
 | `envoy.yaml` | Envoy's configuration, written by `python -m inspect_sentinel.sidecar.envoy` |
 | `task.py` | the Inspect task, `philadelphia` |
+| `sidecar/` | the sidecar's image: its `Dockerfile`, and the `pyproject.toml` and `uv.lock` that pin what it installs, the released `inspect-sentinel` among them |
 | `compose.yaml` | a stack to run it all: Envoy and the sidecar |
 
 ## Running the stack

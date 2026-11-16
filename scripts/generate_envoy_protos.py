@@ -22,10 +22,10 @@ from pathlib import Path
 from google.protobuf import descriptor_pb2
 from grpc_tools import protoc
 
-ENVOY_VERSION = "1.39.4"
+ENVOY_VERSION = "1.39.6"
 """The Envoy release whose API the shim speaks."""
 
-ENVOY_SHA256 = "d70c16f78cd4326717c124d520a3aadfa0ccd67dc2bd470d5dad95f3ca1397ac"
+ENVOY_SHA256 = "f938453f950137b811a7119a21a606c81c6a4b0ef222fbac084a941c24bb3495"
 """The sha256 of GitHub's archive of that release's source, which holds the pins checked for the rest. Change it with `ENVOY_VERSION`."""
 
 SERVICE = "envoy/service/ext_proc/v3/external_processor.proto"

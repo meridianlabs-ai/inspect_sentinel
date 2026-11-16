@@ -31,6 +31,7 @@ from inspect_sentinel.sidecar import (
 )
 from inspect_sentinel.sidecar._registration import FileTask
 from tests.sidecar._traffic import (
+    holding,
     inspect_headers,
     message,
     ran,
@@ -233,8 +234,9 @@ async def test_a_step_names_the_model_as_inspect_does(
     # as in Inspect's own process, where an Inspect client names it, but only
     # a name that ends in the model the request names: the client can add
     # what precedes it, and not name another model
-    handler = Handler(reports_generates())
-    headers = inspect_headers(**({"model": named} if named is not None else {}))
+    handler = await holding(Handler(reports_generates()))
+    changes: dict[str, Any] = {"model": named} if named is not None else {}
+    headers = inspect_headers(**changes)
 
     await handler.request(replace(request("a"), headers=headers))
 
@@ -452,7 +454,7 @@ async def test_a_conversation_sent_again_unchanged_adds_nothing_to_its_history(
 @pytest.mark.anyio
 async def test_a_new_attempt_at_a_sample_starts_its_history_afresh() -> None:
     # the model of a new attempt never saw the discarded attempt's turns
-    handler = Handler(reports_histories())
+    handler = await holding(Handler(reports_histories()))
 
     async def turn(id: str, attempt: int, **then: Any) -> list[str]:
         headers = inspect_headers(attempt=f"attempt_{attempt}", attempt_number=attempt)
@@ -593,6 +595,9 @@ async def _view(
     arguments: dict[str, Any] | None = None,
     **sample: Any,
 ) -> str:
+    if sample:
+        # as the eval's registration leaves it
+        await holding(handler)
     await handler.request(
         replace(request(), headers=inspect_headers(**sample)) if sample else request()
     )

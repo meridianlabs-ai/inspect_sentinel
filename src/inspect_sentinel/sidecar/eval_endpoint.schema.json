@@ -474,9 +474,14 @@
           "title": "Eval Id",
           "type": "string"
         },
-        "token": {
-          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
-          "title": "Token",
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
           "type": "string"
         },
         "sample_id": {
@@ -546,7 +551,8 @@
       },
       "required": [
         "eval_id",
-        "token",
+        "timestamp",
+        "mac",
         "sample_id",
         "sample_input",
         "task"
@@ -1188,9 +1194,14 @@
           "title": "Eval Id",
           "type": "string"
         },
-        "token": {
-          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
-          "title": "Token",
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
           "type": "string"
         },
         "sample_uuid": {
@@ -1201,7 +1212,8 @@
       },
       "required": [
         "eval_id",
-        "token",
+        "timestamp",
+        "mac",
         "sample_uuid"
       ],
       "title": "EndSampleParams",
@@ -1232,6 +1244,41 @@
       "type": "object"
     },
     "JsonValue": {},
+    "JudgingUsage": {
+      "description": "What the provider billed for a model a monitor or protocol called while a request was judged.",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model role the call asked for, as Inspect names roles. Left out where the call named its model without a role.",
+          "title": "Role"
+        },
+        "model": {
+          "description": "The model the call went to, as Inspect names it.",
+          "title": "Model",
+          "type": "string"
+        },
+        "usage": {
+          "additionalProperties": true,
+          "description": "The usage of the model's calls added up, as Inspect writes `ModelUsage`, with `total_cost` where Inspect knows the model's price.",
+          "title": "Usage",
+          "type": "object"
+        }
+      },
+      "required": [
+        "model",
+        "usage"
+      ],
+      "title": "JudgingUsage",
+      "type": "object"
+    },
     "Judgment": {
       "description": "What a sentinel decided during one exchange, for an Inspect eval, which asks for it with `request_result`.",
       "properties": {
@@ -1320,7 +1367,7 @@
       "type": "object"
     },
     "RegisterTaskParams": {
-      "description": "Parameters of `register_task`: a task an eval runs, and the ids of its samples, sent at task init.",
+      "description": "Parameters of `register_task`: a task an eval runs, and the ids of its samples, sent at task init. It carries either the eval's `token`, or a `timestamp` and a `mac`, and not both.",
       "properties": {
         "task": {
           "description": "The task's name.",
@@ -1375,6 +1422,7 @@
         "token": {
           "anyOf": [
             {
+              "minLength": 32,
               "type": "string"
             },
             {
@@ -1382,8 +1430,34 @@
             }
           ],
           "default": null,
-          "description": "The token the eval holds for this sidecar. At the eval's first registration, one the eval made, which the sidecar keeps and hands back, so the registration can be sent again if its answer was lost. A sidecar that keeps another token for the eval answers `unauthorized`.",
+          "description": "The token the eval made for this sidecar, at least 32 characters, sent only to a sidecar that holds no token for the eval: at the eval's first registration, when that registration is sent again because its answer was lost, or after the sidecar lost the token in a restart or once it expired. The sidecar keeps it once the registration succeeds, and never sends it back. A sidecar that keeps another token for the eval answers `unauthorized`.",
           "title": "Token"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp"
+        },
+        "mac": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. Sent in place of the token once the sidecar holds it. A sidecar that holds no token for the eval answers `unknown_task`, and the eval registers again with its token.",
+          "title": "Mac"
         },
         "expiry": {
           "anyOf": [
@@ -1410,15 +1484,10 @@
       "type": "object"
     },
     "RegisterTaskResult": {
-      "description": "What the sidecar stored, or that the task was registered beforehand and nothing was stored, and the eval's token.",
+      "description": "What the sidecar stored, or that the task was registered beforehand and nothing was stored.",
       "properties": {
         "eval_id": {
           "title": "Eval Id",
-          "type": "string"
-        },
-        "token": {
-          "description": "The eval's token, which every later call for the eval presents. It is the one presented, kept now if the sidecar kept none for the eval, or one made here where none was presented. The eval keeps the latest, and never hands it to an agent.",
-          "title": "Token",
           "type": "string"
         },
         "task": {
@@ -1451,7 +1520,6 @@
       },
       "required": [
         "eval_id",
-        "token",
         "task",
         "samples",
         "fixed"
@@ -1467,9 +1535,14 @@
           "title": "Eval Id",
           "type": "string"
         },
-        "token": {
-          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
-          "title": "Token",
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
           "type": "string"
         },
         "id": {
@@ -1487,7 +1560,8 @@
       },
       "required": [
         "eval_id",
-        "token",
+        "timestamp",
+        "mac",
         "id"
       ],
       "title": "RequestResultParams",
@@ -1501,7 +1575,7 @@
           "type": "string"
         },
         "records": {
-          "description": "`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never saw the request, or the request's `x-inspect-context` named another eval.",
+          "description": "`held` if the sidecar has the request's records, `dropped` if it had them and no longer keeps them, `unknown` if it never kept the request: one it never saw, one without an `x-inspect-context` it could read and check, or one whose `x-inspect-context` named another eval.",
           "enum": [
             "held",
             "dropped",
@@ -1610,6 +1684,36 @@
           ],
           "default": null,
           "description": "What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results."
+        },
+        "judging_time": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+          "title": "Judging Time"
+        },
+        "judging_usage": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JudgingUsage"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the provider billed for each model the sentinel called while judging every attempt at the request, retried attempts included, since each was billed. One entry per role and model that was billed, in the order first billed: a reply from inspect_ai's cache and a call that failed weren't billed. Empty where nothing was billed. Sent with `judging_time` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+          "title": "Judging Usage"
         }
       },
       "required": [
@@ -1627,9 +1731,14 @@
           "title": "Eval Id",
           "type": "string"
         },
-        "token": {
-          "description": "The token `register_task` gave the eval. A call without the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps none for the eval, as after a restart, holds nothing of it for anyone.",
-          "title": "Token",
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
           "type": "string"
         },
         "sample_uuid": {
@@ -1640,7 +1749,8 @@
       },
       "required": [
         "eval_id",
-        "token",
+        "timestamp",
+        "mac",
         "sample_uuid"
       ],
       "title": "SampleResultParams",
@@ -2062,11 +2172,11 @@
     },
     "-32009": {
       "name": "unknown_task",
-      "description": "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration."
+      "description": "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration. Answered to a `register_task` with a `mac` when the sidecar holds no token for the eval, as after a restart or once the token expired: the eval registers again with its token."
     },
     "-32010": {
       "name": "unauthorized",
-      "description": "The call didn't present the token the sidecar keeps for the eval, which only the eval's own registration was given."
+      "description": "The call's `mac` isn't made with the token the sidecar keeps for the eval, or its `timestamp` is further from the sidecar's clock than the window allows; or a `register_task` sent another token than the one the sidecar keeps for the eval."
     }
   }
 }

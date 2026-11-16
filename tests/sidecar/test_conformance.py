@@ -520,6 +520,13 @@ def _said(message: ChatMessage) -> tuple[object, ...]:
 _HISTORIES: dict[str, list[tuple[str, list[tuple[object, ...]]]]] = {}
 
 
+@pytest.fixture(autouse=True)
+def _no_histories_left_over() -> None:
+    # A test that skips between recording its histories and comparing them,
+    # as one behind Envoy does without Docker, would leave them to the next.
+    _HISTORIES.clear()
+
+
 @protocol
 def records_histories(seen: str, action: str = "proceed") -> Protocol:
     """Keep each step's history, as `_said` gives each message, and reject a lookup of Tokyo, or change it to Oslo, if asked."""

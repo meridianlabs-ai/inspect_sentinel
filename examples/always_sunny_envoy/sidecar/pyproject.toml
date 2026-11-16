@@ -1,0 +1,35 @@
+# What this example's sidecar image installs: the released sidecar, with
+# its Envoy shim and what it needs to read Anthropic's and OpenAI's traffic, and the example's rule. It exists for the
+# uv.lock beside it, which the Dockerfile here installs exactly. Nothing is
+# built or published from here.
+#
+# To move to a newer sidecar, change its version below, run `uv lock` in this
+# folder, and commit uv.lock.
+[project]
+name = "always-sunny-envoy-sidecar"
+version = "0"
+requires-python = ">=3.13"
+dependencies = [
+    "inspect-sentinel[anthropic,envoy,openai]==0.3.1",
+    "weather-rules",
+]
+
+[tool.uv]
+package = false
+required-version = ">=0.13.4"
+# Only releases at least 7 days old, or 6 hours for Inspect's packages and the
+# provider SDKs, as in the repository's own pyproject.toml.
+exclude-newer = "7 days"
+
+[tool.uv.exclude-newer-package]
+anthropic = "6 hours"
+inspect-ai = "6 hours"
+inspect-scout = "6 hours"
+openai = "6 hours"
+# Pinned to one release above, which is what this example shows, so a cooldown
+# can't pick another.
+inspect-sentinel = false
+
+# the example's rule, from the folder beside this one
+[tool.uv.sources]
+weather-rules = { path = "../rule" }
