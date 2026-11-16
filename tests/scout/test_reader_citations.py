@@ -10,7 +10,7 @@ from inspect_ai.event import (
     ToolEvent,
 )
 from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, ModelOutput
-from inspect_ai.tool import ToolCallError
+from inspect_ai.tool import ToolCall, ToolCallError
 from inspect_scout import Result, Transcript
 
 from inspect_sentinel import MonitorFailedError
@@ -71,6 +71,17 @@ def generate(
         output=output,
         error=error,
     )
+
+
+def proposal(
+    message_id: str | None, *call_ids: str, parent: str | None = None, uuid: str = ""
+) -> ModelEvent:
+    # an agent turn whose output message `message_id` proposes `call_ids`
+    event = generate(uuid or f"g{message_id}", parent, message_id=message_id)
+    event.output.message.tool_calls = [
+        ToolCall(id=call_id, function="addition", arguments={}) for call_id in call_ids
+    ]
+    return event
 
 
 def agent(span: str) -> SpanBeginEvent:
@@ -152,11 +163,14 @@ def tool(
     execution_id: str | None = None,
     bridged: bool = False,
     reported: bool = True,
+    proposed: str = "",
+    granted: str | None = "turn",
     error: ToolCallError | None = None,
 ) -> ToolEvent:
     # a call with the id "shared", whose tool message is r<uuid>; `bridged`, a
-    # host call a sandbox agent bridge ran, which links its run to the result
-    # the scaffold reported (`message_id`) only where `reported`
+    # host call a sandbox agent bridge ran of the model's call `proposed` (by
+    # default its own id) in the output message `granted`, which links its run
+    # to the result the scaffold reported (`message_id`) only where `reported`
     return ToolEvent(
         uuid=uuid,
         span_id=parent,
@@ -165,7 +179,8 @@ def tool(
         function="addition",
         arguments={},
         message_id=f"r{uuid}" if reported or not bridged else None,
-        metadata={"bridge": {"proposal_id": id}} if bridged else None,
+        call_message_id=granted if bridged else None,
+        metadata={"bridge": {"proposal_id": proposed or id}} if bridged else None,
         error=error,
     )
 
@@ -203,7 +218,8 @@ def keyed_citations(results: list[Result]) -> list[tuple[str, list[str]]]:
 # The bridged shapes below are those inspect_ai #6446 (df812940f) logs, whose
 # replay names a host run's steps as it names a native execution's: the first
 # rebuilt run of a call id, native or bridged, in log order, keeps the id, and
-# a later one has its execution id.
+# a later one has its execution id. Each host run's call was proposed in the
+# output message its event records (`call_message_id`), "turn" by default.
 
 
 @pytest.mark.anyio
@@ -218,6 +234,7 @@ async def test_each_tool_of_a_shared_handout_is_read_under_the_id_its_run_has(
     # host_1 and none for read_file's run, so read_file's checks must not join
     # host_1's row
     events = [
+        proposal("turn", "host_1"),
         *checked("s1", "tool_call", "host_1", None, execution_id="h/host/read_file"),
         *checked("s2", "tool_call", "host_1", None, execution_id="h/copy/read_copy"),
         tool(
@@ -235,6 +252,7 @@ async def test_each_tool_of_a_shared_handout_is_read_under_the_id_its_run_has(
             execution_id="h/host/read_file",
             bridged=True,
             reported=False,
+            proposed="host_1",
         ),
         *checked("s3", "tool_result", "host_1", None, execution_id="h/host/read_file"),
         *checked("s4", "tool_result", "host_1", None, execution_id="h/copy/read_copy"),
@@ -255,6 +273,7 @@ async def test_a_check_of_a_bridged_tool_that_never_ran_is_read_under_its_execut
     # replay has no step for it, so its check must neither join read_file's
     # host_1 row nor cite read_file's run
     events = [
+        proposal("turn", "host_1"),
         *checked("s1", "tool_call", "host_1", None, execution_id="h/host/read_file"),
         *checked("s2", "tool_call", "host_1", None, execution_id="h/copy/read_copy"),
         tool(
@@ -279,9 +298,10 @@ async def test_a_second_handout_of_a_host_call_id_is_read_under_its_execution() 
     # ToolError (#6370's B1 host retry): replay names the second handout's
     # steps by its execution. Once the id was handed out twice, the bridge
     # checks a result reported under it under no execution, and which run it
-    # answers is unknown, so that check is read under its own event's id, which
-    # no replayed step has, not under host_1, the first handout's
+    # answers is unknown, so that check is read under the id of its sentinel
+    # span, which no replayed step has, not under host_1, the first handout's
     events = [
+        proposal("m1", "host_1"),
         *checked("s1", "tool_call", "host_1", None, execution_id="h1/host/addition"),
         tool(
             "first",
@@ -289,23 +309,79 @@ async def test_a_second_handout_of_a_host_call_id_is_read_under_its_execution() 
             "host_1",
             execution_id="h1/host/addition",
             bridged=True,
+            granted="m1",
             error=ToolCallError("unknown", "failed"),
         ),
         *checked("s2", "tool_result", "host_1", None, execution_id="h1/host/addition"),
+        proposal("m2", "host_1"),
         *checked("s3", "tool_call", "host_1", None, execution_id="h2/host/addition"),
-        tool("second", None, "host_1", execution_id="h2/host/addition", bridged=True),
+        tool(
+            "second",
+            None,
+            "host_1",
+            execution_id="h2/host/addition",
+            bridged=True,
+            granted="m2",
+        ),
         *checked("s4", "tool_result", "host_1", None),
     ]
 
     results = await read("tool_call", events) + await read("tool_result", events)
 
-    [unknown] = [e for e in events if isinstance(e, SentinelEvent)][-1:]
     assert [str((r.metadata or {})["step_id"]) for r in results] == [
         "host_1",
         "h2/host/addition",
         "host_1",
-        str(unknown.uuid),
+        "s4",
     ]
+
+
+@pytest.mark.anyio
+async def test_a_decision_at_an_untied_result_check_keeps_its_childrens_reports() -> (
+    None
+):
+    # a monitor's observation and the protocol's decision at a result check the
+    # bridge couldn't tie to one run: both are keyed by their sentinel span, so
+    # the decision's row carries the observation, as at any other step
+    events = [
+        proposal("m1", "host_1"),
+        tool(
+            "first",
+            None,
+            "host_1",
+            execution_id="h1/host/addition",
+            bridged=True,
+            granted="m1",
+        ),
+        proposal("m2", "host_1"),
+        tool(
+            "second",
+            None,
+            "host_1",
+            execution_id="h2/host/addition",
+            bridged=True,
+            granted="m2",
+        ),
+        SpanBeginEvent(id="s1", parent_id=None, type="sentinel", name="sentinel"),
+        SentinelEvent(
+            span_id="s1",
+            factory="inspect_sentinel/suspicion",
+            path="suspicion",
+            function="suspicion",
+            step_id="host_1",
+            conversation=SAMPLE,
+            stage="tool_result",
+            kind="observation",
+            status="reported",
+            suspicion=0.7,
+        ),
+        *checked("s1", "tool_result", "host_1", None)[1:],
+    ]
+
+    [result] = await read("tool_result", events)
+
+    assert (result.metadata or {})["step_id"] == "s1"
+    assert [c["suspicion"] for c in (result.metadata or {})["reports"]] == [0.7]
 
 
 @pytest.mark.anyio
@@ -318,13 +394,15 @@ async def test_a_native_call_after_a_host_call_under_its_id_is_read_under_its_ex
     # replay builds the host run's steps under the id, also where no check of
     # it was recorded, since the bridge linked its reported result, and names
     # the native call's steps by its execution
-    host = [
+    host: list[Event] = [
+        proposal("turn", "shared"),
         tool("host", None, execution_id="h/host/addition", bridged=True),
     ]
     if host_checked:
         host = [
+            host[0],
             *checked("s1", "tool_call", "shared", None, execution_id="h/host/addition"),
-            *host,
+            host[1],
             *checked(
                 "s2", "tool_result", "shared", None, execution_id="h/host/addition"
             ),
@@ -339,6 +417,60 @@ async def test_a_native_call_after_a_host_call_under_its_id_is_read_under_its_ex
     assert keyed_citations(await read("tool_result", events)) == [
         *([("shared", ["host"])] if host_checked else []),
         ("x1", ["native"]),
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("granted", "again", "tied"),
+    [
+        pytest.param("turn", None, True, id="once"),
+        pytest.param("turn", "agent", False, id="cache_hit"),
+        pytest.param(None, None, False, id="without_message_ids"),
+        pytest.param("turn", "sentinel_span", True, id="again_in_a_sentinel_span"),
+        pytest.param("turn", "monitor_role", True, id="again_by_a_monitor_model"),
+    ],
+)
+async def test_a_host_run_replay_cannot_tie_to_one_proposal_leaves_its_id_to_a_later_run(
+    granted: str | None, again: str | None, tied: bool
+) -> None:
+    # a checked host run of host_1, then a native call under the same id (a
+    # provider that repeats ids). Replay ties the host run to its call only by
+    # the one proposal of host_1 in the output message the bridge granted it to
+    # (`granted`, `_links_host_call`): where a model call returned that
+    # message `again` (a cache hit), or the log has no message ids, it skips
+    # the host run and the native call keeps host_1, so the host run's checks
+    # must not join the native call's row. A monitor's model call, in a
+    # sentinel span or by the monitor model role, proposes nothing
+    turns: list[Event] = [proposal(granted, "host_1", uuid="g1")]
+    if again == "sentinel_span":
+        turns += [
+            SpanBeginEvent(id="m", parent_id=None, type="sentinel", name="sentinel"),
+            proposal(granted, "host_1", parent="m", uuid="g2"),
+            SpanEndEvent(id="m"),
+        ]
+    elif again is not None:
+        repeated = proposal(granted, "host_1", uuid="g2")
+        repeated.role = "monitor" if again == "monitor_role" else None
+        turns.append(repeated)
+    events = [
+        *turns,
+        *checked("s1", "tool_call", "host_1", None, execution_id="h/host/read_file"),
+        tool(
+            "host",
+            None,
+            "host_1",
+            execution_id="h/host/read_file",
+            bridged=True,
+            granted=granted,
+        ),
+        *checked("s2", "tool_call", "host_1", None, execution_id="x1"),
+        tool("native", None, "host_1", execution_id="x1"),
+    ]
+
+    assert keyed_citations(await read("tool_call", events)) == [
+        ("host_1" if tied else "h/host/read_file", ["host"]),
+        ("x1" if tied else "host_1", ["native"]),
     ]
 
 
