@@ -66,7 +66,7 @@ Each row of the results dataframe is one step at one stage:
 | Column | Description |
 |---------------------------|---------------------------------------------|
 | `transcript_id` | The sample the step belongs to. |
-| `metadata.step_id` | The tool call id at a tool stage, or the model call id at a generate stage. A tool call's two steps share its id. |
+| `metadata.step_id` | The tool call id at a tool stage, or the model call id at a generate stage. A tool call's two steps share its id. Where a model repeats a call id (a retry after a tool error, or a provider that reuses ids), a later run of the id has its execution id instead, in logs that record one, so each step's id is unique in its transcript. |
 | `metadata.stage` | `"model_input"` (`BeforeGenerate`), `"model_output"` (`AfterGenerate`), `"tool_call"` (`BeforeToolCall`) or `"tool_result"` (`AfterToolCall`). |
 | `metadata.conversation` | The conversation the step is in. Each agent and sub-agent has its own message thread, its conversation, so this tells a sub-agent's steps apart from the main agent's. |
 | `value` | For a monitor, the suspicion score: a number, or a dict with one entry per dimension. For a protocol, `True` if the action is `reject`, `modify` or `terminate`, and `False` for `proceed` or `escalate`. `None` where the monitor or protocol abstained. |
@@ -322,7 +322,7 @@ keys = ["transcript_id", "metadata.conversation", "metadata.step_id", "metadata.
 both = frames["replayed"].merge(frames["recorded"], on=keys, suffixes=("_replayed", "_recorded"))
 ```
 
-A read-mode row's conversation is the one the log recorded, from its span tree. A replayed row has the same conversation only where its `metadata.turns` is `"recorded"`, so join on all four keys only there. Any other replay (with `timeline`, of an older log, or from messages; see [Older Logs and Other Sources](#older-logs-and-other-sources)) may have conversations of its own, so join it on `transcript_id`, `metadata.step_id` and `metadata.stage` only. That join is ambiguous where two agents' tool calls share an id.
+A read-mode row's conversation is the one the log recorded, from its span tree. A replayed row has the same conversation only where its `metadata.turns` is `"recorded"`, so join on all four keys only there. Any other replay (with `timeline`, of an older log, or from messages; see [Older Logs and Other Sources](#older-logs-and-other-sources)) may have conversations of its own, so join it on `transcript_id`, `metadata.step_id` and `metadata.stage` only. That join is ambiguous where two agents' tool calls share an id, in a log that records no execution ids.
 
 Read mode is also the only way to see what a protocol's decisions did during the eval, since a replay does not change the transcript.
 

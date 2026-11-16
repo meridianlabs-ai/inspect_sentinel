@@ -76,6 +76,7 @@ from inspect_sentinel import (
     Escalations,
     HumanAnswer,
     HumanStandIn,
+    Monitor,
     MonitorGroup,
     Observation,
     ReplayStep,
@@ -2315,10 +2316,18 @@ def test_two_agents_reusing_a_call_id_each_read_their_own_evidence(
         if isinstance(e, ToolEvent) and e.id == "shared"
     ]
 
-    found = scanned(tmp_path / "scans", tmp_path / "logs", read=as_reader())
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        read=as_reader(),
+        replay=as_scanner(threshold(by_argument(), reject_at=0.9)),
+    )
 
     # each decision shows its own child's report and cites its own call: the
-    # sub-agent's by its tool event, as its message is not the transcript's
+    # sub-agent's by its tool event, as its message is not the transcript's.
+    # The agent's later run of the id is keyed as replay keys it, by its
+    # execution id, since step ids are unique in a sample
+    assert agent.execution_id is not None
     assert [
         (
             r["metadata.step_id"],
@@ -2328,8 +2337,11 @@ def test_two_agents_reusing_a_call_id_each_read_their_own_evidence(
         for r in found["read"]
     ] == [
         ("shared", [0.5], [helper.uuid]),
-        ("shared", [0.1], [agent.message_id]),
+        (agent.execution_id, [0.1], [agent.message_id]),
     ]
+    assert keyed(found["read"], "metadata.stage").keys() == (
+        keyed(found["replay"], "metadata.stage").keys()
+    )
     # each row says whose step it is: the sub-agent's span, then the sample
     assert [r["metadata.conversation"] for r in found["read"]] == [
         next(
@@ -2339,6 +2351,66 @@ def test_two_agents_reusing_a_call_id_each_read_their_own_evidence(
         ),
         log.samples[0].uuid,
     ]
+
+
+@monitor
+def abstaining_at_one() -> MonitorGroup:
+    # by_argument's suspicion, abstaining on a call with x = 1
+    async def before(context: Context, step: BeforeToolCall) -> Observation | None:
+        x = int(step.call.arguments["x"])
+        return None if x == 1 else Observation.score(min(1.0, x / 10))
+
+    return MonitorGroup(before)
+
+
+def repeated(x: int | str) -> ModelOutput:
+    # a call with the id "c", as a provider that repeats call ids makes it
+    output = ModelOutput.for_tool_call("mockllm/model", "addition", {"x": x, "y": 1})
+    assert output.message.tool_calls is not None
+    output.message.tool_calls[0].id = "c"
+    return output
+
+
+@pytest.mark.parametrize(
+    ("first", "sentinel", "rows"),
+    [
+        # the first run was checked; it keeps the id, and the retry is named
+        # by its execution id
+        (1, by_argument, ["c", "retry"]),
+        # the first run raised a tool error
+        (-1, by_argument, ["c", "retry"]),
+        # the first call's arguments were invalid, so it never ran or was
+        # checked and replay builds no step for it: the retry keeps the id
+        ("one", by_argument, ["c"]),
+        # the first run was checked by no one, but replay builds its steps,
+        # so the retry is named by its execution id
+        (1, abstaining_at_one, ["retry"]),
+    ],
+)
+def test_a_later_run_of_a_repeated_call_id_is_read_under_replays_step_id(
+    tmp_path: Path,
+    first: int | str,
+    sentinel: Callable[[], Monitor],
+    rows: list[str],
+) -> None:
+    log = run(
+        tmp_path / "logs", [[repeated(first), repeated(2)]], observe_only(sentinel())
+    )
+    assert log.samples is not None
+    *_, retry = [e for e in log.samples[0].events if isinstance(e, ToolEvent)]
+    assert retry.execution_id is not None
+
+    found = scanned(
+        tmp_path / "scans",
+        tmp_path / "logs",
+        read=as_reader(sentinel.__name__),
+        replay=as_scanner(sentinel()),
+    )
+
+    read = [r["metadata.step_id"] for r in found["read"]]
+    assert read == [retry.execution_id if row == "retry" else row for row in rows]
+    # each row joins the replay row of its run's step
+    assert set(read) <= {r["metadata.step_id"] for r in found["replay"]}
 
 
 DRIVING_SCRIPT = """

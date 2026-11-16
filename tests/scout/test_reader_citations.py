@@ -10,6 +10,7 @@ from inspect_ai.event import (
     ToolEvent,
 )
 from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, ModelOutput
+from inspect_ai.tool import ToolCallError
 from inspect_scout import Result, Transcript
 
 from inspect_sentinel import MonitorFailedError
@@ -143,15 +144,27 @@ async def test_a_generate_in_another_conversation_does_not_overlap() -> None:
     assert cited(await read("model_input", events)) == {"u1": ["ea"], "u2": ["eb"]}
 
 
-def tool(uuid: str, parent: str, id: str = "shared") -> ToolEvent:
-    # a call with the id "shared", whose tool message is r<uuid>
+def tool(
+    uuid: str,
+    parent: str | None,
+    id: str = "shared",
+    *,
+    execution_id: str | None = None,
+    bridged: bool = False,
+    error: ToolCallError | None = None,
+) -> ToolEvent:
+    # a call with the id "shared", whose tool message is r<uuid>; `bridged`, a
+    # host call a sandbox agent bridge ran
     return ToolEvent(
         uuid=uuid,
         span_id=parent,
         id=id,
+        execution_id=execution_id,
         function="addition",
         arguments={},
         message_id=f"r{uuid}",
+        metadata={"bridge": {"proposal_id": id}} if bridged else None,
+        error=error,
     )
 
 
@@ -177,25 +190,87 @@ async def test_two_agents_calls_sharing_an_id_cite_their_own_tool_events(
     assert [[ref.id for ref in r.references] for r in results] == [["ea"], ["eb"]]
 
 
-@pytest.mark.anyio
-async def test_each_run_of_a_bridged_call_is_its_own_step() -> None:
-    # a bridge hands the model's call "shared" to its scaffold twice, the
-    # second time under a new id (#6370): each run's result check records the
-    # id it ran under, which its host tool event has, and its row is keyed by
-    # it, as replay keys the step, and cites its own run
-    events = [
-        agent("a"),
-        tool("e1", "a"),
-        *checked("s1", "tool_result", "shared", "a"),
-        tool("e2", "a", id="handed"),
-        *checked("s2", "tool_result", "shared", "a", execution_id="handed"),
+def keyed_citations(results: list[Result]) -> list[tuple[str, list[str]]]:
+    # each row's step id and what it cites, in order, as rows can share a key
+    return [
+        (str((r.metadata or {})["step_id"]), [ref.id for ref in r.references])
+        for r in results
     ]
 
-    # the transcript holds neither tool message, so each cites its tool event
-    assert cited(await read("tool_result", events)) == {
-        "shared": ["e1"],
-        "handed": ["e2"],
-    }
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stage", ["tool_call", "tool_result"])
+async def test_each_tool_of_a_shared_handout_is_read_under_the_call_id_citing_its_run(
+    stage: Stage,
+) -> None:
+    # one handout of "host_1" denotes two bridged tools, as inspect_ai records
+    # it: each tool's checks name that tool's execution of the handout, and
+    # the scaffold runs read_copy under the call's id, then read_file under an
+    # id of its own
+    events = [
+        *checked("s1", "tool_call", "host_1", None, execution_id="h/host/read_file"),
+        *checked("s2", "tool_call", "host_1", None, execution_id="h/copy/read_copy"),
+        tool("copy", None, "host_1", execution_id="h/copy/read_copy", bridged=True),
+        tool("file", None, "own", execution_id="h/host/read_file", bridged=True),
+        *checked("s3", "tool_result", "host_1", None, execution_id="h/host/read_file"),
+        *checked("s4", "tool_result", "host_1", None, execution_id="h/copy/read_copy"),
+    ]
+
+    # keyed as replay keys a bridged call's steps, each citing its own run
+    assert keyed_citations(await read(stage, events)) == [
+        ("host_1", ["file"]),
+        ("host_1", ["copy"]),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_check_of_a_bridged_tool_that_never_ran_cites_nothing() -> None:
+    # the handout's read_copy never ran; its result check must not cite the
+    # read_file run under the same id
+    events = [
+        tool("file", None, "host_1", execution_id="h/host/read_file", bridged=True),
+        *checked("s1", "tool_result", "host_1", None, execution_id="h/host/read_file"),
+        *checked("s2", "tool_result", "host_1", None, execution_id="h/copy/read_copy"),
+    ]
+
+    assert keyed_citations(await read("tool_result", events)) == [
+        ("host_1", ["file"]),
+        ("host_1", []),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_monitors_own_call_does_not_take_a_repeated_call_id() -> None:
+    # a monitor's model call reuses the agent's call id "shared" inside the
+    # sentinel span; replay skips that run, so the agent's run keeps the id
+    events: list[Event] = [
+        SpanBeginEvent(id="m", parent_id=None, type="sentinel", name="sentinel"),
+        tool("own", "m", execution_id="x0"),
+        SpanEndEvent(id="m"),
+        tool("e1", None, execution_id="x1"),
+        *checked("s1", "tool_result", "shared", None, execution_id="x1"),
+    ]
+
+    # the transcript holds no tool message, so the check cites its tool event
+    assert keyed_citations(await read("tool_result", events)) == [("shared", ["e1"])]
+
+
+@pytest.mark.anyio
+async def test_a_checked_call_that_raised_a_parsing_error_keeps_its_id() -> None:
+    # a tool that raised ToolParsingError itself after its call was checked
+    # ran, so replay builds its steps under the id and names the model's
+    # same-id retry by its execution id
+    events = [
+        tool("e1", None, execution_id="x1", error=ToolCallError("parsing", "bad")),
+        *checked("s1", "tool_result", "shared", None, execution_id="x1"),
+        tool("e2", None, execution_id="x2"),
+        *checked("s2", "tool_result", "shared", None, execution_id="x2"),
+    ]
+
+    assert keyed_citations(await read("tool_result", events)) == [
+        ("shared", ["e1"]),
+        ("x2", ["e2"]),
+    ]
 
 
 @pytest.mark.anyio

@@ -31,14 +31,25 @@ class Positions:
         # each conversation's tool events, by call id and position: two agents'
         # calls can share an id
         self._tools: dict[tuple[str, str], tuple[list[int], list[ToolEvent]]] = {}
+        # the tool events of each execution a tool event records, by position
+        self._executions: dict[str, tuple[list[int], list[ToolEvent]]] = {}
         self._conversations = Conversations(events, sample)
         # each conversation's model events, by position
         models: dict[str, tuple[list[int], list[ModelEvent]]] = {}
         # the span of each recorded model_input step, and its conversation
         inputs: dict[str, str] = {}
+        # the spans within a sentinel's, whose tool events are a monitor's own
+        sentinel_spans: set[str] = set()
+        # each native run outside a sentinel's span, in log order: its call id,
+        # its execution id, and whether its error left it unbuilt in replay
+        runs: list[tuple[str, str | None, bool]] = []
+        # the executions some check names
+        checked: set[str] = set()
         for index, event in enumerate(events):
             if isinstance(event, SpanBeginEvent):
                 self._begins[event.id] = index
+                if event.type == "sentinel" or event.parent_id in sentinel_spans:
+                    sentinel_spans.add(event.id)
             elif isinstance(event, SpanEndEvent):
                 self._ends[event.id] = index
             elif isinstance(event, ModelEvent):
@@ -58,13 +69,33 @@ class Positions:
                 )
                 at.append(index)
                 tools.append(event)
-            elif (
-                isinstance(event, SentinelEvent)
-                and event.stage == "model_input"
-                and event.span_id is not None
-            ):
-                inputs.setdefault(event.span_id, event.conversation)
+                if event.execution_id is not None:
+                    at, tools = self._executions.setdefault(
+                        event.execution_id, ([], [])
+                    )
+                    at.append(index)
+                    tools.append(event)
+                if event.span_id not in sentinel_spans and not _bridged(event):
+                    unbuilt = event.error is not None and event.error.type in (
+                        "parsing",
+                        "approval",
+                    )
+                    runs.append((event.id, event.execution_id, unbuilt))
+            elif isinstance(event, SentinelEvent):
+                if event.execution_id is not None:
+                    checked.add(event.execution_id)
+                if event.stage == "model_input" and event.span_id is not None:
+                    inputs.setdefault(event.span_id, event.conversation)
         self._generates = _preceded(inputs, models, self._begins, self._ends)
+        self._renamed = _renamed(runs, checked)
+
+    def step_id(self, event: SentinelEvent) -> str:
+        # the step a check was of, as replay keys it: the call id, except for a
+        # later native execution of a call id an earlier execution's steps took
+        # (inspect_ai's `_Driver._tool_step_id`), named by its execution id
+        if event.execution_id is not None and event.execution_id in self._renamed:
+            return event.execution_id
+        return event.step_id
 
     def cite(self, event: SentinelEvent, index: int) -> Reference | None:
         span = event.span_id
@@ -121,7 +152,18 @@ class Positions:
             retrying[event.span_id] = (first, event)
 
     def _tool(self, event: SentinelEvent, at: int, *, after: bool) -> ToolEvent | None:
-        found = self._tools.get((event.conversation, step_id(event)))
+        found = self._tools.get((event.conversation, event.step_id))
+        if event.execution_id is not None:
+            runs = self._executions.get(event.execution_id)
+            if runs is not None:
+                # the runs of the execution the check judged: a native call's
+                # one run, or a bridged tool's runs for one handout, which can
+                # run under an id other than the call's
+                found = runs
+            elif found is not None and any(t.execution_id for t in found[1]):
+                # the runs under the id are other executions': a bridged tool
+                # of the handout that never ran
+                return None
         if found is None:
             return None
         positions, tools = found
@@ -132,11 +174,30 @@ class Positions:
         return tools[index] if index >= 0 else None
 
 
-def step_id(event: SentinelEvent) -> str:
-    # the step a check was of, as replay keys it: a bridged call the scaffold
-    # was handed under an id other than the model's records that id
-    # (`execution_id`), which its host tool event has too
-    return event.execution_id or event.step_id
+def _renamed(runs: list[tuple[str, str | None, bool]], checked: set[str]) -> set[str]:
+    # the executions replay names by their execution ids: each native run that
+    # replay builds steps for, after the first built under its call id, in any
+    # conversation, as step ids are unique in a sample. Replay builds a run's
+    # steps where a check names it, else where it ran: an error of type
+    # "parsing" or "approval" is of a call rejected before its step was built.
+    # A run whose steps replay skips for reasons the events don't show (one no
+    # model call proposed, one in a region that checks no tool calls) still
+    # counts as built here
+    holders: dict[str, str | None] = {}
+    renamed: set[str] = set()
+    for call_id, execution, unbuilt in runs:
+        if unbuilt and execution not in checked:
+            continue
+        holder = holders.setdefault(call_id, execution)
+        if execution is not None and holder != execution:
+            renamed.add(execution)
+    return renamed
+
+
+def _bridged(event: ToolEvent) -> bool:
+    # a host call a sandbox agent bridge ran, which replay builds no native
+    # step for (inspect_ai's `_bridged`)
+    return event.metadata is not None and "bridge" in event.metadata
 
 
 def _preceded(
