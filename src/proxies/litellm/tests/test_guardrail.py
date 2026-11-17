@@ -4051,12 +4051,13 @@ def _run_slow_start(
 ) -> _SlowStartOutcome:
     """Put a stream through the guardrail whose provider stays silent for longer than the guardrail waits for a first chunk. The guardrail waits `wait` seconds here.
 
-    `until` says how long the provider is silent: for `a while`, or until the guardrail has begun `the reply stream` or sent the caller `a keepalive`. The provider then yields the route's reply, or raises `failure` at that first read, after which the test calls the failure hook as LiteLLM does. With `caller_disconnects`, the caller disconnects while the provider is still silent instead, and the test cancels the hook as LiteLLM does. The sidecar is a stand-in whose answer says it releases replies as `release` says, or the real sidecar at the address `sidecar`, whose calls are not recorded.
+    `until` says how long the provider is silent: for `a while`, or until the guardrail has begun `the reply stream` or sent the caller `a keepalive`. The provider then yields the route's reply, or raises `failure` at that first read, after which the test calls the failure hook as LiteLLM does. With `caller_disconnects`, the caller disconnects while the provider is still silent instead, and the test cancels the hook as LiteLLM does. The sidecar is a stand-in whose answer says it releases replies as `release` says, or the real sidecar at the address `sidecar`, whose calls are not recorded, so `until` can't be `the reply stream` with it.
     """
     calls: list[Any] = []
-    # Set once the guardrail has the stand-in's answer to `begin_reply`. The
-    # stand-in records `begin_reply` earlier, when the call reaches it, and a
-    # caller that disconnects in between gets no `abort_reply`.
+    # Set at the guardrail's first `next_release`, which it sends only once it
+    # has the stand-in's answer to `begin_reply`. The stand-in records
+    # `begin_reply` earlier, when the call reaches it, and a caller that
+    # disconnects in between gets no `abort_reply`.
     begun = threading.Event()
     guardrail_module = importlib.import_module("inspect_sentinel_litellm._guardrail")
     monkeypatch.setattr(guardrail_module, "_FIRST_CHUNK_WAIT", wait)
