@@ -11,6 +11,8 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageSystem,
     ChatMessageUser,
+    ContentReasoning,
+    ContentText,
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall
@@ -59,6 +61,17 @@ def _reply(text: str) -> Step:
     return replace(after_generate_step(), output=ModelOutput.from_content("m", text))
 
 
+def _reasoned(reasoning: str, summary: str | None = None) -> Step:
+    # the credential is only in the reasoning; the reply's text is clean
+    message = ChatMessageAssistant(
+        content=[
+            ContentReasoning(reasoning=reasoning, summary=summary),
+            ContentText(text="Here is the line for your .env."),
+        ]
+    )
+    return replace(after_generate_step(), output=ModelOutput.from_message(message))
+
+
 def _read(path: str) -> BeforeToolCall:
     return before_tool_call("read_file", path=path)
 
@@ -93,6 +106,9 @@ def _unparsed(text: str) -> Step:
         (_reply(f"export AWS_ACCESS_KEY_ID={_AWS}"), "terminate"),
         (_reply(f"token: {_GITHUB_FINE_GRAINED}"), "terminate"),
         (_reply("Deploys go to web1.acme.internal."), "proceed"),
+        (_reasoned(f"The user's key is {_AWS}."), "terminate"),
+        (_reasoned("Writing the line.", summary=f"Key: {_AWS}"), "terminate"),
+        (_reasoned("Writing the line.", summary="No key here."), "proceed"),
         # BeforeToolCall
         (_read(".ssh/deploy_key"), "reject"),
         (_read("/home/me/.ssh/id_ed25519"), "reject"),
