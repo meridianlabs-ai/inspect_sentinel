@@ -3964,11 +3964,15 @@ def test_a_real_sidecar_passes_a_providers_error_without_judging_it(
 
 
 def _stand_in_releasing(
-    calls: list[Any], release: str | None, *, keepalive: bool = False
+    calls: list[Any],
+    release: str | None,
+    *,
+    keepalive: bool = False,
+    polled: threading.Event | None = None,
 ) -> Starlette:
     """A stand-in for a sidecar whose answer to `judge_request` says how it releases replies. With `release` None, the answer doesn't say, like an older sidecar's.
 
-    It passes every request and reply, and records the calls made to it in `calls`, except `next_release`. With `keepalive`, a reply stream releases a keepalive as soon as it has begun.
+    It passes every request and reply, and records the calls made to it in `calls`, except `next_release`. With `keepalive`, a reply stream releases a keepalive as soon as it has begun. It sets `polled` at the first `next_release`, which the guardrail sends only once it has the answer to `begin_reply`.
     """
     streams: dict[str, dict[str, Any]] = {}
     taken = _result({"taken": True})
@@ -3978,6 +3982,8 @@ def _stand_in_releasing(
         method, params = asked["method"], asked.get("params", {})
         if method != "next_release":
             calls.append(asked)
+        elif polled is not None:
+            polled.set()
         if method == "judge_request":
             said = {"release": release} if release is not None else {}
             return JSONResponse(_result({"action": "pass"} | said))
@@ -4048,6 +4054,10 @@ def _run_slow_start(
     `until` says how long the provider is silent: for `a while`, or until the guardrail has begun `the reply stream` or sent the caller `a keepalive`. The provider then yields the route's reply, or raises `failure` at that first read, after which the test calls the failure hook as LiteLLM does. With `caller_disconnects`, the caller disconnects while the provider is still silent instead, and the test cancels the hook as LiteLLM does. The sidecar is a stand-in whose answer says it releases replies as `release` says, or the real sidecar at the address `sidecar`, whose calls are not recorded.
     """
     calls: list[Any] = []
+    # Set once the guardrail has the stand-in's answer to `begin_reply`. The
+    # stand-in records `begin_reply` earlier, when the call reaches it, and a
+    # caller that disconnects in between gets no `abort_reply`.
+    begun = threading.Event()
     guardrail_module = importlib.import_module("inspect_sentinel_litellm._guardrail")
     monkeypatch.setattr(guardrail_module, "_FIRST_CHUNK_WAIT", wait)
 
@@ -4087,9 +4097,7 @@ def _run_slow_start(
                 # The deadline stops the test hanging if the guardrail never
                 # does.
                 deadline = time.monotonic() + 10
-                while not (
-                    sent if until == "a keepalive" else "begin_reply" in _methods(calls)
-                ):
+                while not (sent if until == "a keepalive" else begun.is_set()):
                     assert time.monotonic() < deadline and not reading.done()
                     await asyncio.sleep(0.01)
             before, sent_before = list(calls), list(sent)
@@ -4112,7 +4120,8 @@ def _run_slow_start(
 
     if sidecar is not None:
         return asyncio.run(run(sidecar))
-    with _serving(_stand_in_releasing(calls, release, keepalive=keepalive)) as url:
+    stand_in = _stand_in_releasing(calls, release, keepalive=keepalive, polled=begun)
+    with _serving(stand_in) as url:
         return asyncio.run(run(url))
 
 
