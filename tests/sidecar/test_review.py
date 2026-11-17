@@ -1750,11 +1750,14 @@ async def test_an_approved_request_the_eval_never_resends_isnt_counted_as_sent()
 
 @protocol
 def asks_about_the_preprocessed_request() -> Protocol:
-    # asks a person about the request as `preprocess_step` thins it
+    # asks a person about the request as `preprocess_step` thins it, with
+    # another model named and its tools taken out
     async def decide(
         context: Context, step: BeforeGenerate, escalations: Escalations
     ) -> Decision | None:
-        thinned = await preprocess_step(step)
+        thinned = replace(
+            await preprocess_step(step), model="another", tools=[], tool_choice="auto"
+        )
         answer = await context.host.ask_human(
             thinned, escalations, ["approve", "terminate"]
         )
@@ -1768,16 +1771,28 @@ def asks_about_the_preprocessed_request() -> Protocol:
 @pytest.mark.anyio
 async def test_a_request_a_protocol_thinned_can_be_asked_about() -> None:
     handler = Handler(asks_about_the_preprocessed_request())
+    tool: dict[str, Any] = {"name": "send", "description": "Send.", "input_schema": {}}
+    forced = _sends(
+        "x", "irid-1", tools=[tool], tool_choice={"type": "tool", "name": "send"}
+    )
     async with _serving(handler) as client:
-        question = await _paused_question_at_request(handler, client)
+        question = await _paused_question_at_request(handler, client, forced)
 
-    # The protocol's step has no system message. The question is still about
-    # the request the provider is sent, with both of its messages.
-    assert question["request"]["messages"] == 2
+    # The protocol's step has no system message, no tools and another model's
+    # name. The question is still about the request the provider is sent: both
+    # of its messages, its model, and the tool the model must call.
+    asked = question["request"]
+    assert asked["messages"] == 2
     assert [(position, role) for position, role, _ in _shown(question)] == [
         (1, "system"),
         (2, "user"),
     ]
+    assert asked["model"].endswith("claude-test")
+    assert (asked["tools"], asked["tool_choice"], asked["tool_function"]) == (
+        ["send"],
+        "function",
+        "send",
+    )
 
 
 @pytest.mark.anyio

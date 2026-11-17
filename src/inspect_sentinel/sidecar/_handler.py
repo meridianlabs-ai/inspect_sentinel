@@ -2550,23 +2550,22 @@ class Handler:
             message = ""
             if isinstance(step, BeforeGenerate):
                 # The request the model is about to be sent: the messages it
-                # has not been sent before, and the tools it is offered. The
-                # messages are the request's own, whatever of them the step
-                # holds: a protocol may ask about a step it thinned, as with
-                # `preprocess_step`, and the person approves the whole request.
+                # has not been sent before, and the tools it is offered. All
+                # of it is the held request's own, and none of it the step's:
+                # a protocol may ask about a step it thinned or changed, as
+                # with `preprocess_step`, and the person approves the request
+                # the provider is sent.
                 sent = RequestAsked(
-                    step.model,
+                    held.model,
                     len(held.input),
                     tuple(
                         (position, _as_the_eval_holds(message, run, held))
                         for position, message in not_sent_before(
-                            held.input,
-                            held.message_keys,
-                            _sent_to(run, held, step.model),
+                            held.input, held.message_keys, _sent_to(run, held)
                         )
                     ),
-                    tuple(tool.name for tool in step.tools),
-                    step.tool_choice,
+                    tuple(tool.name for tool in held.offered.tools),
+                    held.offered.tool_choice,
                 )
             elif isinstance(step, AfterGenerate):
                 # The whole turn, as the model returned it, before any of its calls is
@@ -3044,11 +3043,13 @@ def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
     return digest.hexdigest()
 
 
-def _sent_to(run: Run, held: Held, model: str) -> Mapping[str, int]:
-    # What the held request's conversation has sent the model. `step.history`
-    # is what it has sent any model.
+def _sent_to(run: Run, held: Held) -> Mapping[str, int]:
+    # What the held request's conversation has sent the request's model.
+    # `step.history` is what it has sent any model.
     conversation = run.conversations.get(held.conversation)
-    return conversation.sent_to.get(model, {}) if conversation is not None else {}
+    if conversation is None:
+        return {}
+    return conversation.sent_to.get(held.model, {})
 
 
 def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessage:
