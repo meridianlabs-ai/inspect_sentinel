@@ -6,8 +6,8 @@ An agent working in a real repository comes across credentials: a key a user pas
 
 | Stage | What the rule checks | What happens when it finds a credential |
 |-------|----------------------|-----------------------------------------|
-| `BeforeGenerate` | the text of a request's messages: the user's, the system prompt and the model's earlier turns | the run ends before the request reaches the model provider |
-| `AfterGenerate` | the text and reasoning of a reply | the run ends, and the client never gets the reply, while the sidecar holds each reply whole, as it does by default |
+| `BeforeGenerate` | the text of a request's messages: the user's, the system prompt and the model's earlier turns, though not the arguments of the tool calls in those turns (the rule's docstring says why) | the run ends before the request reaches the model provider |
+| `AfterGenerate` | the text and reasoning of a reply, and the names of its tool calls | the run ends, and the client never gets the reply, while the sidecar holds each reply whole, as it does by default |
 | `BeforeToolCall` | each tool call in a reply, before it runs | a read of a `.env` file, such as `.env` or `.env.production`, is **modified** to read the `.env.example` beside it. A read of an SSH key, a `.pem` or `.key` file, or a credentials file such as `.aws/credentials` is **rejected**, and the agent is told what to read instead. A call that passes a credential is rejected too |
 | `AfterToolCall` | a tool's result | the run ends before the model reads the result |
 

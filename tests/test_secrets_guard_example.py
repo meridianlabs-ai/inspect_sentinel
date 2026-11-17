@@ -72,6 +72,13 @@ def _reasoned(reasoning: str, summary: str | None = None) -> Step:
     return replace(after_generate_step(), output=ModelOutput.from_message(message))
 
 
+def _called(function: str) -> Step:
+    # a reply with no text, only a call, and the credential only in its name
+    call = ToolCall(id="c", function=function, arguments={})
+    message = ChatMessageAssistant(content="", tool_calls=[call])
+    return replace(after_generate_step(), output=ModelOutput.from_message(message))
+
+
 def _read(path: str) -> BeforeToolCall:
     return before_tool_call("read_file", path=path)
 
@@ -90,6 +97,8 @@ def _unparsed(text: str) -> Step:
         (_request(ChatMessageUser(content=f"my key is {_AWS}")), "terminate"),
         (_request(ChatMessageSystem(content=f"use {_GITHUB_CLASSIC}")), "terminate"),
         (_request(ChatMessageAssistant(content=f"try {_AWS}")), "terminate"),
+        # a call's arguments in the history aren't checked: a call rejected for
+        # passing a credential is put back in later requests as the model wrote it
         (
             _request(
                 ChatMessageAssistant(
@@ -106,6 +115,7 @@ def _unparsed(text: str) -> Step:
         (_reply(f"export AWS_ACCESS_KEY_ID={_AWS}"), "terminate"),
         (_reply(f"token: {_GITHUB_FINE_GRAINED}"), "terminate"),
         (_reply("Deploys go to web1.acme.internal."), "proceed"),
+        (_called(_AWS), "terminate"),
         (_reasoned(f"The user's key is {_AWS}."), "terminate"),
         (_reasoned("Writing the line.", summary=f"Key: {_AWS}"), "terminate"),
         (_reasoned("Writing the line.", summary="No key here."), "proceed"),

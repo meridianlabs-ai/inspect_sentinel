@@ -3,11 +3,11 @@
 A coding agent that reads a repository can come across a credential, pass one to the model provider, or hand one back to its user. The rule watches for credentials at all four stages:
 
 - `BeforeGenerate`: a request whose messages hold a credential ends the run, before the credential is sent to the model provider.
-- `AfterGenerate`: a reply whose text or reasoning holds a credential ends the run, before the client is handed the reply.
+- `AfterGenerate`: a reply whose text, reasoning or tool call names hold a credential ends the run, before the client is handed the reply. A call's arguments are left to `BeforeToolCall`.
 - `BeforeToolCall`: a call that would read a credential file is changed or rejected before it runs. A read of a `.env` file, such as `.env` or `.env.production`, is changed to a read of the `.env.example` beside it, which lists the same settings with safe values. A `.env` file can hold credentials no format gives away, such as a database password, so it is never read. A read of an SSH key, a `.pem` or `.key` file, or a credentials file such as `.aws/credentials` is rejected, and the agent is told what it can read instead. A call whose arguments hold a credential is rejected too.
 - `AfterToolCall`: a tool result that holds a credential ends the run, before the model reads it.
 
-A credential is anything that matches one of `CREDENTIALS`: the formats of AWS access key IDs, GitHub tokens and private keys, which a real secret scanner looks for too. `BeforeGenerate` checks the text of the user, system and assistant messages of a request. Assistant messages are checked because not all of them were judged when the model wrote them: a task's few-shot examples, or a conversation the sidecar joined midway. Tool results and the rejections the sidecar adds were judged at the stages they came from, and an assistant message's text leaves out its tool calls, which were judged at `BeforeToolCall`.
+A credential is anything that matches one of `CREDENTIALS`: the formats of AWS access key IDs, GitHub tokens and private keys, which a real secret scanner looks for too. `BeforeGenerate` checks the text of the user, system and assistant messages of a request. Assistant messages are checked because not all of them were judged when the model wrote them: a task's few-shot examples, or a conversation the sidecar joined midway. Tool results and the rejections the sidecar adds were judged at the stages they came from. An assistant message's text leaves out its tool calls, and their arguments aren't checked here: a call the rule rejected for passing a credential is put back in later requests as the model wrote it, so checking calls would end the run on the next request. So the arguments of a call in a history the sidecar never judged, such as a few-shot example's, reach the model provider unchecked.
 
 The explanations say which kind of credential was found and where, never the credential itself, since they are recorded wherever the sentinel's decisions are.
 """
@@ -146,12 +146,15 @@ def _credential(texts: Iterable[str]) -> str:
 
 
 def _reply_text(step: AfterGenerate) -> Iterable[str]:
-    # the reply's tool calls are left to `BeforeToolCall`, which can change or
-    # reject one and let the agent go on
+    # a call's arguments are left to `BeforeToolCall`, which can change or
+    # reject one and let the agent go on. Its name is checked here, since no
+    # stage after this one does, and a rejection would quote it.
     if not step.output.choices:
         return
     message = step.output.message
     yield message.text
+    for call in message.tool_calls or []:
+        yield call.function
     if not isinstance(message.content, str):
         for content in message.content:
             if content.type == "reasoning":
