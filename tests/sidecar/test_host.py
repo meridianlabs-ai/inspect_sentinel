@@ -2,14 +2,14 @@ import logging
 from pathlib import Path
 
 import pytest
-from inspect_ai.model import ChatMessageUser, GenerateConfig
+from inspect_ai.model import ChatMessageUser, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolCallView
 
 from inspect_sentinel import human, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
-from inspect_sentinel._step import BeforeGenerate, BeforeToolCall
+from inspect_sentinel._step import AfterGenerate, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import Handler, Refuse, SidecarHost
 from inspect_sentinel.sidecar._host import ModelUsed, RunHost, noting_models
@@ -69,7 +69,30 @@ async def test_an_escalation_to_a_person_is_not_let_through() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_person_cannot_be_asked_at_a_generate_stage() -> None:
+async def test_a_turn_nobody_can_be_asked_about_ends_the_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    step = AfterGenerate(
+        model="anthropic/claude-test",
+        conversation="c",
+        input=[ChatMessageUser(content="Hello")],
+        agent_messages=None,
+        tools=[],
+        tool_choice="none",
+        config=GenerateConfig(),
+        output=ModelOutput.from_content("anthropic/claude-test", "Hi."),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        answer = await SidecarHost().ask_human(step, (), ["approve", "terminate"])
+
+    # a turn can't be rejected, so the cautious answer ends the run
+    assert answer.decision == "terminate"
+    assert "the model's turn" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_person_cannot_be_asked_before_a_generate() -> None:
     step = BeforeGenerate(
         model="anthropic/claude-test",
         conversation="c",

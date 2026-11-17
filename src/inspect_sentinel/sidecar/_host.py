@@ -28,10 +28,20 @@ logger = logging.getLogger(__name__)
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
 """Where a step was judged, named as Inspect's transcript names it."""
 
+Askable: TypeAlias = BeforeToolCall | AfterToolCall | AfterGenerate
+"""A step that a sidecar can ask a person about: a tool call before it runs, a tool call's result, or a model's whole turn before any of its calls runs."""
+
 AskHuman: TypeAlias = Callable[
-    [BeforeToolCall | AfterToolCall, Escalations, Sequence[str]], Awaitable[HumanAnswer]
+    [Askable, Escalations, Sequence[str]], Awaitable[HumanAnswer]
 ]
-"""A function that asks a person about a tool step. It takes the step, the escalations and the choices, and waits for the person's answer."""
+"""A function that asks a person about a step. It takes the step, the escalations and the choices, and waits for the person's answer."""
+
+
+def asked_about(step: Askable) -> str:
+    """What a question about the step is about, in words for a log line."""
+    if isinstance(step, AfterGenerate):
+        return "the model's turn"
+    return f"the call to {step.call.function}"
 
 
 @dataclass(frozen=True)
@@ -196,15 +206,15 @@ class SidecarHost:
             escalations: The escalations the asking protocol was handed; unused, since no person is asked.
             choices: What a person could have picked.
         """
-        if not isinstance(step, BeforeToolCall | AfterToolCall):
+        if isinstance(step, BeforeGenerate):
             raise NotImplementedError(
                 f"A sidecar cannot ask a person at the {stage(step)} stage, as Inspect cannot."
             )
         decision = "reject" if "reject" in choices else "terminate"
         logger.warning(
-            "No person can be asked from the sidecar, so the %s stage of the call to %s was answered %s.",
+            "No person can be asked from the sidecar, so the %s stage of %s was answered %s.",
             stage(step),
-            step.call.function,
+            asked_about(step),
             decision,
         )
         return HumanAnswer(
@@ -288,8 +298,8 @@ class RunHost:
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]
     ) -> HumanAnswer:
-        """Ask a person about a tool step, if the run has someone to ask. Otherwise return the answer of the sidecar's own host."""
-        if self._ask is not None and isinstance(step, BeforeToolCall | AfterToolCall):
+        """Ask a person about a tool step or a model's turn, if the run has someone to ask. Otherwise return the answer of the sidecar's own host."""
+        if self._ask is not None and not isinstance(step, BeforeGenerate):
             return await self._ask(step, escalations, choices)
         return await self._host.ask_human(step, escalations, choices)
 

@@ -1620,7 +1620,7 @@
       "type": "object"
     },
     "QuestionAsked": {
-      "description": "A question that a sentinel asked a person about a tool call in one of the eval's model requests. The step waits for the answer.",
+      "description": "A question that a sentinel asked a person about one of the eval's model requests: about a tool call, or about the model's whole turn. The step waits for the answer.",
       "properties": {
         "id": {
           "description": "The question's id. `answer_question` takes it.",
@@ -1638,30 +1638,47 @@
           "type": "string"
         },
         "stage": {
-          "description": "`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model.",
+          "description": "`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model. `model_output`: the model's turn is complete, and none of its calls has run.",
           "enum": [
             "tool_call",
-            "tool_result"
+            "tool_result",
+            "model_output"
           ],
           "title": "Stage",
           "type": "string"
         },
         "call": {
-          "additionalProperties": true,
-          "description": "The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation.",
-          "title": "Call",
-          "type": "object"
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation. Left out at `model_output`.",
+          "title": "Call"
         },
         "message": {
-          "description": "The assistant's text that came with the call.",
+          "description": "The assistant's text: what came with the call, or at `model_output` the turn's own text.",
           "title": "Message",
           "type": "string"
         },
         "view": {
-          "additionalProperties": true,
-          "description": "How to display the call, as Inspect writes a `ToolCallView`.",
-          "title": "View",
-          "type": "object"
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How to display the call, as Inspect writes a `ToolCallView`. Left out at `model_output`.",
+          "title": "View"
         },
         "result": {
           "anyOf": [
@@ -1676,6 +1693,20 @@
           "default": null,
           "description": "The call's result, as Inspect writes a `ChatMessageTool`. Present at `tool_result`.",
           "title": "Result"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model's whole turn, as Inspect writes a `ChatMessageAssistant`: its text, its reasoning and every tool call it makes. Present at `model_output`, unless the reply held no turn. It is for showing to the person. Do not add it to the agent's conversation.",
+          "title": "Turn"
         },
         "escalations": {
           "description": "The escalations passed to the protocol that asked the person, in order: who escalated, and why.",
@@ -1717,9 +1748,7 @@
         "sample_uuid",
         "request_id",
         "stage",
-        "call",
         "message",
-        "view",
         "escalations",
         "choices",
         "asked"
@@ -2178,18 +2207,27 @@
           "type": "integer"
         },
         "stage": {
-          "description": "The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run.",
+          "description": "The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run, `model_output` about the model's whole turn, before any of its calls runs.",
           "enum": [
             "tool_call",
-            "tool_result"
+            "tool_result",
+            "model_output"
           ],
           "title": "Stage",
           "type": "string"
         },
         "call": {
-          "description": "The id of the tool call the question was about.",
-          "title": "Call",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The id of the tool call the question was about. Left out at `model_output`, where the question was about the whole turn.",
+          "title": "Call"
         },
         "asked": {
           "description": "When the sentinel asked the question, in seconds since the epoch.",
@@ -2296,7 +2334,6 @@
         "id",
         "try_number",
         "stage",
-        "call",
         "asked"
       ],
       "title": "ReviewRecord",

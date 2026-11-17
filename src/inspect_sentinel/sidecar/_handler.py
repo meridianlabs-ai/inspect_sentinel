@@ -52,6 +52,7 @@ from ._exchange import (
 )
 from ._history import record_sent, with_sent_ids
 from ._host import (
+    Askable,
     AskHuman,
     ModelUsed,
     Record,
@@ -2430,7 +2431,7 @@ class Handler:
             return None
 
         async def ask(
-            step: BeforeToolCall | AfterToolCall,
+            step: Askable,
             escalations: Escalations,
             choices: Sequence[str],
         ) -> HumanAnswer:
@@ -2509,15 +2510,29 @@ class Handler:
                 await self._state.pin(operation.pinned)
             asked = time.time()
             timeout = self._reviews.timeout
+            call: ToolCall | None = None
+            view: ToolCallView | None = None
+            result: ChatMessageTool | None = None
+            turn: ChatMessageAssistant | None = None
+            if isinstance(step, AfterGenerate):
+                # the whole turn, as the model returned it, before any of its
+                # calls is judged
+                turn = step.output.message if step.output.choices else None
+                message = turn.text if turn is not None else ""
+            else:
+                call, message, view = step.call, step.message, step.view
+                if isinstance(step, AfterToolCall):
+                    result = step.result
             question = Question(
                 eval_id=sample.eval_id,
                 sample_uuid=sample.sample_uuid,
                 request_id=request_id,
                 stage=stage(step),
-                call=step.call,
-                message=step.message,
-                view=step.view,
-                result=step.result if isinstance(step, AfterToolCall) else None,
+                call=call,
+                message=message,
+                view=view,
+                result=result,
+                turn=turn,
                 escalations=escalated(escalations),
                 choices=tuple(choices),
                 closes=asked + timeout if timeout is not None else None,

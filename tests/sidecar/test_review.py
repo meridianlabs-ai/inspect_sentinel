@@ -877,6 +877,122 @@ async def test_a_later_try_may_change_its_cache_ttl_and_nothing_the_model_reads(
             assert "does not match it" in sent.message
 
 
+# --- a question about a whole turn: the provider has replied, and no call has run ---
+
+
+def _at_turns(*stages: str, **options: Any) -> Handler:
+    # human() asks a person about every turn the model returns
+    return Handler(human(stages=["model_output", *stages]), **options)
+
+
+_SAID = {"type": "text", "text": "I'll check two cities."}
+_THOUGHT = {
+    "type": "thinking",
+    "thinking": "Two lookups, then compare.",
+    "signature": "sig",
+}
+
+
+@pytest.mark.anyio
+async def test_a_question_about_a_turn_holds_the_whole_turn() -> None:
+    handler = _at_turns()
+    async with _serving(handler) as client:
+        question = await _paused_question(
+            handler,
+            client,
+            _THOUGHT,
+            _SAID,
+            weather("Oslo"),
+            weather("Bergen", "toolu_2"),
+        )
+
+    assert question["stage"] == "model_output"
+    assert question["request_id"] == "irid-1"
+    # the question is about the turn, so it names no one call
+    assert "call" not in question and "view" not in question
+    assert question["message"] == "I'll check two cities."
+    assert [
+        (call["id"], call["function"], call["arguments"])
+        for call in question["turn"]["tool_calls"]
+    ] == [
+        ("toolu_1", "get_weather", {"location": "Oslo"}),
+        ("toolu_2", "get_weather", {"location": "Bergen"}),
+    ]
+    # The turn has the model's reasoning, which the person reads nowhere else.
+    # Inspect keeps Anthropic's thinking as the block's readable summary.
+    assert [
+        block["summary"]
+        for block in question["turn"]["content"]
+        if block["type"] == "reasoning"
+    ] == ["Two lookups, then compare."]
+    # a turn can go on or end the run: it can't be rejected
+    assert question["choices"] == ["approve", "terminate"]
+
+
+@pytest.mark.anyio
+async def test_an_approved_turn_is_decided_and_its_reply_is_kept_for_the_eval() -> None:
+    handler = _at_turns()
+    body = message(_SAID, weather("Oslo"))
+    async with _serving(handler) as client:
+        question = await _paused_question(handler, client, _SAID, weather("Oslo"))
+
+        await _answer(client, question["id"], "approve", "Looks fine.")
+
+        result = await _result(client, until="decided")
+        held = await _judged_reply(client)
+    assert result["outcome"] == "proceed"
+    assert (held.status_code, held.content) == (200, body)
+    (review,) = result["reviews"]
+    assert (review["stage"], review["decision"], review["resolution"]) == (
+        "model_output",
+        "approve",
+        "answered",
+    )
+    # the record is of a question about a turn, so it names no call
+    assert "call" not in review
+
+
+@pytest.mark.anyio
+async def test_a_person_who_terminates_at_a_turn_ends_the_run() -> None:
+    handler = _at_turns()
+    async with _serving(handler) as client:
+        question = await _paused_question(handler, client)
+
+        await _answer(client, question["id"], "terminate", "Stop here.")
+
+        result = await _result(client, until="decided")
+        later = await handler.request(_from_eval(id="y", irid="irid-2"))
+    assert result["outcome"] == "terminate"
+    assert isinstance(later, Refuse)
+
+
+@pytest.mark.anyio
+async def test_an_approved_turn_is_still_asked_about_call_by_call() -> None:
+    # the same sentinel asks about the turn, and then about each call in it
+    handler = _at_turns("tool_call")
+    async with _serving(handler) as client:
+        turn = await _paused_question(
+            handler, client, weather("Oslo"), weather("Bergen", "toolu_2")
+        )
+        await _answer(client, turn["id"], "approve")
+
+        asked = [turn["stage"]]
+        for _ in range(2):
+            await _result(client, until="awaiting_review")
+            (question,) = await _list_pending(client)
+            asked.append(f"{question['stage']}:{question['call']['id']}")
+            await _answer(client, question["id"], "approve")
+        result = await _result(client, until="decided")
+
+    assert asked == ["model_output", "tool_call:toolu_1", "tool_call:toolu_2"]
+    assert result["outcome"] == "proceed"
+    assert [(r["stage"], r.get("call")) for r in result["reviews"]] == [
+        ("model_output", None),
+        ("tool_call", "toolu_1"),
+        ("tool_call", "toolu_2"),
+    ]
+
+
 # --- a question at a tool's result: the provider has not been called ---
 
 

@@ -171,10 +171,13 @@ class ReviewRecord(BaseModel):
     try_number: int = Field(
         description="The number of the try at which the sentinel asked the question, counting from 1 in the order the sidecar received the tries. It is the try whose request or reply the sentinel was judging. A client that retries a request sends it again under the same `x-irid`."
     )
-    stage: Literal["tool_call", "tool_result"] = Field(
-        description="The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run."
+    stage: Literal["tool_call", "tool_result", "model_output"] = Field(
+        description="The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run, `model_output` about the model's whole turn, before any of its calls runs."
     )
-    call: str = Field(description="The id of the tool call the question was about.")
+    call: str | None = Field(
+        default=None,
+        description="The id of the tool call the question was about. Left out at `model_output`, where the question was about the whole turn.",
+    )
     asked: float = Field(
         description="When the sentinel asked the question, in seconds since the epoch."
     )
@@ -360,7 +363,7 @@ class Escalation(BaseModel):
 
 
 class QuestionAsked(BaseModel):
-    """A question that a sentinel asked a person about a tool call in one of the eval's model requests. The step waits for the answer."""
+    """A question that a sentinel asked a person about one of the eval's model requests: about a tool call, or about the model's whole turn. The step waits for the answer."""
 
     id: str = Field(description="The question's id. `answer_question` takes it.")
     sample_uuid: str = Field(
@@ -369,19 +372,27 @@ class QuestionAsked(BaseModel):
     request_id: str = Field(
         description="The `x-irid` of the model request that the question paused. The request stays paused until the question has an answer."
     )
-    stage: Literal["tool_call", "tool_result"] = Field(
-        description="`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model."
+    stage: Literal["tool_call", "tool_result", "model_output"] = Field(
+        description="`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model. `model_output`: the model's turn is complete, and none of its calls has run."
     )
-    call: dict[str, Any] = Field(
-        description="The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation."
+    call: dict[str, Any] | None = Field(
+        default=None,
+        description="The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation. Left out at `model_output`.",
     )
-    message: str = Field(description="The assistant's text that came with the call.")
-    view: dict[str, Any] = Field(
-        description="How to display the call, as Inspect writes a `ToolCallView`."
+    message: str = Field(
+        description="The assistant's text: what came with the call, or at `model_output` the turn's own text."
+    )
+    view: dict[str, Any] | None = Field(
+        default=None,
+        description="How to display the call, as Inspect writes a `ToolCallView`. Left out at `model_output`.",
     )
     result: dict[str, Any] | None = Field(
         default=None,
         description="The call's result, as Inspect writes a `ChatMessageTool`. Present at `tool_result`.",
+    )
+    turn: dict[str, Any] | None = Field(
+        default=None,
+        description="The model's whole turn, as Inspect writes a `ChatMessageAssistant`: its text, its reasoning and every tool call it makes. Present at `model_output`, unless the reply held no turn. It is for showing to the person. Do not add it to the agent's conversation.",
     )
     escalations: list[Escalation] = Field(
         description="The escalations passed to the protocol that asked the person, in order: who escalated, and why."
@@ -738,9 +749,7 @@ async def _answered(
                 ReviewRecord(
                     id=review.id,
                     try_number=number,
-                    stage="tool_result"
-                    if review.stage == "tool_result"
-                    else "tool_call",
+                    stage=_ASKED_STAGE.validate_python(review.stage),
                     call=review.call,
                     asked=review.asked,
                     decision=_DECISION.validate_python(review.decision),
@@ -864,13 +873,26 @@ def _question(question: Question) -> QuestionAsked:
         id=question.id,
         sample_uuid=question.sample_uuid,
         request_id=question.request_id,
-        stage="tool_result" if question.stage == "tool_result" else "tool_call",
-        call=_CALL.dump_python(question.call, mode="json", exclude_none=True),
+        stage=_ASKED_STAGE.validate_python(question.stage),
+        call=(
+            _CALL.dump_python(question.call, mode="json", exclude_none=True)
+            if question.call is not None
+            else None
+        ),
         message=question.message,
-        view=question.view.model_dump(mode="json", exclude_none=True),
+        view=(
+            question.view.model_dump(mode="json", exclude_none=True)
+            if question.view is not None
+            else None
+        ),
         result=(
             question.result.model_dump(mode="json", exclude_none=True)
             if question.result is not None
+            else None
+        ),
+        turn=(
+            question.turn.model_dump(mode="json", exclude_none=True)
+            if question.turn is not None
             else None
         ),
         escalations=[
@@ -884,6 +906,7 @@ def _question(question: Question) -> QuestionAsked:
 
 
 _CALL = TypeAdapter(ToolCall)
+_ASKED_STAGE = TypeAdapter(Literal["tool_call", "tool_result", "model_output"])
 _DECISION = TypeAdapter(Literal["approve", "reject", "terminate"] | None)
 
 
