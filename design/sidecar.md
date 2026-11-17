@@ -2235,13 +2235,35 @@ What the sidecar holds nothing for is outside that count. It is reported beside 
 | --- | --- | --- |
 | Coverage | each call's state and, where its judging didn't finish, the reason; the records of each step that was judged | each stage's own outcome; totals for a sample or a run: steps seen, judged and not judged |
 | Review latency, by a monitor | `judging_time` for each model call ("The methods", section 9) | a time on each record, so one monitor's or one stage's time can't be read |
-| Review latency, by a person | with [step 13](sidecar-plan.md#step-13-human-review): when each question was asked, answered and closed, in the call's record of its questions | nothing more, for a question asked through the eval |
+| Review latency, by a person | with [step 13](sidecar-plan.md#step-13-human-review): when each question was `asked`, `answered` and `resolved`, and its `resolution`, in the call's `reviews` | nothing more, for a question asked through the eval |
 | Escalation rate | each step's decision and, with step 13, how each question ended | totals, and a way to add them up across evals and over time |
 
 - **A record has no time.** The sidecar notes what a monitor or protocol reported, and not when. So Inspect's sidecar client writes each record into the eval's log with the time it wrote it. That is after the call's judging ended, and, where step 13 asks a person about the call, after the person answered ([#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229)). Until a record carries its own time, the times of a sidecar's events in an eval's log can't be used.
 - **Not every record reaches the eval's log.** Inspect's sidecar client writes the records that are inside a judgment (`_generate_prepared` in `inspect_ai.model._model`). A call that ended not judged has no judgment, and for an attempt Inspect retried, Inspect asks only for the judge models' usage (section 9, "The sidecar's reports in Inspect's transcript"). So a record a monitor made before a provider failed is held by the sidecar, and is not in the log. A count taken from logs then misses steps that were judged. Step 19 decides whether those records are logged.
 - **Nothing is kept past a restart**, and records are kept for a limited window (section 10). An agent with no eval has no log of its own, so its measures wait for the record log ([step 21](sidecar-plan.md#step-21-the-record-log)).
 - **Nothing adds up.** Every figure above is for one call or one question. A rate or a percentile needs them added up over many evals and many weeks.
+
+### What each quantity is counted from
+
+Each quantity is counted from a field of the sidecar's answers, with the values named here ("The methods", section 9). "Step 18" and "step 19" mark a field that doesn't exist yet. The last column is what an eval is sent by a sidecar started with `--no-eval-results` (section 9, "A client that can't be trusted").
+
+| Quantity | Counted from | With `--no-eval-results` |
+| --- | --- | --- |
+| Steps seen, at each stage | Step 18: the stages that have an outcome on `request_result`, added up in `sample_result`'s totals. At the model stages a step is one `x-irid`, and at the tool stages one tool call. | Not sent. |
+| Steps judged, and not judged by reason | Step 18: each stage's outcome, which is judged, or not judged with one of the `reason`s of `not_judged`. Today only the call's `state` and `reason` say it, for the call as a whole. | The stages' outcomes are not sent. The call's `state` and `reason` are, as today. |
+| Calls that are not verifiable | Today: a `request_result` whose `records` is `unknown` or `dropped`. Step 19 has Inspect count them. | Unchanged. `records` is sent as today. |
+| Model calls a generate took | Step 19: Inspect's own count, by the generate's id. | Unchanged, as the count is Inspect's. |
+| What a sentinel decided at a step | Today: the `action` of the step's `decision`, in the `judgment`. | Sent, in the trimmed judgment. |
+| Questions asked of a person | Today: the distinct `id`s in the call's `reviews`. Step 18 adds them up for the sample. | None are asked: no question is kept, and the step fails closed. The sample's total isn't sent either, as `sample_result` isn't served. |
+| How each question ended | Today: `reviews[].resolution`, which is `answered`, `timed_out` or `cancelled`. For `cancelled`, `cause` is `replaced_attempt`, `sample_ended`, `run_ended`, `cancelled` or `stopped`. A question that is still open has no `resolution` yet. | None, as none are asked. |
+| How long a person took | Today: `answered` less `asked`, for a question whose `resolution` is `answered`. | None, as none are asked. |
+| How long a monitor or protocol took | Step 18: each record's time and duration. Nothing gives it today. | Not sent. |
+| How long a call's judging took, while the client waited | Today: `judging_time`, for the call's latest attempt. It is the whole of the judging, and can't stand in for one monitor's duration. | Sent, as today. |
+| When the sidecar was handed a request and its reply | Step 18: two times on `request_result`. | Not sent. |
+
+- **A question is counted by its `resolution`, not by its `answered` time.** A call closed just after its answer was taken keeps the answer, which took no effect. `expired` is not a way a question ends: it is the `reason` a whole call was closed for, by `--run-expiry`.
+- **A sidecar that withholds results sends an eval none of step 18's additions.** The flag sends what Inspect acts on, with `judging_time` and `judging_usage`, and a count is neither. So a log written through such a sidecar has trimmed decisions and no totals. [Step 19](sidecar-plan.md#step-19-the-sidecars-times-and-counts-in-the-evals-log) has Inspect record that results were withheld, since a call that ended not judged leaves no trimmed event to show it. [Step 20](sidecar-plan.md#step-20-reading-the-measures-from-logs) then reports the log's coverage and its monitors' durations as withheld, apart from data missing for another reason. It doesn't work them out from the trimmed decisions, and it doesn't count the missing steps as not judged.
+- **Once step 21 is built, such a deployment can read these measures from the operator's record log** ([step 21](sidecar-plan.md#step-21-the-record-log)), which the sidecar is to write itself, and which no eval is sent.
 
 ### What the sidecar doesn't measure
 
