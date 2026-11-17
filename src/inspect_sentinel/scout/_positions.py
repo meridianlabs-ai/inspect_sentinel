@@ -216,10 +216,11 @@ def _holders(
     # run it can tie to its call (`_tied`) where a check names its execution,
     # else, by what the events show, where `_buildable` says. A run whose
     # steps replay skips for reasons the events don't show (a native call no
-    # model call proposed, one in a region that checks no tool calls, a host
-    # run whose check replay pairs with no run) still counts as built here, so
-    # a later run's checks are keyed by their execution, which joins no
-    # replay row rather than the wrong one
+    # model call proposed, a native or host run in a region that checks no
+    # tool calls (`_checks_tool_calls`, which #6446's scope guard applies to
+    # host runs), a host run whose check replay pairs with no run) still
+    # counts as built here, so a later run's checks are keyed by their
+    # execution, which joins no replay row rather than the wrong one
     holders: dict[str, str | None] = {}
     for call_id, execution, tied, buildable in runs:
         if tied and (buildable or execution in checked):
