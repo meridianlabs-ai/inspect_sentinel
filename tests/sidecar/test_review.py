@@ -1595,8 +1595,16 @@ def changes_the_lookup(arguments: dict[str, Any]) -> Protocol:
 
 @pytest.mark.anyio
 async def test_a_changed_calls_arguments_are_shown_as_they_are() -> None:
-    # the call ran with an argument that reads like a placeholder for another
-    ran_with = {"location": "{{unit}}", "unit": "C"}
+    # The call ran with arguments that read like placeholders for another, one
+    # under a name that can't be a placeholder itself, and with a string and a
+    # number that print alike.
+    ran_with = {
+        "body": "Hello {{name}}",
+        "body-text": "Hello {{{name}}",
+        "name": "Sam",
+        "count": 1,
+        "label": "1",
+    }
     handler = Handler(
         sequential([changes_the_lookup(ran_with), human(stages=["model_input"])])
     )
@@ -1627,14 +1635,15 @@ async def test_a_changed_calls_arguments_are_shown_as_they_are() -> None:
             handler, client, _sends("y", "irid-2", then=held_by_the_eval)
         )
 
-    # Inspect fills a view's placeholders from the call's arguments. As it
-    # fills this view, each value is shown as the tool was given it.
+    # Inspect fills a view's placeholders from the call's arguments. Once it
+    # has filled this view, the JSON it shows is still what the tool was given.
     [call] = question["request"]["new"][0]["message"]["tool_calls"]
     shown = substitute_tool_call_content(
         ToolCallContent(**call["view"]), call["arguments"]
     ).content
-    assert "location: {{unit}}" in shown
-    assert "unit: C" in shown
+    _, _, function, arguments = shown.split("\n", 3)
+    assert function == "get_weather"
+    assert json.loads(arguments) == ran_with
 
 
 @protocol

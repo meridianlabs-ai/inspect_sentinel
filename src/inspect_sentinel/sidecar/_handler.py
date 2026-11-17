@@ -3087,27 +3087,24 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
 
 def _as_it_ran(call: ToolCall) -> ToolCall:
     # A changed call, with a view that says whose arguments these are: the
-    # person approves a request that sends the model its own. Each value is a
-    # placeholder that the eval fills from the call's arguments, as it fills a
-    # tool viewer's, so a value is shown as it is, braces and all. A name that
-    # can't be a placeholder has its value written here.
-    shown = "\n".join(
-        f"{name}: {{{{{name}}}}}"
-        if _PLACEHOLDER_NAME.fullmatch(name)
-        else f"{name}: {json.dumps(value, default=str)}"
-        for name, value in call.arguments.items()
+    # person approves a request that sends the model its own. The arguments
+    # are JSON, so a string is told from a number. Inspect fills each
+    # `{{name}}` of a view from the call's arguments, so one in a value is
+    # written with JSON's escape for its first brace, and stays as it is.
+    ran = _PLACEHOLDER.sub(
+        r"\\u007b", json.dumps(call.arguments, indent=2, default=str)
     )
     return replace(
         call,
         view=ToolCallContent(
             format="text",
-            content=f"A decision changed this call. These are the arguments the tool ran with. The model is sent its own arguments, which are hidden here.\n\n{call.function}\n{shown}",
+            content=f"A decision changed this call. These are the arguments the tool ran with, as JSON. The model is sent its own arguments, which are hidden here.\n\n{call.function}\n{ran}",
         ),
     )
 
 
-_PLACEHOLDER_NAME = re.compile(r"\w+")
-"""An argument name that Inspect fills a `{{name}}` placeholder for."""
+_PLACEHOLDER = re.compile(r"\{(?=\{\w+\}\})")
+"""The first brace of a `{{name}}`, which Inspect would fill from a call's arguments."""
 
 _ARGUMENTS_HIDDEN = ToolCallContent(
     format="text",
