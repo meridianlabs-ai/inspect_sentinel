@@ -128,11 +128,11 @@ inspect eval examples/escalate_turn_to_human.py --model openai/gpt-5-mini
 
 ## Model Requests
 
-At `"model_input"`, the person decides about a request before the agent's model is sent it. Use it when what reaches the model matters, such as a tool's output or a document the agent read. Approve sends the request unchanged, and terminate ends the sample without sending it.
+At `"model_input"`, the person decides about a request before the agent's model is sent it. Use it when what reaches the model matters, such as a tool's output or a document the agent read. Approve sends the request, and terminate ends the sample without sending it. The person sees the request before any `on_before_model_generate` hook runs, so a hook that changes requests changes this one after it is approved.
 
 The person is shown how many messages the request sends, the tools it offers and which the model must call, and each message the model has not been sent before. That includes a message the scaffold rewrote since it was sent, and an assistant message the scaffold wrote itself, wherever they are in the request.
 
-The prompt has limits. A message the model was sent before is not shown again, even if it has moved, and neither is the fact that one was removed. A message that repeats an earlier one, such as an agent's fixed prompt to continue, is shown each time it is added. Images and other content that is not text are counted, not shown. Tools are shown by name, without their descriptions or parameters. The console and the approval panel show no other part of the conversation. The eval's log has the earlier requests, so the messages sent before can be read there. It has this request only once it is sent.
+The prompt has limits. A message the model was sent before is not shown again, even if it has moved, and neither is the fact that one was removed. A message that repeats an earlier one, such as an agent's fixed prompt to continue, is shown when the request holds more copies of it than any request the model was sent before. Images and other content that is not text are counted, not shown. Tools are shown by name, without their descriptions or parameters. Inspect's TUI shows the first lines of a long prompt, so expand it to read the rest before deciding. The console and the approval panel show no other part of the conversation. The eval's log has the earlier requests, so the messages sent before can be read there. It has this request only once it is sent.
 
 ``` python
 Task(..., sentinel=sequential([request_triage(), human(stages=["model_input"])]))
