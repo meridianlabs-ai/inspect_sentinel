@@ -40,6 +40,7 @@ from inspect_sentinel.sidecar.envoy._proto.envoy.service.ext_proc.v3 import (
     external_processor_pb2 as pb,
 )
 from tests.sidecar._traffic import (
+    RecordingHandler,
     every_call_rule,
     holding,
     inspect_headers,
@@ -398,6 +399,213 @@ async def test_providers_error_passes_through_unjudged_whatever_its_size_or_enco
     assert b"".join(each.body for each in passed) == error
     assert [each.end_of_stream for each in passed] == [False, True]
     assert await _not_judged(handler) == ("not_judged", "provider_error")
+
+
+@pytest.mark.anyio
+async def test_a_providers_error_reaches_the_handler_with_its_headers_and_body() -> (
+    None
+):
+    handler = RecordingHandler(weather_rule())
+    await holding(handler)
+    error = b'{"type": "error", "error": {"type": "overloaded_error"}}'
+    replied = _reply(error[:20], error[20:])
+    replied[0] = pb.ProcessingRequest(
+        response_headers=_headers(
+            {":status": "529", "content-type": "application/json", "retry-after": "7"}
+        )
+    )
+
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            *replied,
+        ],
+        handler,
+    )
+
+    # The shim calls `reply` when the error's headers arrive, with no body and
+    # without HTTP/2's pseudo-headers. It calls `error_body` with the body once
+    # the whole body has arrived.
+    (shown,) = handler.replies
+    assert (shown.status, shown.body) == (529, b"")
+    assert shown.headers == {"content-type": "application/json", "retry-after": "7"}
+    ((_, body),) = handler.error_bodies
+    assert body == error
+
+
+@pytest.mark.anyio
+async def test_a_compressed_error_is_passed_on_and_not_copied() -> None:
+    handler = RecordingHandler(weather_rule())
+    await holding(handler)
+    replied = _reply(b"\x1f\x8b compressed", b" error")
+    replied[0] = pb.ProcessingRequest(
+        response_headers=_headers(
+            {
+                ":status": "500",
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+            }
+        )
+    )
+
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            *replied,
+        ],
+        handler,
+    )
+
+    # The shim keeps no copy of a compressed body, because the sidecar couldn't
+    # read it. It still calls `error_body`, with an empty body, so the handler
+    # knows the whole error has arrived.
+    assert [body for _, body in handler.error_bodies] == [b""]
+
+
+class _SlowOnAnError(RecordingHandler):
+    """A handler whose `reply` is slow to return for a provider's error, and which records each call the shim makes to it about that error, in order."""
+
+    def __init__(self, *args: Any, **options: Any) -> None:
+        super().__init__(*args, **options)
+        self.shown = asyncio.Event()
+        self.go_on = asyncio.Event()
+        self.told: list[str] = []
+
+    async def reply(self, reply: Reply, *, released: bytes = b"") -> Any:
+        if not reply.body_follows:
+            return await super().reply(reply, released=released)
+        self.shown.set()
+        await self.go_on.wait()
+        answer = await super().reply(reply, released=released)
+        self.told.append("shown the error")
+        return answer
+
+    async def reply_not_judged(self, id: str, reason: Any) -> None:
+        self.told.append(f"not judged: {reason}")
+        await super().reply_not_judged(id, reason)
+
+    async def error_body(self, id: str, body: bytes) -> None:
+        self.told.append("the error's body")
+        await super().error_body(id, body)
+
+
+@pytest.mark.anyio(backends=["asyncio"])
+async def test_an_error_envoy_abandons_during_the_handover_is_reported_as_cut_off() -> (
+    None
+):
+    handler = _SlowOnAnError(weather_rule())
+    shim = EnvoyShim(handler, max_body_bytes=1024 * 1024)
+
+    async def sent() -> AsyncIterator[pb.ProcessingRequest]:
+        for each in [
+            *_REQUEST,
+            pb.ProcessingRequest(
+                response_headers=_headers(
+                    {":status": "529", "content-type": "application/json"}
+                )
+            ),
+        ]:
+            yield each
+        await asyncio.Event().wait()
+
+    answers = cast(
+        AsyncGenerator[pb.ProcessingResponse],
+        shim.Process(sent(), cast(Any, _Context(_ANTHROPIC))),
+    )
+    await answers.__anext__()
+    await answers.__anext__()
+    # Envoy closes the stream while the handler's `reply` is still running
+    await handler.shown.wait()
+    await answers.aclose()
+    handler.go_on.set()
+    with anyio.fail_after(5):
+        while len(handler.told) < 2:
+            await asyncio.sleep(0.01)
+
+    # The shim waits for `reply` to return, then calls `reply_not_judged` with
+    # `cut_off`. Without that call, the handler would wait forever for the
+    # error's body.
+    assert handler.told == ["shown the error", "not judged: cut_off"]
+
+
+@pytest.mark.anyio
+async def test_an_error_cut_off_after_the_handover_is_reported_as_cut_off() -> None:
+    handler = _SlowOnAnError(weather_rule())
+    handler.go_on.set()
+    await holding(handler)
+
+    # Envoy's stream ends after part of the error's body has arrived, as it
+    # does when the client goes away or the provider's connection is lost
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            pb.ProcessingRequest(
+                response_headers=_headers(
+                    {":status": "529", "content-type": "application/json"}
+                )
+            ),
+            pb.ProcessingRequest(
+                response_body=pb.HttpBody(body=b'{"type": "err', end_of_stream=False)
+            ),
+        ],
+        handler,
+    )
+
+    # the shim calls `reply_not_judged` with `cut_off`, and never `error_body`
+    assert handler.told == ["shown the error", "not judged: cut_off"]
+    assert handler.error_bodies == []
+
+
+@pytest.mark.anyio
+async def test_a_reply_header_sent_more_than_once_keeps_every_value() -> None:
+    handler = RecordingHandler(weather_rule())
+    await holding(handler)
+    sent = [
+        (":status", "529"),
+        ("content-type", "application/json"),
+        ("warning", '199 - "first"'),
+        ("retry-after", "7"),
+        ("warning", '199 - "second"'),
+    ]
+
+    await _process(
+        [
+            _from_inspect(),
+            pb.ProcessingRequest(
+                request_body=pb.HttpBody(body=_BODY, end_of_stream=True)
+            ),
+            pb.ProcessingRequest(
+                response_headers=pb.HttpHeaders(
+                    headers=core.HeaderMap(
+                        headers=[
+                            core.HeaderValue(key=name, raw_value=value.encode())
+                            for name, value in sent
+                        ]
+                    ),
+                    end_of_stream=True,
+                )
+            ),
+        ],
+        handler,
+    )
+
+    # Envoy sends one entry for each value of a repeated header. The shim
+    # joins the values in order into one header, as HTTP allows.
+    (shown,) = handler.replies
+    assert shown.headers == {
+        "content-type": "application/json",
+        "warning": '199 - "first", 199 - "second"',
+        "retry-after": "7",
+    }
 
 
 class _ReplacesEveryReply:

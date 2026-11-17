@@ -1,6 +1,6 @@
 """A guardrail for the LiteLLM proxy that calls a remote Inspect Sentinel endpoint over HTTPS.
 
-LiteLLM's `guardrails` setting names the class as `inspect_sentinel_litellm.LiteLLMGuardrail`. LiteLLM creates one at startup, then calls it with each model request before the request goes to a provider, and with the provider's reply before any of the reply goes to the caller. Each is put to the sidecar as a JSON-RPC 2.0 call, `judge_request` or `judge_reply`, whose result is carried out: pass, replace or refuse. A streamed reply is handed over as it arrives, as a reply stream, and the caller is sent what the sidecar releases of it. Inspect Sentinel does not run in LiteLLM: only this guardrail does, and the sentinels run in the sidecar it calls.
+LiteLLM's `guardrails` setting names the class as `inspect_sentinel_litellm.LiteLLMGuardrail`. LiteLLM creates one at startup. It then calls the guardrail with each model request before the request goes to a provider, and with the provider's reply before any of the reply goes to the caller. The guardrail sends each to the sidecar as a JSON-RPC 2.0 call, `judge_request` or `judge_reply`, and carries out the result: pass, replace or refuse. It sends a streamed reply to the sidecar as the reply arrives, as a reply stream, and sends the caller what the sidecar releases. When a request ends in an error, there is no reply to judge, so the guardrail sends the sidecar the error as a `judge_reply`, and the sidecar stops waiting for a reply. When the caller disconnects before a reply arrives, the guardrail tells the sidecar that no reply will come. Inspect Sentinel does not run in LiteLLM: only this guardrail does, and the sentinels run in the sidecar it calls.
 
 The class runs inside LiteLLM's process, so this package stands alone: it imports nothing from `inspect_sentinel`, and needs only LiteLLM and what LiteLLM's proxy has. The calls it makes and the results it reads are described by `proxy_endpoint.schema.json` in `inspect_sentinel`'s sidecar.
 
@@ -14,7 +14,7 @@ It is set in LiteLLM's config, beside `guardrail`, `mode` and `default_on`:
 
 Which requests reach the class is LiteLLM's own choice: `default_on`, or a request or key that names the guardrail.
 
-The guardrail also adds a route to LiteLLM's app, so that an Inspect eval reaches the sidecar's endpoint for evals at LiteLLM's own address: everything under `/sentinel/` is passed on to the sidecar, behind LiteLLM's own check of the caller's key.
+The guardrail also adds a route to LiteLLM's app, so that an Inspect eval reaches the sidecar's endpoint for evals at LiteLLM's own address. LiteLLM checks the caller's key, and the guardrail then passes everything under `/sentinel/` on to the sidecar. An eval also uses this route to fetch a reply that the sidecar held while a person decided: it sends the model call's request to `/sentinel/v1/judged-reply`, and the sidecar answers with the provider's reply and its headers. A streamed reply comes back as a stream.
 """
 
 from __future__ import annotations
@@ -30,11 +30,18 @@ import logging
 import re
 import sys
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Coroutine,
+    Iterable,
+    Mapping,
+)
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from fastapi import Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.utils import (  # pyright: ignore[reportMissingTypeStubs]
     all_litellm_params,
@@ -86,6 +93,23 @@ _KEPT = "inspect_sentinel"
 # where it is kept that the reply was handed over as a stream; the request's
 # own `stream` field is the caller's, and LiteLLM streams only for `True`
 _STREAMED = "inspect_sentinel_streamed"
+# The key under which the guardrail records that it has shown the sidecar how
+# the request ended, with a reply or with an error, so that it does so only
+# once. LiteLLM calls the failure hook for a refused reply as well as for a
+# provider's error.
+_REPLIED = "inspect_sentinel_replied"
+# The key under which the guardrail stores how the sidecar will release the
+# request's reply, `whole` or `early`. The sidecar says which in its answer to
+# `judge_request`.
+_RELEASE = "inspect_sentinel_release"
+# the prefix LiteLLM adds to the name of each header a provider sent, where it
+# stores those headers with a reply
+_PROVIDER_HEADER_PREFIX = "llm_provider-"
+# The reply headers the guardrail never shows the sidecar: a credential that a
+# provider echoes or sets, and `content-type`. The guardrail sends the content
+# type separately, as `content_type`. It describes the reply as LiteLLM wrote
+# it, which may differ from how the provider sent it.
+_REPLY_HEADERS_NOT_SHOWN = _CREDENTIALS | {"set-cookie", "content-type"}
 _MAX_REPLY_BYTES = 32 * 1024 * 1024
 # where the sidecar serves the methods this calls, and the version of them
 _PATH = "/proxy/v1"
@@ -95,14 +119,48 @@ _POLL_TIMEOUT = aiohttp.ClientTimeout(total=40)
 # a call to `reply_chunk` waits while the caller is slow to read what the
 # sidecar has released, which says nothing of how long the sidecar takes
 _CHUNK_TIMEOUT = aiohttp.ClientTimeout()
+# How long the guardrail waits for a stream's first chunk before it begins the
+# reply stream without it, in seconds. Waiting has two benefits: LiteLLM has
+# the provider's headers by then, and an error at the first read can be sent
+# to the sidecar with no reply stream to end. But a sidecar that releases
+# replies early sends the caller keepalives only once the reply stream has
+# begun. So the wait is short compared with the 15 seconds a sidecar leaves
+# between keepalives by default. The guardrail is not told that interval.
+_FIRST_CHUNK_WAIT = 5.0
+# How long the sidecar may take to answer each call that tells it no reply will
+# come. The limit is short because the sidecar judges nothing in these calls,
+# and the caller's cancellation waits until they return.
+_NO_REPLY_TIMEOUT = aiohttp.ClientTimeout(total=10)
+# The status LiteLLM gives a call it cancelled because its caller disconnected,
+# where its `cancel_on_disconnect` setting is on. No provider sent it.
+_CALLER_DISCONNECTED_STATUS = 499
 # how much a reply stream reads ahead of what it has handed to the sidecar
 _PENDING_BYTES = 1024 * 1024
 # the size a chunk this can't write counts as, for what is kept of it
 _UNSIZED = 1024
 # what an eval reaches through LiteLLM: everything under it is the sidecar's
-# endpoint for evals, and the paths an eval calls first
+# endpoint for evals. `_EVAL_PATHS` lists the paths an eval calls, and the
+# guardrail tells LiteLLM that a key for its OpenAI routes may call them.
 _EVAL_PREFIX = "/sentinel"
-_EVAL_PATHS = ("/sentinel/info", "/sentinel/v1")
+_EVAL_PATHS = ("/sentinel/info", "/sentinel/v1", "/sentinel/v1/judged-reply")
+# The headers of the sidecar's answer that the guardrail never passes on to an
+# eval: those that describe a single hop, and those that each hop's server
+# writes for itself.
+_SINGLE_HOP_HEADERS = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+        "date",
+        "server",
+    }
+)
 # one segment of a path under it that is passed on: never `.` or `..`
 _SEGMENT = re.compile(r"(?!\.{1,2}$)[A-Za-z0-9._~-]+")
 # a request's fields that carry a credential or say where a call goes, which
@@ -130,6 +188,7 @@ _NO_TIMEOUT = aiohttp.ClientTimeout(total=None)
 """No limit, for a call the sidecar's endpoint for evals bounds itself."""
 _LINE_END = re.compile(r"\r\n|\r|\n")
 _STREAM = "text/event-stream"
+_TEXT = "text/plain"
 # A request's own fields that LiteLLM rewrites the request from after this
 # guardrail has run, so that the provider would be sent what the sidecar
 # never judged. The provider's SDK merges `extra_body` over the request's
@@ -339,6 +398,9 @@ class LiteLLMGuardrail(CustomGuardrail):
             self._unanswered()
             return data
         record[_KEPT] = told
+        # An older sidecar's answer has no `release`. Such a sidecar holds each
+        # reply whole.
+        record[_RELEASE] = answer.get("release")
         return data
 
     async def async_post_call_success_hook(
@@ -358,8 +420,13 @@ class LiteLLMGuardrail(CustomGuardrail):
             # it has gone out, where it can't be stopped. The stream was judged
             # as it went, and the sidecar has let go of its request.
             return None
+        # Set before the guardrail asks the sidecar, because a refusal of the
+        # reply is raised, and LiteLLM then calls the failure hook with it.
+        _record(data)[_REPLIED] = True
         try:
-            answer = await self._ask_about_reply(told, _JSON, _whole(response))
+            answer = await self._ask_about_reply(
+                told, _JSON, _whole(response), _provider_headers(response, data)
+            )
             if answer["action"] == "replace":
                 return _replaced_whole(response, _replacement(answer))
         except SidecarError:
@@ -376,6 +443,10 @@ class LiteLLMGuardrail(CustomGuardrail):
 
         The reply goes to the sidecar's reply stream as LiteLLM yields it, and what the sidecar releases is yielded as it is released: the whole reply once judged, or, where the sidecar releases replies early, the text and reasoning before the turn's first call as they arrive, and the rest once the turn is judged. LiteLLM sends the caller nothing, the status included, until this yields.
 
+        The guardrail begins the reply stream once the stream's first chunk has arrived, because LiteLLM has the provider's headers only then, and LiteLLM calls some providers only at that first read. If the stream fails at that read, before the reply stream has begun, the failure hook sends the sidecar the error, as it does for a request that wasn't streamed. There is one case in which the guardrail doesn't wait for the first chunk. If the sidecar's answer to `judge_request` said that it releases the reply early, and the route can carry a keepalive, the guardrail waits only `_FIRST_CHUNK_WAIT` seconds. It then begins the reply stream without the first chunk, with the headers LiteLLM has by then, so that the sidecar's keepalives reach the caller while the provider is silent. If the stream then fails at its first read, the guardrail still sends the sidecar the provider's error, and raises it. LiteLLM answers with the error's own status if nothing has gone out, and writes the error into the stream if a keepalive has. On the Responses route, the event LiteLLM writes is one the OpenAI SDK doesn't raise on. So after a keepalive the guardrail ends the stream with a `response.failed` event of its own, whose error code follows the provider's status.
+
+        If the caller disconnects while the guardrail waits for the first chunk, the guardrail tells the sidecar that no reply will come, so that the sidecar stops waiting for one.
+
         A reply refused while nothing has gone out is answered with an error event in place of the reply, which LiteLLM sends the caller as an error under the refusal's status. Once something has gone out, a refusal is an error event in the stream, which the provider's SDK raises on. Where the sidecar gives no usable answer, `unreachable_fallback` decides while nothing has gone out; after that, the reply ends with an error event, since what went out can't be matched to what LiteLLM yielded.
         """
         chunks = cast("AsyncIterator[Any]", response)
@@ -386,13 +457,104 @@ class LiteLLMGuardrail(CustomGuardrail):
             return
         # before the stream is read, since LiteLLM 1.83 shows the reply to the
         # success hook while its last chunk is read
-        _record(request_data)[_STREAMED] = True
-        relay = _Relay(self, told, chunks)
+        record = _record(request_data)
+        record[_STREAMED] = True
+        # LiteLLM passes in something to iterate, which may not be an iterator
+        # itself. A separate task reads its first chunk, so that the guardrail
+        # can stop waiting before the chunk arrives.
+        chunks = aiter(chunks)
+        first = asyncio.ensure_future(_first_chunk(chunks))
+        first.add_done_callback(_consume_exception)
         try:
-            async for chunk in relay.released():
-                yield chunk
+            try:
+                # The sidecar sends keepalives only for a reply it releases
+                # early, which it said in its answer to `judge_request`, and
+                # only some routes can carry a keepalive to the caller. In any
+                # other case, beginning the reply stream without the first
+                # chunk gains nothing, so the guardrail waits for the chunk
+                # with no limit.
+                keepalive_expected = record.get(
+                    _RELEASE
+                ) == "early" and _route_carries_keepalive(told["format"])
+                await asyncio.wait(
+                    {first},
+                    timeout=_FIRST_CHUNK_WAIT if keepalive_expected else None,
+                )
+            except asyncio.CancelledError:
+                # The caller disconnected before the provider's first chunk,
+                # and LiteLLM cancelled this wait. LiteLLM calls no hook for a
+                # cancellation, so the guardrail tells the sidecar here that
+                # no reply will come. Otherwise the sidecar would go on
+                # waiting for one.
+                first.cancel()
+                await asyncio.wait({first})
+                await self._report_no_reply_to_sidecar(told, _STREAM)
+                raise
+            if first.done():
+                if first.cancelled():
+                    # The read of the provider's stream was itself cancelled,
+                    # so no reply will come in this case either.
+                    await self._report_no_reply_to_sidecar(told, _STREAM)
+                    raise asyncio.CancelledError
+                failure = first.exception()
+                if failure is not None:
+                    # The provider's call failed before its stream began. For
+                    # some providers, such as Gemini and Vertex, LiteLLM makes
+                    # the call only at the stream's first read, so their
+                    # errors arrive here. The guardrail has sent the sidecar
+                    # nothing yet. LiteLLM calls the failure hook with the
+                    # error, and that hook sends it to the sidecar as it does
+                    # for a request that wasn't streamed. Clearing `_STREAMED`
+                    # lets the hook do so.
+                    record.pop(_STREAMED, None)
+                    raise failure
+            # LiteLLM has the provider's headers only once it has made the
+            # call, so a reply stream begun before the first chunk may have none.
+            relay = _Relay(
+                self,
+                told,
+                _whole_stream(first, chunks),
+                _provider_headers(response, request_data),
+            )
+            try:
+                async for chunk in relay.released():
+                    yield chunk
+            finally:
+                await _run_shielded(relay.close())
         finally:
-            await relay.close()
+            if not first.done():
+                # The read of the first chunk is still running, and nothing
+                # else will end it.
+                first.cancel()
+                await _run_shielded(asyncio.wait({first}))
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, Any],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        """Tell the sidecar that a request it let through ended in an error, so there is no reply to judge.
+
+        LiteLLM calls this hook with whatever stopped a call: a provider's error, a provider it could not reach, or a refusal by LiteLLM or by a guardrail. The guardrail tells the sidecar only about a request that the sidecar let through, and only if the guardrail has shown the sidecar no reply for it. The sidecar already knows about a reply it refused, and about a stream that failed after its reply stream had begun. A stream that failed before then, such as one whose provider LiteLLM calls only at the first read, is reported here as an error, like a request that wasn't streamed. The guardrail sends the error as a `judge_reply`, with the status LiteLLM answers its caller with, the provider's headers where LiteLLM kept them, and what LiteLLM kept of the provider's body. The sidecar then stops waiting for a reply. If the model call was paused for a person, the sidecar lets the eval resend the request, and tells the eval what failed.
+
+        One error is not a provider's: the 499 that LiteLLM raises for a call it cancelled because its caller disconnected, where its `cancel_on_disconnect` setting is on. The provider sent nothing. So the guardrail tells the sidecar that no reply will come, as for a lost connection, and the sidecar holds no error that an eval could take for the provider's.
+
+        LiteLLM answers the caller with its own error whatever the sidecar says. So this hook returns nothing, and a sidecar that gives no usable answer changes nothing.
+        """
+        told = _told(request_data)
+        if told is None:
+            return None
+        record = _record(request_data)
+        if record.get(_STREAMED) or record.get(_REPLIED):
+            return None
+        record[_REPLIED] = True
+        if _caller_disconnected(original_exception):
+            await self._report_no_reply_to_sidecar(told, _JSON)
+        else:
+            await self._report_error_to_sidecar(told, original_exception)
+        return None
 
     async def aclose(self) -> None:
         """Close the connection to the sidecar."""
@@ -404,6 +566,8 @@ class LiteLLMGuardrail(CustomGuardrail):
         """Pass everything under `/sentinel/` in LiteLLM's app on to the sidecar, behind LiteLLM's check of the caller's key.
 
         An Inspect eval knows only the base URL of the model API it calls, which here is LiteLLM's, and reaches the sidecar's endpoint for evals there. LiteLLM's own routes would otherwise answer these paths first, or forward them to a provider, so the route is put ahead of them. A key that may call LiteLLM's OpenAI routes may call these too.
+
+        The guardrail sends the sidecar the request's body, its `content-type`, and Inspect's own `x-irid` and `x-inspect-context` headers. A fetch of a judged reply names its model call with those two headers. The guardrail sends no other header, so the sidecar never sees the caller's key. The guardrail returns the sidecar's answer with its status and its headers, apart from the single-hop headers, and passes an event stream on as it arrives.
 
         LiteLLM's proxy calls this when it makes the guardrail. Calling it again adds nothing.
         """
@@ -432,25 +596,47 @@ class LiteLLMGuardrail(CustomGuardrail):
                 )
             session = self._session_to_sidecar()
             url = f"{self._base}{_EVAL_PREFIX}/{rest}"
-            # only the body and what it is: the caller's key was LiteLLM's to
-            # check, and is never the sidecar's to see
-            headers = {"content-type": request.headers.get("content-type", _JSON)}
+            # The guardrail sends the sidecar only the body, its content type,
+            # and Inspect's own headers, which name the model call and prove
+            # which eval sent it. LiteLLM has checked the caller's key, and
+            # the sidecar never sees it. `accept-encoding: identity` asks the
+            # sidecar not to compress its answer, because the caller that
+            # receives it may not have asked for compression.
+            headers = {
+                "content-type": request.headers.get("content-type", _JSON),
+                "accept-encoding": "identity",
+            }
+            for name in _INSPECT_HEADERS:
+                if name in request.headers:
+                    headers[name] = request.headers[name]
             # Not the guardrail's timeout, which is for judging a call: the
             # sidecar bounds these itself, and `request_result` holds its
             # answer for up to 30 seconds while a call is still being judged.
+            # `auto_decompress=False` passes the answer's bytes on undecoded,
+            # so that they still match the answer's `content-encoding` header.
             try:
-                async with session.request(
+                answer = await session.request(
                     request.method,
                     url,
                     params=list(request.query_params.multi_items()),
                     data=await request.body(),
                     headers=headers,
                     timeout=_NO_TIMEOUT,
-                ) as answer:
-                    return Response(
-                        content=await answer.read(),
-                        status_code=answer.status,
-                        media_type=answer.headers.get("content-type"),
+                    auto_decompress=False,
+                )
+                # A streamed judged reply is passed on as it arrives, as the
+                # provider's own stream would be. `_SidecarStreamResponse` closes the
+                # sidecar's answer when the stream ends or the caller
+                # disconnects. Any other answer is read whole here, and closed
+                # at once.
+                if answer.content_type == _STREAM:
+                    return _with_answer_headers(_SidecarStreamResponse(answer), answer)
+                async with answer:
+                    return _with_answer_headers(
+                        Response(
+                            content=await answer.read(), status_code=answer.status
+                        ),
+                        answer,
                     )
             except (aiohttp.ClientError, asyncio.TimeoutError) as ex:
                 logger.warning(
@@ -496,22 +682,80 @@ class LiteLLMGuardrail(CustomGuardrail):
             )
         return self._session
 
+    async def _report_error_to_sidecar(
+        self, told: dict[str, Any], ex: BaseException
+    ) -> None:
+        # A request the sidecar let through ended in this error, so there is no
+        # reply to judge. The guardrail sends the sidecar the error as a
+        # `judge_reply`, with the status, headers and body that LiteLLM kept.
+        body = _error_body(ex)
+        try:
+            await self._call(
+                "judge_reply",
+                told
+                | {
+                    "status": _error_status(ex),
+                    "content_type": _JSON if _is_json_object(body) else _TEXT,
+                    "headers": _error_headers(ex),
+                    "body": base64.b64encode(body).decode("ascii"),
+                },
+            )
+        except SidecarError:
+            # `_failed` has logged it. LiteLLM answers the caller with its own
+            # error either way.
+            pass
+
+    async def _report_no_reply_to_sidecar(
+        self, told: dict[str, Any], content_type: str
+    ) -> None:
+        # No reply will come for a request the sidecar let through, and no
+        # provider's error either, as when the caller disconnected first. The
+        # endpoint for proxies has one way to say so: begin a reply stream,
+        # then abort it. The sidecar records that as a reply that was cut off.
+        # The status is 200, as for any reply stream, because the sidecar
+        # would take another status for a provider's error. The guardrail asks
+        # for no keepalive, because no caller is left to receive one.
+        try:
+            await self._call(
+                "begin_reply",
+                told
+                | {
+                    "status": 200,
+                    "content_type": content_type,
+                    "headers": {},
+                    "keepalive": False,
+                },
+                _NO_REPLY_TIMEOUT,
+            )
+            await self._call("abort_reply", {"id": told["id"]}, _NO_REPLY_TIMEOUT)
+        except SidecarError:
+            # `_failed` has logged it. If the reply stream was begun and never
+            # aborted, the sidecar aborts it itself once no call has named it
+            # for a while.
+            pass
+
     def _unanswered(self) -> None:
         # the sidecar gave no usable answer, and the reason is already logged
         if not self._let_through:
             raise HTTPException(503, "The sentinel sidecar gave no usable answer.")
 
     async def _ask_about_reply(
-        self, told: dict[str, Any], content_type: str, body: bytes
+        self,
+        told: dict[str, Any],
+        content_type: str,
+        body: bytes,
+        headers: dict[str, str],
     ) -> dict[str, Any]:
         return await self._ask(
             "judge_reply",
             told
             | {
-                # LiteLLM calls a guardrail only with a reply the provider
-                # gave, and never with a provider's error
+                # LiteLLM calls the success hook only with a reply the
+                # provider gave, so the status is 200. A provider's error goes
+                # to the failure hook.
                 "status": 200,
                 "content_type": content_type,
+                "headers": headers,
                 "body": base64.b64encode(body).decode("ascii"),
             },
         )
@@ -570,6 +814,73 @@ class LiteLLMGuardrail(CustomGuardrail):
         return cast("dict[str, Any]", answer)
 
 
+_NO_CHUNK = object()
+"""Stands in for the first chunk of a stream that had no chunks."""
+
+
+async def _first_chunk(chunks: AsyncIterator[Any]) -> Any:
+    # a stream's first chunk, or `_NO_CHUNK` for a stream that has none
+    try:
+        return await anext(chunks)
+    except StopAsyncIteration:
+        return _NO_CHUNK
+
+
+def _consume_exception(first: asyncio.Future[Any]) -> None:
+    # Read the exception of the first read. Otherwise asyncio logs it as never
+    # retrieved when the caller disconnects before anything awaits the task.
+    if not first.cancelled():
+        first.exception()
+
+
+_CLEAN_UP_WAIT = 10.0
+"""How long the clean-up at a stream's end may take, in seconds.
+
+The clean-up calls the sidecar to tell it that the guardrail is done with the stream, and it keeps running after the caller has disconnected. The guardrail's own `timeout` is unset by default, so without this limit the clean-up could wait indefinitely on a sidecar that never answers. The limit is the same as `_NO_REPLY_TIMEOUT`. If the sidecar isn't told in that time, it drops the request itself once no call has named it for a while.
+"""
+
+_clean_up_tasks: set[asyncio.Future[None]] = set()
+"""The clean-up tasks that are still running. asyncio keeps only a weak reference to a task, so a task that nothing awaits any more is kept here until it is done."""
+
+
+async def _run_shielded(clean_up: Coroutine[Any, Any, Any]) -> None:
+    # Run a stream's clean-up where cancelling the stream can't cut it short.
+    # Starlette sends LiteLLM's streamed response. When the caller disconnects,
+    # Starlette stops the response by cancelling a cancel scope. That cancels
+    # every later await in the response's task, not only the one in progress.
+    # So a clean-up awaited in that task would end at its first await, and the
+    # guardrail would never tell the sidecar. The clean-up therefore runs in a
+    # task of its own, which the scope doesn't reach, for at most
+    # `_CLEAN_UP_WAIT` seconds.
+    async def bounded() -> None:
+        try:
+            await asyncio.wait_for(clean_up, _CLEAN_UP_WAIT)
+        except asyncio.TimeoutError:
+            # The sidecar drops the request itself once no call has named it
+            # for a while.
+            pass
+
+    task = asyncio.ensure_future(bounded())
+    _clean_up_tasks.add(task)
+    task.add_done_callback(_clean_up_tasks.discard)
+
+    # The code that called `_run_shielded` waits for the clean-up. If that wait is
+    # cancelled, the clean-up still runs to its end.
+    await asyncio.shield(task)
+
+
+async def _whole_stream(
+    first: asyncio.Future[Any], chunks: AsyncIterator[Any]
+) -> AsyncIterator[Any]:
+    # The whole stream again: its first chunk, which was read separately, and
+    # then the rest.
+    chunk = await first
+    if chunk is not _NO_CHUNK:
+        yield chunk
+    async for chunk in chunks:
+        yield chunk
+
+
 class _Relay:
     """One streamed reply, handed to the sidecar's reply stream as LiteLLM yields it, and what the sidecar releases of it."""
 
@@ -578,10 +889,13 @@ class _Relay:
         guardrail: LiteLLMGuardrail,
         told: dict[str, Any],
         chunks: AsyncIterator[Any],
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._guardrail = guardrail
         self._told = told
         self._chunks = chunks
+        # the provider's headers, where LiteLLM kept them with the stream
+        self._headers = headers or {}
         self._format: str = told["format"]
         # a chunk of each kind LiteLLM yielded, which released events are made
         # in the classes of, and the stream's opening and its latest chunk,
@@ -598,6 +912,9 @@ class _Relay:
         self._pending = bytearray()
         self._size = 0
         self._read_all = False
+        # whether LiteLLM yielded any chunk, which distinguishes a stream that
+        # failed at its first read from one that failed part way through
+        self._any_chunk_read = False
         # LiteLLM's own error while reading, and the reason handing over
         # stopped, either of which ends the relay at once
         self._raised: Exception | None = None
@@ -608,6 +925,9 @@ class _Relay:
         self._to_yield = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
         self._begun = False
+        # set once the guardrail has told the sidecar that it stopped before
+        # the reply's end
+        self._aborted = False
         # once the sidecar has given the reply's end, how many outputs that
         # makes, which it is told the guardrail has, so it lets go of them
         self._ended_at: int | None = None
@@ -637,8 +957,8 @@ class _Relay:
                 | {
                     "status": 200,
                     "content_type": _STREAM,
-                    "keepalive": self._format not in (_CHAT, _RESPONSES)
-                    or _PASSES_BYTES_ON,
+                    "headers": self._headers,
+                    "keepalive": _route_carries_keepalive(self._format),
                 },
             )
             self._begun = True
@@ -715,6 +1035,31 @@ class _Relay:
             # let through unjudged, as LiteLLM yields it
             async for chunk in self._unjudged():
                 yield chunk
+        except Exception as failure:
+            if not (
+                failure is self._raised
+                and not self._any_chunk_read
+                and committed
+                and self._format == _RESPONSES
+            ):
+                # Any other error is raised unchanged, and LiteLLM answers
+                # its caller with it.
+                raise
+            # The provider failed at a Responses stream's first read, after a
+            # keepalive had already sent the status. LiteLLM would write an
+            # error raised now into a `response.failed` event of its own, and
+            # the OpenAI SDK passes that event on without raising. So the
+            # guardrail ends the stream with its own `response.failed` event
+            # instead, as it does for a refused stream. That event has a
+            # top-level error whose code follows the provider's status, and
+            # the SDK raises on it. The guardrail sends the sidecar the error
+            # first, in `_abort`, because the caller disconnects when the SDK
+            # raises, before `close` could tell the sidecar anything.
+            await self._abort()
+            yield _response_failed(
+                self._context,
+                HTTPException(_error_status(failure), _error_message(failure)),
+            )
 
     def _refused(self, refused: HTTPException, committed: bool) -> Any:
         # The first event of a stream that is an error is answered as that
@@ -726,7 +1071,7 @@ class _Relay:
         return _refused_stream(self._context, refused, self._format)
 
     async def close(self) -> None:
-        """Stop reading and handing over, and tell the sidecar the guardrail is done with the stream: that it has the reply's end, or that it stopped before it."""
+        """Stop reading the reply and sending it to the sidecar, and tell the sidecar that the guardrail is done with the stream: either it has the reply's end, or it stopped before the end. If the provider failed at the stream's first read, the guardrail sends the sidecar that error first, as the request's error."""
         if self._timer is not None:
             self._timer.cancel()
         for task in self._tasks:
@@ -735,14 +1080,36 @@ class _Relay:
             await asyncio.wait(self._tasks)
         if not self._begun:
             return
-        guardrail, id = self._guardrail, self._told["id"]
+        if self._ended_at is None:
+            await self._abort()
+            return
         try:
-            if self._ended_at is not None:
-                await guardrail._call(  # pyright: ignore[reportPrivateUsage]
-                    "next_release", {"id": id, "after": self._ended_at}
-                )
-            else:
-                await guardrail._call("abort_reply", {"id": id})  # pyright: ignore[reportPrivateUsage]
+            await self._guardrail._call(  # pyright: ignore[reportPrivateUsage]
+                "next_release", {"id": self._told["id"], "after": self._ended_at}
+            )
+        except SidecarError:
+            # The sidecar drops the reply stream itself once no call has named
+            # it for a while.
+            pass
+
+    async def _abort(self) -> None:
+        # Tell the sidecar, once, that the guardrail stopped before the reply's
+        # end.
+        if self._aborted:
+            return
+        self._aborted = True
+        guardrail = self._guardrail
+        if self._raised is not None and not self._any_chunk_read:
+            # The provider's call failed at the stream's first read, after the
+            # guardrail had begun the reply stream so that keepalives could
+            # flow. No reply came, so the guardrail sends the sidecar the
+            # error, as it does for a request that wasn't streamed. It sends
+            # the error before the abort. The sidecar stops waiting for the
+            # request's reply when it gets the error, so the abort that
+            # follows has no reply to record as cut off.
+            await guardrail._report_error_to_sidecar(self._told, self._raised)  # pyright: ignore[reportPrivateUsage]
+        try:
+            await guardrail._call("abort_reply", {"id": self._told["id"]})  # pyright: ignore[reportPrivateUsage]
         except SidecarError:
             # the sidecar lets go of it once no call names it
             pass
@@ -768,7 +1135,7 @@ class _Relay:
             for racing in (polling, failing):
                 if not racing.done():
                     racing.cancel()
-            await asyncio.wait({polling, failing})
+            await _run_shielded(asyncio.wait({polling, failing}))
             self._stop_timer()
         if polling not in done:
             if self._raised is not None:
@@ -786,6 +1153,7 @@ class _Relay:
         limit = self._guardrail._max_reply_bytes  # pyright: ignore[reportPrivateUsage]
         try:
             async for chunk in self._chunks:
+                self._any_chunk_read = True
                 self._note(chunk)
                 written = _written_or_none(chunk)
                 size = len(written) if written is not None else _UNSIZED
@@ -945,6 +1313,60 @@ def _covers(pattern: str, name: str) -> bool:
     return name.startswith(pattern[:-1]) if pattern.endswith("*") else name == pattern
 
 
+class _SidecarStreamResponse(StreamingResponse):
+    """An event stream that the sidecar answers an eval with, passed on to the caller as it arrives.
+
+    The guardrail closes the sidecar's answer when the caller has received all of it, and also when the caller disconnects first, so that the sidecar isn't left writing a stream nobody reads. The session that the answer arrived on stays open for the guardrail's other calls.
+    """
+
+    def __init__(self, answer: aiohttp.ClientResponse) -> None:
+        super().__init__(_answer_chunks(answer), status_code=answer.status)
+        self._answer = answer
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # If the answer was read to its end, its connection is already
+            # back in the session's pool, and this does nothing.
+            self._answer.close()
+
+
+async def _answer_chunks(answer: aiohttp.ClientResponse) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in answer.content.iter_any():
+            yield chunk
+    except (aiohttp.ClientError, asyncio.TimeoutError) as ex:
+        # The status has already been sent to the caller, so the guardrail
+        # cuts the stream short instead of ending it. A client reads that as a
+        # failed connection.
+        logger.warning(
+            "The sentinel sidecar's stream ended before its end (%s).",
+            type(ex).__name__,
+        )
+        raise
+
+
+def _with_answer_headers(
+    response: Response, answer: aiohttp.ClientResponse
+) -> Response:
+    # The caller gets the sidecar's answer with its headers. A judged reply's
+    # headers are the provider's own, and a provider's SDK reads them. The
+    # guardrail drops the single-hop headers, and any header that the answer's
+    # `connection` header names, because LiteLLM's server writes its own. That
+    # includes `content-length`, which LiteLLM's server writes for the body it
+    # sends.
+    one_hop = _SINGLE_HOP_HEADERS | {
+        name.strip().lower()
+        for value in answer.headers.getall("connection", [])
+        for name in value.split(",")
+    }
+    for name, value in answer.headers.items():
+        if name.lower() not in one_hop:
+            response.headers.append(name, value)
+    return response
+
+
 def _record(data: dict[str, Any]) -> dict[str, Any]:
     # LiteLLM's own record of the request as the caller sent it
     record = data.get("proxy_server_request")
@@ -994,6 +1416,149 @@ def _headers(record: dict[str, Any]) -> dict[str, str]:
         str(name).lower(): str(value)
         for name, value in cast("Mapping[Any, Any]", headers).items()
     }
+
+
+def _reply_headers(headers: object) -> dict[str, str]:
+    # a reply's headers as the guardrail shows them to the sidecar: lowercase
+    # names, no credentials, and none of LiteLLM's own `x-litellm-` headers,
+    # which no provider sent
+    if not isinstance(headers, Mapping):
+        return {}
+    shown: dict[str, str] = {}
+    for name, value in cast("Mapping[Any, Any]", headers).items():
+        lowered = str(name).lower()
+        if lowered in _REPLY_HEADERS_NOT_SHOWN or lowered.startswith("x-litellm-"):
+            continue
+        shown[lowered] = str(value)
+    return shown
+
+
+def _provider_headers(response: Any, data: dict[str, Any]) -> dict[str, str]:
+    # The headers a provider sent with a reply, where LiteLLM kept them. On
+    # most routes LiteLLM keeps them in the `_hidden_params` of the reply or
+    # the stream, each under its name prefixed with `llm_provider-`. On the
+    # Messages route LiteLLM keeps the provider's response itself in its log
+    # of the call, and `_hidden_params` has the headers only for a stream, and
+    # only in later versions. A reply with neither has no headers to show. One
+    # example is a stream that another callback has wrapped on an OpenAI route.
+    hidden_params: Any = (
+        cast("dict[str, Any]", response).get("_hidden_params")
+        if isinstance(response, dict)
+        else getattr(response, "_hidden_params", None)
+    )
+    additional_headers: Any = (
+        cast("Mapping[Any, Any]", hidden_params).get("additional_headers")
+        if isinstance(hidden_params, Mapping)
+        else None
+    )
+    headers = _reply_headers(
+        {
+            str(name)[len(_PROVIDER_HEADER_PREFIX) :]: value
+            for name, value in cast("Mapping[Any, Any]", additional_headers).items()
+            if str(name).startswith(_PROVIDER_HEADER_PREFIX)
+        }
+        if isinstance(additional_headers, Mapping)
+        else None
+    )
+    if headers:
+        return headers
+    call_details: Any = getattr(
+        data.get("litellm_logging_obj"), "model_call_details", None
+    )
+    if not isinstance(call_details, Mapping):
+        return {}
+    provider_response: Any = cast("Mapping[Any, Any]", call_details).get(
+        "httpx_response"
+    )
+    return _reply_headers(getattr(provider_response, "headers", None))
+
+
+def _route_carries_keepalive(format: str) -> bool:
+    # Whether a keepalive, which is an SSE comment, reaches the caller when the
+    # guardrail yields it on this format's route. LiteLLM passes on the bytes a
+    # guardrail yields on its Messages route in every version, and on its Chat
+    # and Responses routes only from 1.105.
+    return format not in (_CHAT, _RESPONSES) or _PASSES_BYTES_ON
+
+
+def _caller_disconnected(ex: BaseException) -> bool:
+    # Whether the error is LiteLLM's own for a call it cancelled because its
+    # caller disconnected. LiteLLM raises that one as an `HTTPException`. A
+    # provider's error reaches the failure hook as one of LiteLLM's own error
+    # classes, so a provider's 499 is not mistaken for it.
+    return (
+        isinstance(ex, HTTPException) and ex.status_code == _CALLER_DISCONNECTED_STATUS
+    )
+
+
+def _error_status(ex: BaseException) -> int:
+    # the status LiteLLM answers its caller with: the error's own, or 500 for
+    # an error that has none, as for a provider it could not reach
+    try:
+        status = int(getattr(ex, "status_code", 500))
+    except (TypeError, ValueError):
+        return 500
+    # A status outside 400 to 599 becomes 500, because the sidecar would read
+    # it as a reply to judge.
+    return status if 400 <= status <= 599 else 500
+
+
+def _error_headers(ex: BaseException) -> dict[str, str]:
+    # The headers a provider sent with an error. The guardrail looks where
+    # LiteLLM itself looks when it decides whether to retry: on the error, on
+    # the response the error holds, and where LiteLLM copied them when it
+    # wrapped the error in its own class. An error with no provider's reply
+    # behind it has none.
+    for candidate in (
+        getattr(ex, "headers", None),
+        getattr(getattr(ex, "response", None), "headers", None),
+        getattr(ex, "litellm_response_headers", None),
+    ):
+        headers = _reply_headers(candidate)
+        if headers:
+            return headers
+    return {}
+
+
+def _error_body(ex: BaseException) -> bytes:
+    # What LiteLLM kept of a provider's error. In order of preference: the
+    # provider's own bytes, where the error holds the response; the body
+    # LiteLLM read from it, where the error holds that; otherwise the error's
+    # message. The message is LiteLLM's own text, with the provider's inside
+    # it. That is so on the Messages route too: LiteLLM 1.105 writes its own
+    # text there for a model it reaches through its router. The guardrail
+    # doesn't extract the provider's body from that text, because it would
+    # have to guess what LiteLLM wrote around it.
+    try:
+        content: Any = getattr(getattr(ex, "response", None), "content", None)
+    except Exception:
+        # a response whose body was never read raises when asked for it
+        content = None
+    if isinstance(content, bytes) and content:
+        return content
+    body: Any = getattr(ex, "body", None)
+    if isinstance(body, (dict, list)):
+        try:
+            return json.dumps(body).encode()
+        except (TypeError, ValueError):
+            pass
+    if isinstance(body, str) and body:
+        return body.encode()
+    return _error_message(ex).encode()
+
+
+def _error_message(ex: BaseException) -> str:
+    # the error's message as LiteLLM wrote it, which includes the provider's
+    # message
+    message: Any = getattr(ex, "message", None)
+    return message if isinstance(message, str) and message else str(ex)
+
+
+def _is_json_object(body: bytes) -> bool:
+    try:
+        return isinstance(json.loads(body), dict)
+    except ValueError:
+        return False
 
 
 def _told(data: dict[str, Any]) -> dict[str, Any] | None:

@@ -60,6 +60,14 @@
           "title": "Content Type",
           "type": "string"
         },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The reply's headers as the provider sent them, without credentials. A proxy hook that has them sends them, for a provider's error too. The sidecar keeps them with the reply it holds for a model call paused for a person, so that the eval can read that reply as the provider's own. It also keeps them with a provider's error, where they say whether the call may be retried.",
+          "title": "Headers",
+          "type": "object"
+        },
         "keepalive": {
           "default": true,
           "description": "Whether the proxy hook can send the caller a keepalive, an SSE comment, as a `release` while the reply is held. Where it can't, none is given, so that a refusal keeps its status for as long as nothing else has gone out.",
@@ -101,7 +109,10 @@
                 "error",
                 "provider_error",
                 "cut_off",
-                "replaced_attempt"
+                "replaced_attempt",
+                "cancelled",
+                "result_under_review",
+                "expired"
               ],
               "type": "string"
             },
@@ -192,8 +203,16 @@
           "title": "Content Type",
           "type": "string"
         },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The reply's headers as the provider sent them, without credentials. A proxy hook that has them sends them, for a provider's error too. The sidecar keeps them with the reply it holds for a model call paused for a person, so that the eval can read that reply as the provider's own. It also keeps them with a provider's error, where they say whether the call may be retried.",
+          "title": "Headers",
+          "type": "object"
+        },
         "body": {
-          "description": "The reply's body, as base64.",
+          "description": "The reply's body, as base64. A proxy hook sends a provider's error with its body too.",
           "title": "Body",
           "type": "string"
         }
@@ -349,8 +368,31 @@
       "title": "NextReleaseResult",
       "type": "object"
     },
+    "PassRequestResult": {
+      "description": "Pass the request on to the provider unchanged.",
+      "properties": {
+        "action": {
+          "const": "pass",
+          "default": "pass",
+          "title": "Action",
+          "type": "string"
+        },
+        "release": {
+          "default": "whole",
+          "description": "How the sidecar will release this request's reply if the reply is streamed. `whole`: the sidecar holds the reply until the sentinel has judged it. `early`: the sidecar releases the text and reasoning before the turn's first tool call as they arrive, and sends keepalives while it releases nothing. A proxy hook that sends a streamed reply as it arrives can use this to know whether its caller receives anything while the provider is silent. A hook that doesn't need it can ignore it. A sidecar that leaves it out holds replies whole.",
+          "enum": [
+            "whole",
+            "early"
+          ],
+          "title": "Release",
+          "type": "string"
+        }
+      },
+      "title": "PassRequestResult",
+      "type": "object"
+    },
     "PassResult": {
-      "description": "Send the request or the reply on as it is.",
+      "description": "Pass the reply on to the caller unchanged.",
       "properties": {
         "action": {
           "const": "pass",
@@ -476,6 +518,16 @@
           "description": "The request's JSON body.",
           "title": "Body",
           "type": "object"
+        },
+        "release": {
+          "default": "whole",
+          "description": "How the sidecar will release this request's reply if the reply is streamed. `whole`: the sidecar holds the reply until the sentinel has judged it. `early`: the sidecar releases the text and reasoning before the turn's first tool call as they arrive, and sends keepalives while it releases nothing. A proxy hook that sends a streamed reply as it arrives can use this to know whether its caller receives anything while the provider is silent. A hook that doesn't need it can ignore it. A sidecar that leaves it out holds replies whole.",
+          "enum": [
+            "whole",
+            "early"
+          ],
+          "title": "Release",
+          "type": "string"
         }
       },
       "required": [
@@ -551,7 +603,7 @@
       "result": {
         "oneOf": [
           {
-            "$ref": "#/$defs/PassResult"
+            "$ref": "#/$defs/PassRequestResult"
           },
           {
             "$ref": "#/$defs/ReplaceRequestResult"

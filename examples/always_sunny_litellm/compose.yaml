@@ -1,5 +1,5 @@
-# The always_sunny example end to end: LiteLLM, and the sidecar deciding for
-# it. See README.md.
+# The always_sunny example behind LiteLLM: LiteLLM in front of the model
+# providers, and the sidecar deciding for it. See README.md.
 services:
   litellm:
     build:

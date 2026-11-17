@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 Stage: TypeAlias = Literal["model_input", "model_output", "tool_call", "tool_result"]
 """Where a step was judged, named as Inspect's transcript names it."""
+
+AskHuman: TypeAlias = Callable[
+    [BeforeToolCall | AfterToolCall, Escalations, Sequence[str]], Awaitable[HumanAnswer]
+]
+"""A function that asks a person about a tool step. It takes the step, the escalations and the choices, and waits for the person's answer."""
 
 
 @dataclass(frozen=True)
@@ -85,7 +90,7 @@ def noting_models(
 class SidecarHost:
     """What a sentinel in a sidecar may do to the outside world: the sidecar's `HostNative`.
 
-    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. A person can't be asked yet: at a tool stage the answer is the most cautious choice offered, so the step fails closed, and at a generate stage asking fails, as it does in Inspect.
+    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. This host asks no person itself. A run that an Inspect eval names asks through `RunHost`, and the eval shows the question in its approval UI. For any other run, this host answers a tool stage with the most cautious choice offered, so the step fails closed. At a generate stage it raises an error, as Inspect's own host does.
     """
 
     def __init__(self, roles: Mapping[str, str] | None = None) -> None:
@@ -213,17 +218,24 @@ def _asked(model: str | None, role: str | None) -> str | None:
 
 
 class RunHost:
-    """The sidecar's host for one run: the sidecar's own, telling the sentinel which sample the run is."""
+    """The sidecar's host for one run. It wraps the sidecar's own host, tells the sentinel which sample the run is, and asks a person when the run has someone to ask."""
 
-    def __init__(self, host: HostNative, eval: EvalContext | None) -> None:
+    def __init__(
+        self,
+        host: HostNative,
+        eval: EvalContext | None,
+        ask: AskHuman | None = None,
+    ) -> None:
         """Wrap the sidecar's host for a run.
 
         Args:
-            host: The sidecar's host, which calls models and would ask a person.
+            host: The sidecar's host, which calls models. When no person can be asked, it gives the cautious answer.
             eval: The sample the run is, where its task was registered.
+            ask: Asks a person about a tool step. It is given for a run that an Inspect eval names, because that eval's approval UI shows the question. None when nobody can be asked.
         """
         self._host = host
         self._eval = eval
+        self._ask = ask
 
     @property
     def eval(self) -> EvalContext | None:
@@ -276,7 +288,9 @@ class RunHost:
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]
     ) -> HumanAnswer:
-        """As the sidecar's host asks."""
+        """Ask a person about a tool step, if the run has someone to ask. Otherwise return the answer of the sidecar's own host."""
+        if self._ask is not None and isinstance(step, BeforeToolCall | AfterToolCall):
+            return await self._ask(step, escalations, choices)
         return await self._host.ask_human(step, escalations, choices)
 
 

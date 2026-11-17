@@ -6,7 +6,7 @@
 # To move to newer releases, change the versions below, run `uv lock` in this
 # folder, and commit uv.lock.
 [project]
-name = "always-sunny-litellm"
+name = "always-sunny-litellm-proxy"
 version = "0"
 requires-python = ">=3.13"
 dependencies = [

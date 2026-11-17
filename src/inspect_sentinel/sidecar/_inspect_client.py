@@ -96,6 +96,8 @@ class Judged:
     """What was recorded while the step was judged."""
     models: Sequence[ModelUsed] = ()
     """The models the step's monitors and protocols called."""
+    reviews: Sequence[str] = ()
+    """The ids of the questions a person was asked during the step."""
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,10 @@ class SentinelStep(BaseModel):
         default=None,
         description="The models the step's monitors and protocols called, each once, in the order first called. The sidecar takes a role's model from its own configuration, not from the eval's. Left out where none was called, and of a trimmed field.",
     )
+    reviews: list[str] | None = Field(
+        default=None,
+        description="The ids of the questions a person was asked while the step was judged, each of which `request_result`'s `reviews` says more about. Left out where nobody was asked.",
+    )
 
 
 class WithheldTurn(BaseModel):
@@ -256,6 +262,7 @@ def judgment(
                 models=None
                 if trimmed or not step.models
                 else [SentinelModel(role=m.role, model=m.model) for m in step.models],
+                reviews=list(step.reviews) or None,
             )
         )
     withheld, proposed = exchange.withheld, exchange.proposed
