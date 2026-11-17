@@ -112,7 +112,7 @@ def noting_models(
 class SidecarHost:
     """What a sentinel in a sidecar may do to the outside world: the sidecar's `HostNative`.
 
-    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. This host asks no person itself. A run that an Inspect eval names asks through `RunHost`, and the eval shows the question in its approval UI. For any other run, this host answers with the most cautious choice offered, so the step fails closed: `reject` for a tool call that hasn't run, `terminate` for a tool's result or a model's turn. Before a generate it raises an error, as Inspect's own host does.
+    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. This host asks no person itself. A run that an Inspect eval names asks through `RunHost`, and the eval shows the question in its approval UI. For any other run, this host answers with the most cautious choice offered, so the step fails closed: `reject` for a tool call that hasn't run, `terminate` for a tool's result or a model's turn. Before a generate it raises an error: a sidecar can't ask a person about a request yet, though Inspect's own host can.
     """
 
     def __init__(self, roles: Mapping[str, str] | None = None) -> None:
@@ -220,7 +220,7 @@ class SidecarHost:
         """
         if isinstance(step, BeforeGenerate):
             raise NotImplementedError(
-                f"A sidecar cannot ask a person at the {stage(step)} stage, as Inspect cannot."
+                f"A sidecar cannot ask a person at the {stage(step)} stage yet."
             )
         check_choices(step, choices)
         decision = "reject" if "reject" in choices else "terminate"
