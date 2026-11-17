@@ -569,7 +569,7 @@ def slow_rule(seconds: float = 5.0) -> Protocol:
 
 
 def test_request_the_sentinel_takes_too_long_on_is_refused(stack: Stack) -> None:
-    stack.use(Handler(slow_rule(), time_limit=0.2))
+    stack.use(Handler(slow_rule(), judging_timeout=0.2))
     _answer_with(stack, "anthropic", False)
 
     answered = httpx.post(f"{stack.url}/v1/messages", json=_body("anthropic", False))

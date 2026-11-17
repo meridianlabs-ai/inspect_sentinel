@@ -18,10 +18,10 @@ from inspect_sentinel.sidecar import Handler
 from inspect_sentinel.sidecar._json_rpc import (
     INVALID_PARAMS,
     INVALID_REQUEST,
+    JUDGING_TIMEOUT,
     METHOD_NOT_FOUND,
     PARSE_ERROR,
     SENTINEL_FAILED,
-    TIME_LIMIT,
     UNKNOWN_STREAM,
     UNREADABLE,
     UNREGISTERED,
@@ -368,9 +368,9 @@ def never_finishes() -> Protocol:
             id="a sentinel that raises",
         ),
         pytest.param(
-            Handler(never_finishes(), time_limit=0.05),
+            Handler(never_finishes(), judging_timeout=0.05),
             _reply(message(weather("Oslo"))),
-            TIME_LIMIT,
+            JUDGING_TIMEOUT,
             "within 0.05 seconds",
             id="a sentinel that takes too long",
         ),
@@ -441,7 +441,7 @@ def test_schema_file_says_a_call_not_judged_is_refused() -> None:
     assert set(errors) == {
         str(UNREADABLE),
         str(SENTINEL_FAILED),
-        str(TIME_LIMIT),
+        str(JUDGING_TIMEOUT),
         str(UNREGISTERED),
         str(UNKNOWN_STREAM),
     }

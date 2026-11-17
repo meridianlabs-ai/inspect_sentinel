@@ -26,7 +26,7 @@ from inspect_sentinel.sidecar import (
     _handler,
     _state,
 )
-from inspect_sentinel.sidecar._errors import TimeLimitError, UnauthorizedError
+from inspect_sentinel.sidecar._errors import JudgingTimeoutError, UnauthorizedError
 from inspect_sentinel.sidecar._eval_endpoint import (
     INFO_PATH,
     JUDGED_REPLY_PATH,
@@ -761,22 +761,22 @@ def bills_then_hangs() -> Protocol:
 # inspect_ai calls a model on trio only once it is set up to, as an eval does;
 # the sidecar serves on asyncio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_judging_cut_off_by_the_time_limit_is_still_counted() -> None:
-    # the sentinel is cancelled at the time limit, so its time and its billed
+async def test_judging_cut_off_by_the_judging_timeout_is_still_counted() -> None:
+    # the sentinel is cancelled at the judging timeout, so its time and its billed
     # judge call are kept only by what runs as it is cancelled
     handler = await holding(
         Handler(
             bills_then_hangs(),
             host=SidecarHost({"monitor": "mockllm/monitor"}),
-            time_limit=0.1,
+            judging_timeout=0.1,
         )
     )
-    with pytest.raises(TimeLimitError):
+    with pytest.raises(JudgingTimeoutError):
         await handler.request(_asked("x"))
 
     result = await _request_result(handler)
 
-    assert (result["state"], result["reason"]) == ("not_judged", "time_limit")
+    assert (result["state"], result["reason"]) == ("not_judged", "judging_timeout")
     assert result["judging_time"] > 0
     [used] = result["judging_usage"]
     assert (used["role"], used["model"]) == ("monitor", "mockllm/monitor")

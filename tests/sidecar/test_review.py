@@ -2670,16 +2670,16 @@ async def test_an_expired_question_where_reject_isnt_offered_ends_the_run() -> N
 
 
 @pytest.mark.anyio
-async def test_the_time_a_question_is_open_isnt_counted_against_the_time_limit() -> (
+async def test_the_time_a_question_is_open_isnt_counted_against_the_judging_timeout() -> (
     None
 ):
-    # The time limit runs on the event loop's clock, which a test can't move
+    # The judging timeout runs on the event loop's clock, which a test can't move
     # forward. So the limit is 2 seconds: long enough for the sentinel's own
     # work, a few milliseconds, even on a busy machine.
-    handler = _reviewed(time_limit=2)
+    handler = _reviewed(judging_timeout=2)
     async with _serving(handler) as client:
         question = await _paused_question(handler, client)
-        # the person takes longer than the sentinel's time limit
+        # the person takes longer than the sentinel's judging timeout
         await anyio.sleep(2.2)
 
         await _answer(client, question["id"], "approve")
@@ -3422,11 +3422,11 @@ async def test_a_try_passed_on_whose_proxy_disconnects_lets_one_more_try_through
 @pytest.mark.anyio
 async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> None:
     reached, go = anyio.Event(), anyio.Event()
-    # The time limit runs on the event loop's clock. It is 2 seconds, long
+    # The judging timeout runs on the event loop's clock. It is 2 seconds, long
     # enough for the first question to be asked even on a busy machine.
     handler = Handler(
         sequential([waits_at("toolu_2", reached, go), human(stages=["tool_call"])]),
-        time_limit=2,
+        judging_timeout=2,
     )
     async with _serving(handler) as client:
         first = await _paused_question(
@@ -3438,7 +3438,7 @@ async def test_the_sentinels_own_time_still_counts_after_a_person_answered() -> 
         # limit ends the judging
         result = await _result(client, until="not_judged")
 
-    assert result["reason"] == "time_limit"
+    assert result["reason"] == "judging_timeout"
 
 
 @pytest.mark.anyio

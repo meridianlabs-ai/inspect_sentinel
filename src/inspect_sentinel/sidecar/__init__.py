@@ -6,7 +6,7 @@ The sidecar described in `design/sidecar.md`. A proxy hands over each model requ
 """
 
 from ._exchange import Answer, Pass, Refuse, Replace, Reply, Request
-from ._handler import Handler, ModifyError, TimeLimitError
+from ._handler import Handler, JudgingTimeoutError, ModifyError
 from ._host import Record, SidecarHost, Stage
 from ._reply_stream import (
     ErrorEvent,
@@ -37,7 +37,7 @@ __all__ = [
     "Request",
     "SidecarHost",
     "Stage",
-    "TimeLimitError",
+    "JudgingTimeoutError",
     "UnreadableError",
     "read_reply",
     "read_request",

@@ -27,7 +27,7 @@ from inspect_sentinel.sidecar import (
     ReplyStream,
     Request,
 )
-from inspect_sentinel.sidecar._errors import TimeLimitError
+from inspect_sentinel.sidecar._errors import JudgingTimeoutError
 from inspect_sentinel.sidecar._handler import RequestResult
 from inspect_sentinel.sidecar._reply_stream import KEEPALIVE
 from inspect_sentinel.sidecar._wire import Format, UnreadableError
@@ -676,16 +676,18 @@ async def test_no_keepalive_goes_out_before_the_format_is_known() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_reply_released_early_has_one_time_limit_for_all_its_judging() -> None:
+async def test_a_reply_released_early_has_one_judging_timeout_for_all_its_judging() -> (
+    None
+):
     # each call alone is within the limit, and the three together are not, as
     # when the reply is held whole
     asked, reply = _exchange("anthropic", inspect=True)
-    whole = await holding(Handler(slowly(0.06, "proceed"), time_limit=0.1))
+    whole = await holding(Handler(slowly(0.06, "proceed"), judging_timeout=0.1))
     await whole.request(asked)
-    with pytest.raises(TimeLimitError):
+    with pytest.raises(JudgingTimeoutError):
         await whole.reply(reply)
     early = await holding(
-        Handler(slowly(0.06, "proceed"), release="early", time_limit=0.1)
+        Handler(slowly(0.06, "proceed"), release="early", judging_timeout=0.1)
     )
     await early.request(asked)
 
@@ -695,7 +697,10 @@ async def test_a_reply_released_early_has_one_time_limit_for_all_its_judging() -
     assert isinstance(outputs[-1], ErrorEvent)
     result = await early.request_result("request_456", "eval_789")
     assert not isinstance(result, str)
-    assert (result.latest.state, result.latest.reason) == ("not_judged", "time_limit")
+    assert (result.latest.state, result.latest.reason) == (
+        "not_judged",
+        "judging_timeout",
+    )
 
 
 def _anthropic_stream(*blocks: dict[str, Any], stop_reason: str = "tool_use") -> bytes:

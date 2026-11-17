@@ -119,7 +119,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.reject_status == 400
     assert arguments.release == "whole"
     assert arguments.keepalive == 15.0
-    assert arguments.time_limit is None
+    assert arguments.judging_timeout is None
     assert arguments.max_body_bytes == 64 * 1024 * 1024
     assert arguments.run_expiry == 24 * 60 * 60
     assert arguments.timestamp_window == 300

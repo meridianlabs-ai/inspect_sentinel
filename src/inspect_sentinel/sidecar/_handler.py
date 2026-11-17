@@ -39,7 +39,7 @@ from .._step import (
 )
 from .._types import Sentinels
 from ..config import watched_stages
-from ._errors import TimeLimitError, UnauthorizedError
+from ._errors import JudgingTimeoutError, UnauthorizedError
 from ._errors import not_judged as _not_judged
 from ._exchange import (
     MAX_BODY_BYTES,
@@ -348,11 +348,11 @@ class _Judging:
     answerable: anyio.Event
     """Set once the sidecar can answer the exchange that began the judging: the judging has finished, or it has asked a person."""
     limit: anyio.CancelScope | None = None
-    """The cancel scope of the time limit. The time a question is open for a person doesn't count against the limit."""
+    """The cancel scope of the judging timeout. The time a question is open for a person doesn't count against the limit."""
     questions_waiting: int = 0
     """How many questions the judging is waiting on now."""
     time_left: float | None = None
-    """How much of the time limit was left when the judging began to wait on a person."""
+    """How much of the judging timeout was left when the judging began to wait on a person."""
     answered_pending: bool = False
     """Whether the exchange was answered "pending review". The judging then continues with no connection open."""
     answered_pending_at: float | None = None
@@ -414,7 +414,7 @@ class Handler:
         host: HostNative | None = None,
         state: State | None = None,
         reject_status: int = 400,
-        time_limit: float | None = None,
+        judging_timeout: float | None = None,
         eval_results: bool = True,
         tasks: Mapping[str, FileTask] | None = None,
         runtime_task_registration: bool = True,
@@ -434,7 +434,7 @@ class Handler:
             host: What the sentinel may do to the outside world. Defaults to a `SidecarHost` with no model roles. A host with its own `ask_human` always answers a sentinel's question itself. Only `SidecarHost`'s `ask_human`, which asks nobody, is replaced by asking a person through an eval, and only while the handler is `serving`.
             state: Where runs are kept. Defaults to this process's memory.
             reject_status: The HTTP status a rejected turn is refused with. The default, 400, is one a client takes as final. A status a client retries by itself, such as 503, brings the client back with the same request, which then goes on with the rejection added.
-            time_limit: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
+            judging_timeout: The longest the sentinel may take to judge one request or one reply, in seconds, after which it is cancelled. None, the default, is no limit.
             eval_results: Whether the judgment `request_result` gives an Inspect eval holds the results: the explanations, references and metadata of the decisions, and what each monitor and protocol recorded. Without them, it holds only what Inspect acts on. A monitor's explanation tells an agent what the monitor looks for, so an eval that can't be trusted is not sent them. A sentinel's question to a person is not sent to such an eval either. Without results, the sidecar answers the question with caution, as it does for a run no eval names. Either way, `request_result` gives how long the judging took and what the judge models' calls cost, by model and role, for the eval's accounting.
             tasks: Tasks registered beforehand, by name, as the tasks folder's files hold them. Nothing an eval registers replaces one, and a request for a sample one doesn't hold is refused.
             runtime_task_registration: Whether an eval may register its tasks itself, at task init.
@@ -445,7 +445,7 @@ class Handler:
             release: How a streamed reply is passed on. `whole`, the default, holds every reply until the sentinel has judged it. `early` passes on the text and reasoning that come before the turn's first tool call as they arrive, holds the rest of the turn, and judges it once the turn has ended, as `whole` does. The sentinel is given the whole turn either way.
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
             timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
-            review_timeout: How long, in seconds, a question waits for a person's answer before it expires, when a sentinel asks a person during a run an Inspect eval names. The eval lists the question with `list_pending_questions` and answers it with `answer_question`. The sidecar answers an expired question with caution: `reject` if that was offered, otherwise `terminate`. The judging then continues. None, the default, means no expiry, because a person may take days. The time a question is open doesn't count against `time_limit`.
+            review_timeout: How long, in seconds, a question waits for a person's answer before it expires, when a sentinel asks a person during a run an Inspect eval names. The eval lists the question with `list_pending_questions` and answers it with `answer_question`. The sidecar answers an expired question with caution: `reject` if that was offered, otherwise `terminate`. The judging then continues. None, the default, means no expiry, because a person may take days. The time a question is open doesn't count against `judging_timeout`.
 
         Raises:
             ValueError: If `keepalive`, `timestamp_window` or `review_timeout` isn't a positive number of seconds.
@@ -487,7 +487,7 @@ class Handler:
         self._host: HostNative = host if host is not None else SidecarHost()
         self._state: State = state if state is not None else MemoryState()
         self._reject_status = reject_status
-        self._time_limit = time_limit
+        self._judging_timeout = judging_timeout
         self._eval_results = eval_results
         # A sentinel's question goes to a person through an eval only if the eval is
         # sent results. An eval that isn't sent results is one the deployment doesn't
@@ -576,7 +576,7 @@ class Handler:
         Raises:
             UnreadableError: If the request can't be read, so neither it nor its reply could be judged.
             UnregisteredSampleError: If the request names a sample that a task registered beforehand doesn't hold, or the handler's strictness refuses a request it can't place.
-            TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
+            JudgingTimeoutError: If the handler has a judging timeout and the sentinel didn't finish within it.
         """
         try:
             signed = signed_sample(request.headers)
@@ -687,7 +687,7 @@ class Handler:
         Raises:
             UnreadableError: If the reply can't be read, or answers a request this handler was never shown or no longer keeps.
             ModifyError: If the sentinel decides `modify` of a call the sidecar can't change, and rejects none of the turn's calls.
-            TimeLimitError: If the handler has a time limit and the sentinel didn't finish within it.
+            JudgingTimeoutError: If the handler has a judging timeout and the sentinel didn't finish within it.
         """
         held = await self._released(reply.id)
         attempt = held.attempt if held is not None else None
@@ -1564,10 +1564,10 @@ class Handler:
     async def _within_limit(
         self, judging: Awaitable[Answer], what: str, id: str
     ) -> Answer:
-        # The time limit covers the sentinel's work on one request or reply. The time a
+        # The judging timeout covers the sentinel's work on one request or reply. The time a
         # question is open for a person doesn't count: the asker suspends the limit's
         # deadline while it waits.
-        with anyio.move_on_after(self._time_limit) as limit:
+        with anyio.move_on_after(self._judging_timeout) as limit:
             current = _JUDGING.get()
             if current is not None:
                 current.limit = limit
@@ -2628,7 +2628,7 @@ class Handler:
                 judging.answered_pending = True
                 judging.answered_pending_at = time.monotonic()
                 judging.answerable.set()
-            # the time a question is open doesn't count against the time limit
+            # the time a question is open doesn't count against the judging timeout
             limit = judging.limit
             if judging.questions_waiting == 0 and limit is not None:
                 if limit.deadline != math.inf:
@@ -2725,9 +2725,9 @@ class Handler:
                 point.added = False
         return refusal
 
-    def _out_of_time(self, what: str, id: str) -> TimeLimitError:
-        return TimeLimitError(
-            f"The sentinel didn't finish judging the {what} {id!r} within {self._time_limit} seconds."
+    def _out_of_time(self, what: str, id: str) -> JudgingTimeoutError:
+        return JudgingTimeoutError(
+            f"The sentinel didn't finish judging the {what} {id!r} within {self._judging_timeout} seconds."
         )
 
 
