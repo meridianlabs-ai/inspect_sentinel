@@ -1,13 +1,13 @@
 """Questions that a sentinel in the sidecar asks a person, held until an Inspect eval answers them.
 
-A sentinel asks a person with `human()`, which calls `Host.ask_human`. For a run that an Inspect eval names, the sidecar holds the question here while the step waits. The eval lists the question with `list_pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
+A sentinel asks a person with `human()`, which calls `Host.ask_human`. For a run that an Inspect eval names, the sidecar holds the question here while the step waits. A question is about one tool call, before it runs or after, or about a model's whole turn before any of its calls runs. The eval lists the question with `list_pending_questions`, shows it in Inspect's approval UI, and sends the person's answer with `answer_question`.
 
 A person may take days to answer, so no connection waits on a question. The handler answers the model call with a "pending review" error and keeps the judging that asked the question. That judging continues when the answer arrives (`design/sidecar.md`, "A review pauses the model call, not a connection"). A question has no expiry unless the operator sets one.
 
 This first way of asking has two temporary exceptions to the sidecar's rules, both in `design/sidecar-plan.md`, step 13:
 
 - The eval signs the answer with its own key, the token it signs every call with. The sidecar accepts an answer only for a question from one of that eval's own runs. Later, reviewers are to answer with credentials of their own, which the sidecar checks.
-- The question gives the eval's process the call's arguments, even if the person then rejects the call. Later, a reviewer surface outside the eval's process is to show the arguments instead.
+- The question gives the eval's process the call's arguments, or the whole turn, even if the person then rejects the call or ends the run. Later, a reviewer surface outside the eval's process is to show the arguments instead.
 
 A question belongs to one model call. A `Review` records what happened to the question. The handler keeps the `Review` with the try of the call that asked, whether or not the step reached a decision.
 """
@@ -24,12 +24,12 @@ from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 import anyio
-from inspect_ai.model import ChatMessageTool
+from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ContentReasoning
 from inspect_ai.tool import ToolCall, ToolCallView
 
 from .._host import HumanAnswer
 from .._report import Escalations
-from ._host import Stage
+from ._host import Stage, about
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class Escalated:
 class Review:
     """The record of one question: when it was asked, what the eval answered, and how the wait ended. The handler keeps it with the HTTP try that asked.
 
-    It holds the call's id, and none of the call's arguments, view or result. The answer is recorded when the sidecar accepts it, separately from how the wait ended. So a try that is stopped just after its answer was accepted keeps the answer on its record, though the answer had no effect.
+    It holds the call's id, and none of the call's arguments, view or result, nor any of a turn. The answer is recorded when the sidecar accepts it, separately from how the wait ended. So a try that is stopped just after its answer was accepted keeps the answer on its record, though the answer had no effect.
     """
 
     id: str
@@ -88,8 +88,8 @@ class Review:
     stage: Stage
     """The stage at which the step was judged."""
 
-    call: str
-    """The id of the call the question was about."""
+    call: str | None
+    """The id of the call the question was about. None for a question about a model's whole turn, at `model_output`."""
 
     asked: float
     """When it was asked, in seconds since the epoch."""
@@ -141,19 +141,22 @@ class Question:
     """The `x-irid` of the model request in which the step was found. The eval assigns it."""
 
     stage: Stage
-    """The stage at which the step was judged: `tool_call` or `tool_result`."""
+    """The stage at which the step was judged: `tool_call`, `tool_result` or `model_output`."""
 
-    call: ToolCall
-    """The call the person decides about, as it will run."""
+    call: ToolCall | None
+    """The call the person decides about, as it will run. None at `model_output`, where the question is about the whole turn."""
 
     message: str
-    """The assistant's text alongside the call."""
+    """The assistant's text: alongside the call, or the turn's own at `model_output`."""
 
-    view: ToolCallView
-    """How the call is shown to the person."""
+    view: ToolCallView | None
+    """How the call is shown to the person. None at `model_output`."""
 
     result: ChatMessageTool | None
     """The call's result, when the stage is `tool_result`."""
+
+    turn: ChatMessageAssistant | None
+    """The model's turn, none of which the eval has been given yet. At `model_output` it is what the person decides about: its text, its reasoning and every tool call it makes, each with the call part of its view, before any of them runs. At `tool_call` it is the turn that made the call, without its tool calls. None at `tool_result`, and for a reply that holds no turn. It is a copy for showing (see `shown_turn`)."""
 
     escalations: tuple[Escalated, ...]
     """The escalations that were passed to the protocol that asked, in order."""
@@ -180,7 +183,47 @@ class Question:
     """The record of the question. The record is kept after the question itself is dropped."""
 
     def __post_init__(self) -> None:
-        self.review = Review(self.id, self.stage, self.call.id, self.asked)
+        self.review = Review(
+            self.id,
+            self.stage,
+            self.call.id if self.call is not None else None,
+            self.asked,
+        )
+
+    @property
+    def about(self) -> str:
+        """What the question is about, in words for a log line."""
+        return about(self.stage, self.call.function if self.call is not None else None)
+
+
+def shown_turn(
+    turn: ChatMessageAssistant, calls: Sequence[ToolCall] | None
+) -> ChatMessageAssistant:
+    """The copy of a model's turn that a question carries, for showing to a person.
+
+    The copy leaves out what only a provider reads. A reasoning block loses its signature and its `internal` value, and one whose text the provider withheld loses the cipher text it holds in place of the text. A person can read none of these, and the eval gets them in the judged reply, which is the turn it sends back to the provider.
+
+    Args:
+        turn: The turn, as the model returned it. It is not changed.
+        calls: The tool calls the copy has, or None for none.
+    """
+    content = turn.content
+    if not isinstance(content, str):
+        content = [
+            block.model_copy(
+                update={
+                    "signature": None,
+                    "internal": None,
+                    **({"reasoning": ""} if block.redacted else {}),
+                }
+            )
+            if isinstance(block, ContentReasoning)
+            else block
+            for block in content
+        ]
+    return turn.model_copy(
+        update={"content": content, "tool_calls": list(calls) if calls else None}
+    )
 
 
 @dataclass(frozen=True)
@@ -251,8 +294,8 @@ class Reviews:
         self._asked.set()
         self._asked = anyio.Event()
         logger.info(
-            "Asked a person about the call to %s at %s, as question %s of the eval %s.",
-            question.call.function,
+            "Asked a person about %s at %s, as question %s of the eval %s.",
+            question.about,
             question.stage,
             question.id,
             question.eval_id,
@@ -275,10 +318,10 @@ class Reviews:
             return question.answer
         review.resolve("timed_out")
         logger.warning(
-            "Question %s expired with no answer, so the sidecar gave the %s stage of the call to %s the cautious answer.",
+            "Question %s expired with no answer, so the sidecar gave the %s stage of %s the cautious answer.",
             question.id,
             question.stage,
-            question.call.function,
+            question.about,
         )
         return cautious(
             question.choices,
