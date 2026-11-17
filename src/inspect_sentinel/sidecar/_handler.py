@@ -21,7 +21,7 @@ from inspect_ai.model import (
     ModelOutput,
     ModelUsage,
 )
-from inspect_ai.tool import ToolCall, ToolCallView
+from inspect_ai.tool import ToolCall, ToolCallContent, ToolCallView
 from inspect_ai.util import Store
 from pydantic import JsonValue
 
@@ -50,7 +50,13 @@ from ._exchange import (
     Request,
     succeeded,
 )
-from ._history import not_sent_before, record_sent, with_sent_ids
+from ._history import (
+    not_sent_before,
+    record_sent,
+    record_sent_to,
+    sent_keys,
+    with_sent_ids,
+)
 from ._host import (
     AskHuman,
     ModelUsed,
@@ -69,6 +75,7 @@ from ._inspect_client import (
     Judged,
     SignedSample,
     Withheld,
+    redacted,
     signed_sample,
 )
 from ._registration import (
@@ -902,6 +909,12 @@ class Handler:
         self._operations_with_provider[request.id] = operation
         operation.with_provider = (request.id, held)
         await self._state.hold(request.id, held)
+        run = await self._state.run(held.run)
+        record_sent_to(
+            run.conversations.setdefault(held.conversation, Conversation()),
+            held.model,
+            held.message_keys,
+        )
         return answer
 
     async def _released(self, id: str) -> Held | None:
@@ -1938,6 +1951,7 @@ class Handler:
             last=last,
             request=None if named else request,
             binding=binding,
+            message_keys=sent_keys(messages, body),
         )
         said = call_texts(request.provider, request.body, request.format)
         # a changed call's result is of the call that ran, whichever the client holds
@@ -1976,7 +1990,12 @@ class Handler:
             return self._judged(refusal, proxy, held.exchange, attempt)
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
-        record_sent(conversation, messages, body, held.model)
+        record_sent(conversation, messages, body)
+        judging = _JUDGING.get()
+        if judging is None or self._operation_of(judging.attempt) is None:
+            # it goes to the provider now; a request a person was asked about
+            # goes when the eval resends it (`_reattach`)
+            record_sent_to(conversation, held.model, held.message_keys)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -2528,7 +2547,14 @@ class Handler:
                 sent = RequestAsked(
                     step.model,
                     len(step.input),
-                    tuple(not_sent_before(step.input, _sent_to(run, held, step.model))),
+                    tuple(
+                        (position, _as_the_eval_holds(message, run.redacted))
+                        for position, message in not_sent_before(
+                            step.input,
+                            held.message_keys,
+                            _sent_to(run, held, step.model),
+                        )
+                    ),
                     tuple(tool.name for tool in step.tools),
                     step.tool_choice,
                 )
@@ -3013,3 +3039,32 @@ def _sent_to(run: Run, held: Held, model: str) -> Mapping[str, int]:
     # is what it has sent any model.
     conversation = run.conversations.get(held.conversation)
     return conversation.sent_to.get(model, {}) if conversation is not None else {}
+
+
+def _as_the_eval_holds(
+    message: ChatMessage, acted_on: Mapping[str, object]
+) -> ChatMessage:
+    # The eval holds each call a decision acted on without its arguments, and
+    # the sidecar puts them back only in what the provider is sent. A question
+    # goes to the eval, so it shows such a call as the eval holds it, and says
+    # that its arguments are hidden.
+    if not isinstance(message, ChatMessageAssistant) or not any(
+        call.id in acted_on for call in message.tool_calls or []
+    ):
+        return message
+    return message.model_copy(
+        update={
+            "tool_calls": [
+                replace(redacted(call), view=_ARGUMENTS_HIDDEN)
+                if call.id in acted_on
+                else call
+                for call in message.tool_calls or []
+            ]
+        }
+    )
+
+
+_ARGUMENTS_HIDDEN = ToolCallContent(
+    format="text",
+    content="Its arguments are hidden here. A decision acted on this call, and the eval holds it without them. The model is sent them.",
+)

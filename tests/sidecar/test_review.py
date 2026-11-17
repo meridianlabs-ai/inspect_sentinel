@@ -65,6 +65,7 @@ from tests.sidecar._traffic import (
     request,
     signed,
     weather,
+    weather_rule,
 )
 
 _SCHEMA: dict[str, Any] = json.loads(SCHEMA_FILE.read_text())
@@ -1498,6 +1499,77 @@ async def test_a_message_another_model_was_sent_is_shown_to_one_that_was_not() -
     # the same messages to another model, which has been sent none of them
     assert question["request"]["model"].endswith("claude-other")
     assert [position for position, _, _ in _shown(question)] == [1, 2]
+
+
+@pytest.mark.anyio
+async def test_a_request_question_hides_the_arguments_of_a_call_a_decision_acted_on() -> (
+    None
+):
+    # A rule rejects the lookup of Oslo, and a person is asked about each request.
+    handler = Handler(
+        sequential([weather_rule("reject", "Oslo"), human(stages=["model_input"])])
+    )
+    # the eval holds the rejected call without its arguments, answered with
+    # the sidecar's rejection
+    held_by_the_eval: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "Oslo is not allowed.",
+                    "is_error": True,
+                }
+            ],
+        },
+    ]
+    async with _serving(handler) as client:
+        await _sent_on(handler, client, _from_eval(), "irid-1")
+        await handler.reply(reply(message(weather("Oslo")), id="x2"))
+
+        question = await _paused_question_at_request(
+            handler, client, _sends("y", "irid-2", then=held_by_the_eval)
+        )
+
+    # The provider is sent the call's arguments, which the sidecar puts back.
+    # The question goes to the eval, so it shows the call as the eval holds it,
+    # and says that its arguments are hidden.
+    [turn] = [shown["message"] for shown in question["request"]["new"]][:1]
+    [call] = turn["tool_calls"]
+    assert call["arguments"] == {}
+    assert "arguments are hidden" in call["view"]["content"]
+
+
+@pytest.mark.anyio
+async def test_an_approved_request_the_eval_never_resends_isnt_counted_as_sent() -> (
+    None
+):
+    handler = _at_requests()
+    async with _serving(handler) as client:
+        question = await _paused_question_at_request(handler, client)
+        await _answer(client, question["id"], "approve")
+        await _result(client, "irid-1", until="awaiting_resend")
+        assert await _cancel(client, "irid-1")
+
+        again = await _paused_question_at_request(
+            handler, client, _from_eval("y", "irid-2")
+        )
+
+    # the provider was never sent the first request, so the person is shown
+    # every message of the second
+    assert [position for position, _, _ in _shown(again)] == [1, 2]
 
 
 @pytest.mark.anyio

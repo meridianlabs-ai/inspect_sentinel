@@ -7,10 +7,16 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageSystem,
     ChatMessageUser,
+    ContentToolUse,
 )
 from inspect_ai.tool import ToolCall
 
-from inspect_sentinel.sidecar._history import EXACT_PAIRS, record_sent, with_sent_ids
+from inspect_sentinel.sidecar._history import (
+    EXACT_PAIRS,
+    record_sent,
+    sent_keys,
+    with_sent_ids,
+)
 from inspect_sentinel.sidecar._state import Conversation
 
 
@@ -24,7 +30,7 @@ def _read(*texts: str) -> list[ChatMessage]:
 def _sent(*requests: list[ChatMessage], body: bytes = b"") -> list[str]:
     conversation = Conversation()
     for input in requests:
-        record_sent(conversation, input, body, "model")
+        record_sent(conversation, input, body)
     return [f"{message.role[0]}:{message.text}" for message in conversation.sent]
 
 
@@ -37,7 +43,7 @@ def _ids_kept(*requests: list[ChatMessage]) -> list[list[bool]]:
         given = with_sent_ids(conversation, input, b"")
         before = {message.text: message.id for message in conversation.sent}
         kept.append([before.get(message.text) == message.id for message in given])
-        record_sent(conversation, given, b"", "model")
+        record_sent(conversation, given, b"")
     return kept
 
 
@@ -276,7 +282,7 @@ def test_many_messages_alike_are_matched_in_time_proportional_to_their_number() 
 
     started = time.perf_counter()
     for input in [*requests, compacted]:
-        record_sent(conversation, input, b"", "model")
+        record_sent(conversation, input, b"")
     elapsed = time.perf_counter() - started
 
     # each counted once, and the summary new
@@ -331,3 +337,35 @@ def test_messages_repeated_past_the_exact_bound_can_be_taken_for_earlier_ones() 
     sent = _sent(_read("u:Task.", *earlier), _read("u:Task.", *later))
 
     assert sent.count("u:A.") == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "same"),
+    [
+        pytest.param(b"{}", True, id="an id a reader made up"),
+        pytest.param(b'{"ids": ["ws_1", "ws_2"]}', False, id="ids the request carries"),
+    ],
+)
+def test_a_search_a_reader_gives_a_new_id_each_read_is_sent_once(
+    body: bytes, same: bool
+) -> None:
+    # A provider's search item that a request carries without an id is given a
+    # new one each time the request is read.
+    def searched(id: str) -> list[ChatMessage]:
+        return [
+            ChatMessageAssistant(
+                content=[
+                    ContentToolUse(
+                        tool_type="web_search",
+                        id=id,
+                        name="web_search",
+                        arguments="{}",
+                        result="Rain.",
+                    )
+                ]
+            )
+        ]
+
+    assert (
+        sent_keys(searched("ws_1"), body) == sent_keys(searched("ws_2"), body)
+    ) is same
