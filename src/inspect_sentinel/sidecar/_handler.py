@@ -51,6 +51,8 @@ from ._exchange import (
     succeeded,
 )
 from ._history import (
+    carried_ids,
+    message_key,
     not_sent_before,
     record_sent,
     record_sent_to,
@@ -330,6 +332,8 @@ class _Operation:
     """When the operation ended, on the monotonic clock. It is kept for the state's expiry after that, so that the eval can still read it. Reading it doesn't extend that time."""
     last_heard: float = 0.0
     """When the sidecar last had contact about the call, on the monotonic clock. It is set when the operation is created, and when the call begins to wait for a resend or for a reply. After that it is updated by each try of the call, by each `request_result` from its eval, and by each part of its reply that a proxy hands over. A waiting call with no contact for the state's expiry is closed."""
+    sent: bool = False
+    """Whether the request went to the provider, and so is in its conversation's history."""
 
 
 @dataclass(eq=False)
@@ -909,12 +913,16 @@ class Handler:
         self._operations_with_provider[request.id] = operation
         operation.with_provider = (request.id, held)
         await self._state.hold(request.id, held)
-        run = await self._state.run(held.run)
-        record_sent_to(
-            run.conversations.setdefault(held.conversation, Conversation()),
-            held.model,
-            held.message_keys,
-        )
+        if not operation.sent:
+            # the request goes to the provider for the first time: a try after
+            # a provider's failure sends the same messages again
+            operation.sent = True
+            run = await self._state.run(held.run)
+            conversation = run.conversations.setdefault(
+                held.conversation, Conversation()
+            )
+            record_sent(conversation, held.input, held.message_keys)
+            record_sent_to(conversation, held.model, held.message_keys)
         return answer
 
     async def _released(self, id: str) -> Held | None:
@@ -1952,6 +1960,7 @@ class Handler:
             request=None if named else request,
             binding=binding,
             message_keys=sent_keys(messages, body),
+            carried=carried_ids(messages, body),
         )
         said = call_texts(request.provider, request.body, request.format)
         # a changed call's result is of the call that ran, whichever the client holds
@@ -1990,11 +1999,11 @@ class Handler:
             return self._judged(refusal, proxy, held.exchange, attempt)
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
-        record_sent(conversation, messages, body)
         judging = _JUDGING.get()
         if judging is None or self._operation_of(judging.attempt) is None:
             # it goes to the provider now; a request a person was asked about
             # goes when the eval resends it (`_reattach`)
+            record_sent(conversation, messages, held.message_keys)
             record_sent_to(conversation, held.model, held.message_keys)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
@@ -2548,10 +2557,13 @@ class Handler:
                     step.model,
                     len(step.input),
                     tuple(
-                        (position, _as_the_eval_holds(message, run.redacted))
+                        (position, _as_the_eval_holds(message, run, held))
                         for position, message in not_sent_before(
                             step.input,
-                            held.message_keys,
+                            [
+                                message_key(message, held.carried)
+                                for message in step.input
+                            ],
                             _sent_to(run, held, step.model),
                         )
                     ),
@@ -3041,24 +3053,32 @@ def _sent_to(run: Run, held: Held, model: str) -> Mapping[str, int]:
     return conversation.sent_to.get(model, {}) if conversation is not None else {}
 
 
-def _as_the_eval_holds(
-    message: ChatMessage, acted_on: Mapping[str, object]
-) -> ChatMessage:
-    # The eval holds each call a decision acted on without its arguments, and
-    # the sidecar puts them back only in what the provider is sent. A question
-    # goes to the eval, so it shows such a call as the eval holds it, and says
-    # that its arguments are hidden.
-    if not isinstance(message, ChatMessageAssistant) or not any(
-        call.id in acted_on for call in message.tool_calls or []
-    ):
+def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessage:
+    # The sidecar puts the model's own calls back only in what the provider is
+    # sent. The eval holds a call a decision rejected without its arguments,
+    # and one a decision changed as it ran. A question goes to the eval, so it
+    # shows each such call as the eval holds it, and says where arguments are
+    # hidden.
+    calls = message.tool_calls if isinstance(message, ChatMessageAssistant) else None
+    if not calls:
+        return message
+    conversation = run.conversations.get(held.conversation)
+    changed = {
+        id: call
+        for turn in (conversation.edited if conversation is not None else [])
+        for id, call in turn.modified.items()
+    }
+    if not any(call.id in changed or call.id in run.redacted for call in calls):
         return message
     return message.model_copy(
         update={
             "tool_calls": [
-                replace(redacted(call), view=_ARGUMENTS_HIDDEN)
-                if call.id in acted_on
+                changed[call.id]
+                if call.id in changed
+                else replace(redacted(call), view=_ARGUMENTS_HIDDEN)
+                if call.id in run.redacted
                 else call
-                for call in message.tool_calls or []
+                for call in calls
             ]
         }
     )

@@ -25,7 +25,7 @@ RECENT_REQUESTS = 16
 
 
 def record_sent(
-    conversation: Conversation, input: Sequence[ChatMessage], body: bytes
+    conversation: Conversation, input: Sequence[ChatMessage], keys: Sequence[str]
 ) -> None:
     """Add what one request of the conversation sent the model to what it has sent.
 
@@ -33,15 +33,14 @@ def record_sent(
 
     Args:
         conversation: The conversation.
-        input: The messages the request sends the model, as read from `body`.
-        body: The request body they were read from, which tells an id the request carries from one a reader made up.
+        input: The messages the request sends the model.
+        keys: Each message of `input`, by `sent_keys`.
     """
-    keys = _keys(input, body)
     matched = _matched(conversation, keys)
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
-    conversation.recent.append(Sent(keys, [message.id for message in input]))
+    conversation.recent.append(Sent(list(keys), [message.id for message in input]))
     del conversation.recent[:-RECENT_REQUESTS]
 
 
@@ -221,6 +220,34 @@ def sent_keys(input: Sequence[ChatMessage], body: bytes) -> tuple[str, ...]:
         body: The request body they were read from.
     """
     return tuple(_keys(input, body))
+
+
+def carried_ids(input: Sequence[ChatMessage], body: bytes) -> frozenset[str]:
+    """The ids in a request's messages that the request carries, as against those a reader made up, so that `message_key` can key a message of it without the body.
+
+    Args:
+        input: The messages the request sends the model, as read from `body`.
+        body: The request body they were read from.
+    """
+    carried = _strings(body)
+    found: set[str] = set()
+    for message in input:
+        dumped: dict[str, Any] = message.model_dump(mode="json")
+        found.add(str(dumped.get("tool_call_id")))
+        for field in ("tool_calls", "content"):
+            items: object = dumped.get(field)
+            if isinstance(items, list):
+                found.update(
+                    str(cast("dict[str, Any]", item).get("id"))
+                    for item in cast("list[object]", items)
+                    if isinstance(item, dict)
+                )
+    return frozenset(id for id in found if _carried(id, carried))
+
+
+def message_key(message: ChatMessage, carried: frozenset[str]) -> str:
+    """One message, as `sent_keys` keys it, given the ids its request carries (`carried_ids`). A message a protocol took from the request, such as by `preprocess_step`, is keyed as it is in the request."""
+    return _digest(_key(message, carried))
 
 
 def record_sent_to(conversation: Conversation, model: str, keys: Sequence[str]) -> None:

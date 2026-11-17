@@ -12,7 +12,7 @@ import jsonschema
 import pytest
 from starlette.applications import Starlette
 
-from inspect_sentinel import human, sequential
+from inspect_sentinel import human, preprocess_step, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._host import HumanAnswer
@@ -1553,10 +1553,46 @@ async def test_a_request_question_hides_the_arguments_of_a_call_a_decision_acted
 
 
 @pytest.mark.anyio
+async def test_a_request_question_shows_a_changed_call_as_it_ran() -> None:
+    # A rule changes the lookup of Tokyo to Oslo, and a person is asked about
+    # each request.
+    handler = Handler(
+        sequential([weather_rule("modify", "Tokyo"), human(stages=["model_input"])])
+    )
+    async with _serving(handler) as client:
+        await _sent_on(handler, client, _from_eval(), "irid-1")
+        await handler.reply(reply(message(weather("Tokyo")), id="x2"))
+
+        # the eval holds the call as it ran, with its result
+        question = await _paused_question_at_request(
+            handler, client, _sends("y", "irid-2", then=ran("Oslo", "Rain."))
+        )
+
+    # The provider is sent the model's own call, which the sidecar puts back.
+    # The question goes to the eval, so it shows the call as it ran.
+    [call] = question["request"]["new"][0]["message"]["tool_calls"]
+    assert call["arguments"] == {"location": "Oslo"}
+    assert "Tokyo" not in json.dumps(question["request"])
+
+
+@protocol
+def notes_history(seen: list[int]) -> Protocol:
+    # notes how many messages the step's history holds before each request
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        seen.append(len(step.history or []))
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
 async def test_an_approved_request_the_eval_never_resends_isnt_counted_as_sent() -> (
     None
 ):
-    handler = _at_requests()
+    seen: list[int] = []
+    handler = Handler(sequential([notes_history(seen), human(stages=["model_input"])]))
     async with _serving(handler) as client:
         question = await _paused_question_at_request(handler, client)
         await _answer(client, question["id"], "approve")
@@ -1567,9 +1603,38 @@ async def test_an_approved_request_the_eval_never_resends_isnt_counted_as_sent()
             handler, client, _from_eval("y", "irid-2")
         )
 
-    # the provider was never sent the first request, so the person is shown
-    # every message of the second
+    # The provider was never sent the first request. So the person is shown
+    # every message of the second, and the sentinel's history holds none.
     assert [position for position, _, _ in _shown(again)] == [1, 2]
+    assert seen == [0, 0]
+
+
+@protocol
+def asks_about_the_preprocessed_request() -> Protocol:
+    # asks a person about the request as `preprocess_step` thins it
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        thinned = await preprocess_step(step)
+        answer = await context.host.ask_human(
+            thinned, escalations, ["approve", "terminate"]
+        )
+        if answer.decision == "approve":
+            return Decision.proceed()
+        return Decision.terminate("Not this request.")
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_request_a_protocol_thinned_can_be_asked_about() -> None:
+    handler = Handler(asks_about_the_preprocessed_request())
+    async with _serving(handler) as client:
+        question = await _paused_question_at_request(handler, client)
+
+    # the question shows the messages the protocol kept, by their own place
+    assert question["request"]["messages"] == 1
+    assert _shown(question) == [(1, "user", "What is the weather?")]
 
 
 @pytest.mark.anyio
