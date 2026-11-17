@@ -77,11 +77,9 @@ def generate(
     )
 
 
-def proposal(
-    message_id: str | None, *call_ids: str, parent: str | None = None, uuid: str = ""
-) -> ModelEvent:
+def proposal(message_id: str, *call_ids: str) -> ModelEvent:
     # an agent turn whose output message `message_id` proposes `call_ids`
-    event = generate(uuid or f"g{message_id}", parent, message_id=message_id)
+    event = generate(f"g{message_id}", None, message_id=message_id)
     event.output.message.tool_calls = [
         ToolCall(id=call_id, function="addition", arguments={}) for call_id in call_ids
     ]

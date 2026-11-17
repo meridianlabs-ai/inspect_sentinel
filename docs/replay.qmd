@@ -381,7 +381,7 @@ Logs written by older versions of inspect_ai, and transcripts from other sources
 
 ### Bridged Agents
 
-Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools, and the log doesn't yet record enough to rebuild their tool steps. Replay skips them, both for a tool the bridge runs on the host for the agent (a `bridged_tools` tool) and for one the agent runs itself, and a warning names the skipped calls. The bridge's model calls replay like any other agent's, and a person's decision at a skipped step still reaches the later steps of the conversation.
+Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools, and replay doesn't yet rebuild their tool steps. Replay skips them, both for a tool the bridge runs on the host for the agent (a `bridged_tools` tool) and for one the agent runs itself, and a warning names the skipped calls. The bridge's model calls replay like any other agent's, and a person's decision at a skipped step still reaches the later steps of the conversation.
 
 In read mode, the bridge's checks of tool calls have rows of their own, keyed so they never match a replayed step of another call under the same id (see `metadata.step_id` in [Results](#results)).
 
