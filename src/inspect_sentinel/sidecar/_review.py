@@ -24,12 +24,12 @@ from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 import anyio
-from inspect_ai.model import ChatMessageAssistant, ChatMessageTool
+from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, ContentReasoning
 from inspect_ai.tool import ToolCall, ToolCallView
 
 from .._host import HumanAnswer
 from .._report import Escalations
-from ._host import Stage
+from ._host import Stage, about
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class Question:
     """The call's result, when the stage is `tool_result`."""
 
     turn: ChatMessageAssistant | None
-    """The model's turn that the person decides about, at `model_output`: its text, its reasoning and every tool call it makes, before any of them runs. None at the tool stages, and for a reply that holds no turn."""
+    """The model's turn, none of which the eval has been given yet. At `model_output` it is what the person decides about: its text, its reasoning and every tool call it makes, each with the call part of its view, before any of them runs. At `tool_call` it is the turn that made the call, without its tool calls. None at `tool_result`, and for a reply that holds no turn. It is a copy for showing (see `shown_turn`)."""
 
     escalations: tuple[Escalated, ...]
     """The escalations that were passed to the protocol that asked, in order."""
@@ -193,9 +193,37 @@ class Question:
     @property
     def about(self) -> str:
         """What the question is about, in words for a log line."""
-        if self.call is None:
-            return "the model's turn"
-        return f"the call to {self.call.function}"
+        return about(self.stage, self.call.function if self.call is not None else None)
+
+
+def shown_turn(
+    turn: ChatMessageAssistant, calls: Sequence[ToolCall] | None
+) -> ChatMessageAssistant:
+    """The copy of a model's turn that a question carries, for showing to a person.
+
+    The copy leaves out what only a provider reads. A reasoning block loses its signature and its `internal` value, and one whose text the provider withheld loses the cipher text it holds in place of the text. A person can read none of these, and the eval gets them in the judged reply, which is the turn it sends back to the provider.
+
+    Args:
+        turn: The turn, as the model returned it. It is not changed.
+        calls: The tool calls the copy has, or None for none.
+    """
+    content = turn.content
+    if not isinstance(content, str):
+        content = [
+            block.model_copy(
+                update={
+                    "signature": None,
+                    "internal": None,
+                    **({"reasoning": ""} if block.redacted else {}),
+                }
+            )
+            if isinstance(block, ContentReasoning)
+            else block
+            for block in content
+        ]
+    return turn.model_copy(
+        update={"content": content, "tool_calls": list(calls) if calls else None}
+    )
 
 
 @dataclass(frozen=True)

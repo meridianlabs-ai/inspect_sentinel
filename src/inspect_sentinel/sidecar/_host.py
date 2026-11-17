@@ -39,9 +39,21 @@ AskHuman: TypeAlias = Callable[
 
 def asked_about(step: Askable) -> str:
     """What a question about the step is about, in words for a log line."""
-    if isinstance(step, AfterGenerate):
+    return about(
+        stage(step), None if isinstance(step, AfterGenerate) else step.call.function
+    )
+
+
+def about(stage: Stage, function: str | None) -> str:
+    """What a question at a stage is about, in words for a log line.
+
+    Args:
+        stage: The stage the question is asked at.
+        function: The function of the call the question names, at a tool stage.
+    """
+    if stage == "model_output":
         return "the model's turn"
-    return f"the call to {step.call.function}"
+    return f"the call to {function}"
 
 
 @dataclass(frozen=True)
@@ -100,7 +112,7 @@ def noting_models(
 class SidecarHost:
     """What a sentinel in a sidecar may do to the outside world: the sidecar's `HostNative`.
 
-    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. This host asks no person itself. A run that an Inspect eval names asks through `RunHost`, and the eval shows the question in its approval UI. For any other run, this host answers a tool stage with the most cautious choice offered, so the step fails closed. At a generate stage it raises an error, as Inspect's own host does.
+    A proxy's requests are not an eval's samples, so the sentinel is told of no eval. Models are called by the sidecar itself, never through the proxy it sits beside. This host asks no person itself. A run that an Inspect eval names asks through `RunHost`, and the eval shows the question in its approval UI. For any other run, this host answers with the most cautious choice offered, so the step fails closed: `reject` for a tool call that hasn't run, `terminate` for a tool's result or a model's turn. Before a generate it raises an error, as Inspect's own host does.
     """
 
     def __init__(self, roles: Mapping[str, str] | None = None) -> None:
@@ -210,6 +222,7 @@ class SidecarHost:
             raise NotImplementedError(
                 f"A sidecar cannot ask a person at the {stage(step)} stage, as Inspect cannot."
             )
+        check_choices(step, choices)
         decision = "reject" if "reject" in choices else "terminate"
         logger.warning(
             "No person can be asked from the sidecar, so the %s stage of %s was answered %s.",
@@ -241,7 +254,7 @@ class RunHost:
         Args:
             host: The sidecar's host, which calls models. When no person can be asked, it gives the cautious answer.
             eval: The sample the run is, where its task was registered.
-            ask: Asks a person about a tool step. It is given for a run that an Inspect eval names, because that eval's approval UI shows the question. None when nobody can be asked.
+            ask: Asks a person about a tool step or a model's turn. It is given for a run that an Inspect eval names, because that eval's approval UI shows the question. None when nobody can be asked.
         """
         self._host = host
         self._eval = eval
@@ -300,8 +313,21 @@ class RunHost:
     ) -> HumanAnswer:
         """Ask a person about a tool step or a model's turn, if the run has someone to ask. Otherwise return the answer of the sidecar's own host."""
         if self._ask is not None and not isinstance(step, BeforeGenerate):
+            check_choices(step, choices)
             return await self._ask(step, escalations, choices)
         return await self._host.ask_human(step, escalations, choices)
+
+
+def check_choices(step: Step, choices: Sequence[str]) -> None:
+    """Check that a person may be offered the choices at the step.
+
+    Raises:
+        ValueError: If `reject` is offered about a model's turn, as Inspect's own host raises. A turn can't be rejected, so the answer could not become a decision.
+    """
+    if isinstance(step, AfterGenerate) and "reject" in choices:
+        raise ValueError(
+            f"A person cannot be offered 'reject' at the {stage(step)} stage, where a turn can only proceed or be terminated."
+        )
 
 
 def stage(step: Step) -> Stage:

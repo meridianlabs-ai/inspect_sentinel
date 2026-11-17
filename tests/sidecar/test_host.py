@@ -5,7 +5,7 @@ import pytest
 from inspect_ai.model import ChatMessageUser, GenerateConfig, ModelOutput
 from inspect_ai.tool import ToolCall, ToolCallView
 
-from inspect_sentinel import human, sequential
+from inspect_sentinel import HumanAnswer, human, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._report import Decision, Escalations
@@ -34,6 +34,18 @@ _CALL = BeforeToolCall(
     view=ToolCallView(),
     input=None,
     agent_messages=None,
+)
+
+
+_TURN = AfterGenerate(
+    model="anthropic/claude-test",
+    conversation="c",
+    input=[ChatMessageUser(content="Hello")],
+    agent_messages=None,
+    tools=[],
+    tool_choice="none",
+    config=GenerateConfig(),
+    output=ModelOutput.from_content("anthropic/claude-test", "Hi."),
 )
 
 
@@ -72,23 +84,33 @@ async def test_an_escalation_to_a_person_is_not_let_through() -> None:
 async def test_a_turn_nobody_can_be_asked_about_ends_the_run(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    step = AfterGenerate(
-        model="anthropic/claude-test",
-        conversation="c",
-        input=[ChatMessageUser(content="Hello")],
-        agent_messages=None,
-        tools=[],
-        tool_choice="none",
-        config=GenerateConfig(),
-        output=ModelOutput.from_content("anthropic/claude-test", "Hi."),
-    )
-
     with caplog.at_level(logging.WARNING):
-        answer = await SidecarHost().ask_human(step, (), ["approve", "terminate"])
+        answer = await SidecarHost().ask_human(_TURN, (), ["approve", "terminate"])
 
     # a turn can't be rejected, so the cautious answer ends the run
     assert answer.decision == "terminate"
     assert "the model's turn" in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asks", ["nobody", "the eval"])
+async def test_a_turn_cannot_be_offered_for_rejection(asks: str) -> None:
+    asked: list[object] = []
+
+    async def ask(
+        step: object, escalations: Escalations, choices: object
+    ) -> HumanAnswer:
+        asked.append(step)
+        return HumanAnswer(decision="approve")
+
+    host = RunHost(SidecarHost(), None, ask if asks == "the eval" else None)
+
+    # A turn can't be rejected, so the answer could not become a decision. The
+    # protocol is told when it asks, as Inspect's own host tells it.
+    with pytest.raises(ValueError, match="cannot be offered 'reject'"):
+        await host.ask_human(_TURN, (), ["approve", "reject", "terminate"])
+
+    assert asked == []
 
 
 @pytest.mark.anyio
