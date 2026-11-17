@@ -369,3 +369,20 @@ def test_a_search_a_reader_gives_a_new_id_each_read_is_sent_once(
     assert (
         sent_keys(searched("ws_1"), body) == sent_keys(searched("ws_2"), body)
     ) is same
+
+
+def test_a_request_recorded_after_one_like_it_keeps_the_ids_the_history_has() -> None:
+    # Two requests alike were both read before either was recorded, as when a
+    # person approved both before the eval resent either. Each read gave its
+    # messages ids of its own.
+    conversation = Conversation()
+    first, second = _read("s:Be brief.", "u:Go."), _read("s:Be brief.", "u:Go.")
+    record_sent(conversation, second, sent_keys(second, b""))
+    record_sent(conversation, first, sent_keys(first, b""))
+
+    third = with_sent_ids(conversation, _read("s:Be brief.", "u:Go."), b"")
+
+    # a later request's messages have the ids the history holds them under
+    assert [message.id for message in third] == [
+        message.id for message in conversation.sent
+    ]

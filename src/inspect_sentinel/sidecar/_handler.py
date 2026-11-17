@@ -3073,7 +3073,7 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
     return message.model_copy(
         update={
             "tool_calls": [
-                changed[call.id]
+                _as_it_ran(changed[call.id])
                 if call.id in changed
                 else replace(redacted(call), view=_ARGUMENTS_HIDDEN)
                 if call.id in run.redacted
@@ -3081,6 +3081,19 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
                 for call in calls
             ]
         }
+    )
+
+
+def _as_it_ran(call: ToolCall) -> ToolCall:
+    # A changed call, with a view that says whose arguments these are: the
+    # person approves a request that sends the model its own.
+    ran = json.dumps(call.arguments, indent=2, default=str)
+    return replace(
+        call,
+        view=ToolCallContent(
+            format="text",
+            content=f"A decision changed this call. These are the arguments the tool ran with. The model is sent its own arguments, which are hidden here.\n\n{call.function} {ran}",
+        ),
     )
 
 

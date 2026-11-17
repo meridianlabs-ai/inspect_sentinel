@@ -40,7 +40,14 @@ def record_sent(
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
-    conversation.recent.append(Sent(list(keys), [message.id for message in input]))
+    # A message matched to one sent before is kept under the id it had then.
+    # The request may have been read before that one was recorded, as when a
+    # person approved both before the eval resent either.
+    ids = [
+        matched[position] if matched.get(position) is not None else message.id
+        for position, message in enumerate(input)
+    ]
+    conversation.recent.append(Sent(list(keys), ids))
     del conversation.recent[:-RECENT_REQUESTS]
 
 

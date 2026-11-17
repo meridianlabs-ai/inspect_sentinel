@@ -1569,9 +1569,12 @@ async def test_a_request_question_shows_a_changed_call_as_it_ran() -> None:
         )
 
     # The provider is sent the model's own call, which the sidecar puts back.
-    # The question goes to the eval, so it shows the call as it ran.
+    # The question goes to the eval, so it shows the call as it ran, and says
+    # that the model is sent other arguments, which it doesn't show.
     [call] = question["request"]["new"][0]["message"]["tool_calls"]
     assert call["arguments"] == {"location": "Oslo"}
+    assert "the arguments the tool ran with" in call["view"]["content"]
+    assert "The model is sent its own arguments" in call["view"]["content"]
     assert "Tokyo" not in json.dumps(question["request"])
 
 
