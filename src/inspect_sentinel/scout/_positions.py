@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 from bisect import bisect_left, bisect_right
-from typing import cast
 
 from inspect_ai.event import (
     Event,
@@ -15,6 +14,10 @@ from inspect_ai.event import (
 from inspect_ai.scorer import Reference
 
 from ._steps import Conversations
+
+# the name of the sentinel span an agent bridge records its checks in
+# (inspect_ai's `BRIDGE_CHECK_SPAN`)
+_BRIDGE_CHECK_SPAN = "sentinel_bridge"
 
 
 class Positions:
@@ -42,17 +45,13 @@ class Positions:
         # the outermost sentinel span holding each span within one, whose
         # model and tool events are a monitor's own
         self._sentinel_spans: dict[str, str] = {}
-        # how many model calls outside a sentinel's span have proposed each
-        # call id so far, by the id and the output message proposing it
-        proposals: dict[tuple[str, str], int] = {}
-        # each run outside a sentinel's span, native or bridged, in log order:
-        # its call id, its execution id, whether replay can tie it to the
-        # call it ran, and whether it can build it without a check naming it
-        runs: list[tuple[str, str | None, bool, bool]] = []
+        # the spans within one an agent bridge recorded its checks in
+        self._bridge_spans: set[str] = set()
+        # each native run outside a sentinel's span, in log order: its call id,
+        # its execution id, and whether its error left it unbuilt in replay
+        runs: list[tuple[str, str | None, bool]] = []
         # the executions some check names
         checked: set[str] = set()
-        # the call ids some run records an execution under
-        self._executed: set[str] = set()
         for index, event in enumerate(events):
             if isinstance(event, SpanBeginEvent):
                 self._begins[event.id] = index
@@ -61,6 +60,10 @@ class Positions:
                     self._sentinel_spans[event.id] = outer
                 elif event.type == "sentinel":
                     self._sentinel_spans[event.id] = event.id
+                if (
+                    event.type == "sentinel" and event.name == _BRIDGE_CHECK_SPAN
+                ) or event.parent_id in self._bridge_spans:
+                    self._bridge_spans.add(event.id)
             elif isinstance(event, SpanEndEvent):
                 self._ends[event.id] = index
             elif isinstance(event, ModelEvent):
@@ -74,8 +77,6 @@ class Positions:
                 self._attempt(event, retrying)
                 if event.output.choices and event.output.message.id:
                     self._outputs.add(event.output.message.id)
-                    if event.span_id not in self._sentinel_spans:
-                        _propose(event, proposals)
             elif isinstance(event, ToolEvent):
                 at, tools = self._tools.setdefault(
                     (self._conversations.of(event.span_id), event.id), ([], [])
@@ -88,43 +89,35 @@ class Positions:
                     )
                     at.append(index)
                     tools.append(event)
-                    self._executed.add(event.id)
-                if event.span_id not in self._sentinel_spans:
-                    runs.append(
-                        (
-                            event.id,
-                            event.execution_id,
-                            _tied(event, proposals),
-                            _buildable(event),
-                        )
+                if event.span_id not in self._sentinel_spans and not _bridged(event):
+                    unbuilt = event.error is not None and event.error.type in (
+                        "parsing",
+                        "approval",
                     )
+                    runs.append((event.id, event.execution_id, unbuilt))
             elif isinstance(event, SentinelEvent):
                 if event.execution_id is not None:
                     checked.add(event.execution_id)
                 if event.stage == "model_input" and event.span_id is not None:
                     inputs.setdefault(event.span_id, event.conversation)
         self._generates = _preceded(inputs, models, self._begins, self._ends)
-        self._holders = _holders(runs, checked)
+        self._renamed = _renamed(runs, checked)
 
     def step_id(self, event: SentinelEvent) -> str:
-        # the step a check was of, as replay keys it (inspect_ai's
-        # `_Driver._tool_step_id` and `_host_step_id`): the call id where the
-        # check's execution is the run that holds it, else the execution id
-        if event.execution_id is not None:
-            if self._holders.get(event.step_id) == event.execution_id:
-                return event.step_id
-            # a later run of the id, a bridged tool's run under an id of its
-            # own, or an execution that never ran
+        # the step a check was of, as replay keys it: the call id, except for a
+        # later native execution of a call id an earlier execution's steps took
+        # (inspect_ai's `_Driver._tool_step_id`), named by its execution id
+        span = event.span_id
+        if span is not None and span in self._bridge_spans:
+            # an agent bridge's check, of a call it handed to the agent or ran
+            # on the host: replay builds no step for it, so its key is never
+            # the bare call id, which a native call's steps can hold. It is the
+            # execution the check names, else, for a result checked under an id
+            # handed out more than once, the id of the sentinel span it was
+            # reported in, which every report of the check shares
+            return event.execution_id or self._sentinel_spans[span]
+        if event.execution_id is not None and event.execution_id in self._renamed:
             return event.execution_id
-        if event.step_id in self._executed:
-            # in a log that records executions, the bridge checks a result
-            # under an id it handed out more than once under none: which run it
-            # answers is unknown, so its key is the id of the sentinel span it
-            # was reported in, which every report of the check shares and no
-            # replayed step has (every event such a log records has an id)
-            if event.span_id is not None and event.span_id in self._sentinel_spans:
-                return self._sentinel_spans[event.span_id]
-            return event.uuid or event.step_id
         return event.step_id
 
     def cite(self, event: SentinelEvent, index: int) -> Reference | None:
@@ -205,71 +198,30 @@ class Positions:
         return tools[index] if index >= 0 else None
 
 
-def _holders(
-    runs: list[tuple[str, str | None, bool, bool]], checked: set[str]
-) -> dict[str, str | None]:
-    # each call id's holder, as replay names steps (inspect_ai's
-    # `_Driver._tool_step_id`, which `_host_step_id` shares): the execution of
-    # the first run of the id, native or bridged, in log order, whose steps
-    # replay builds, in any conversation, as step ids are unique in a sample;
-    # None for a run that records no execution. Replay builds the steps of a
-    # run it can tie to its call (`_tied`) where a check names its execution,
-    # else, by what the events show, where `_buildable` says. A run whose
-    # steps replay skips for reasons the events don't show (a native call no
-    # model call proposed, a native or host run in a region that checks no
-    # tool calls (`_checks_tool_calls`, which #6446's scope guard applies to
-    # host runs), a host run whose check replay pairs with no run) still
-    # counts as built here, so a later run's checks are keyed by their
-    # execution, which joins no replay row rather than the wrong one
+def _renamed(runs: list[tuple[str, str | None, bool]], checked: set[str]) -> set[str]:
+    # the executions replay names by their execution ids: each native run that
+    # replay builds steps for, after the first built under its call id, in any
+    # conversation, as step ids are unique in a sample. Replay builds a run's
+    # steps where a check names it, else where it ran: an error of type
+    # "parsing" or "approval" is of a call rejected before its step was built.
+    # A run whose steps replay skips for reasons the events don't show (one no
+    # model call proposed, one in a region that checks no tool calls) still
+    # counts as built here
     holders: dict[str, str | None] = {}
-    for call_id, execution, tied, buildable in runs:
-        if tied and (buildable or execution in checked):
-            holders.setdefault(call_id, execution)
-    return holders
+    renamed: set[str] = set()
+    for call_id, execution, unbuilt in runs:
+        if unbuilt and execution not in checked:
+            continue
+        holder = holders.setdefault(call_id, execution)
+        if execution is not None and holder != execution:
+            renamed.add(execution)
+    return renamed
 
 
-def _propose(event: ModelEvent, proposals: dict[tuple[str, str], int]) -> None:
-    # the calls a model call outside a sentinel's span proposed, as replay
-    # indexes them (inspect_ai's `_Proposals.add`, for a model call
-    # `producing_message_id` names an output of)
-    message = event.output.message
-    if event.role == "monitor" or event.pending or message.id is None:
-        return
-    for call in message.tool_calls or []:
-        key = (call.id, message.id)
-        proposals[key] = proposals.get(key, 0) + 1
-
-
-def _tied(event: ToolEvent, proposals: dict[tuple[str, str], int]) -> bool:
-    # whether replay can tie a run to the call it ran: a native call always
-    # (as before); a sandbox agent bridge's host call only to the one
-    # proposal before it of the model's id for the call (`proposal_id`) in
-    # the output message the bridge granted the run to (`call_message_id`),
-    # as `_Proposals.exact` finds it for `_links_host_call`, so not where a
-    # cache hit returned that message again, or a log has no message ids
-    if event.metadata is None or "bridge" not in event.metadata:
-        return True
-    bridge: object = event.metadata["bridge"]
-    proposal_id = (
-        cast(dict[str, object], bridge).get("proposal_id")
-        if isinstance(bridge, dict)
-        else None
-    )
-    if not isinstance(proposal_id, str) or event.call_message_id is None:
-        return False
-    return proposals.get((proposal_id, event.call_message_id)) == 1
-
-
-def _buildable(event: ToolEvent) -> bool:
-    # whether replay can build a run's steps with no check naming it: a native
-    # call unless its error is of a call rejected before its step was built
-    # ("parsing" or "approval"); a sandbox agent bridge's host call
-    # (`metadata["bridge"]`, inspect_ai's `_bridged`) where the bridge linked
-    # the run to the result the scaffold reported (`message_id`,
-    # `_links_host_call`)
-    if event.metadata is not None and "bridge" in event.metadata:
-        return event.message_id is not None
-    return event.error is None or event.error.type not in ("parsing", "approval")
+def _bridged(event: ToolEvent) -> bool:
+    # a host call a sandbox agent bridge ran, which replay builds no step for
+    # (inspect_ai's `_bridged`)
+    return event.metadata is not None and "bridge" in event.metadata
 
 
 def _preceded(
