@@ -7,7 +7,7 @@ from inspect_ai.approval._approval import Approval, ApprovalDecision
 from inspect_ai.approval._human import acp as acp_module
 from inspect_ai.approval._human import approver as approver_module
 from inspect_ai.dataset import Sample
-from inspect_ai.event import SentinelEvent
+from inspect_ai.event import ModelEvent, SentinelEvent
 from inspect_ai.log import EvalLog
 from inspect_ai.model import (
     ChatCompletionChoice,
@@ -274,6 +274,37 @@ def test_an_escalated_turn_shows_every_call_and_approve_runs_them(
     # own viewer with its placeholders filled in
     assert content.index("addition(x=1, y=1)") < content.index("**hello**")
     assert [m.text for m in tool_messages(log)] == ["2", "HELLO"]
+
+
+def test_a_person_is_asked_before_each_generate_and_approve_sends_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    panel = Panel("approve")
+    panel.install(monkeypatch)
+
+    log = run(human(stages=["model_input"]))
+
+    assert log.status == "success", log.error
+    assert panel.choices == [["approve", "terminate"]] * 2
+    first, second = [view.call.content for view in panel.views if view.call]
+    assert "1 message to mockllm/model, none of which the model was sent" in first
+    # the second request is shown by what the first didn't send
+    assert "3 messages to mockllm/model, 1 of which the model was sent" in second
+    assert [m.text for m in tool_messages(log)] == ["2"]
+
+
+def test_a_person_who_terminates_a_request_ends_the_sample_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    Panel("terminate").install(monkeypatch)
+
+    log = run(human(stages=["model_input"]))
+
+    assert log.status == "success", log.error
+    assert log.samples
+    sample = log.samples[0]
+    assert sample.limit is not None and sample.limit.type == "operator"
+    assert not [e for e in sample.events if isinstance(e, ModelEvent)]
 
 
 class Seen(NamedTuple):
