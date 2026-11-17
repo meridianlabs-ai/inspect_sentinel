@@ -6,7 +6,7 @@
 # To move to a newer sidecar, change its version below, run `uv lock` in this
 # folder, and commit uv.lock.
 [project]
-name = "always-sunny-sidecar"
+name = "always-sunny-litellm-sidecar"
 version = "0"
 requires-python = ">=3.13"
 dependencies = [

@@ -1,4 +1,4 @@
-# Always sunny
+# Always sunny, behind LiteLLM
 
 A sentinel that runs beside a model proxy, not inside the eval.
 
