@@ -206,6 +206,9 @@ class Conversation:
     recent: list[Sent] = field(default_factory=list[Sent])
     """What each of the conversation's latest requests sent the model, latest last, which a later request is matched against."""
 
+    shown: list[Sent] = field(default_factory=list[Sent])
+    """What each of the conversation's latest judged requests held, latest last, with the id the sentinel saw each message under. A later request's messages take their ids from these (`with_sent_ids`). A request is here from when it is judged, and in `recent` only once it goes to the provider."""
+
     sent_to: dict[str, Counter[str]] = field(default_factory=dict[str, Counter[str]])
     """For each model, by what a message says (`sent_keys`), the most copies of it that any one of the conversation's requests sent that model. What a question before a generate goes by, since `sent` holds what any model was sent. Like `sent`, it counts a request once it goes to the provider, not when it is judged: one a person approved counts when the eval's resend is passed on."""
 

@@ -371,18 +371,26 @@ def test_a_search_a_reader_gives_a_new_id_each_read_is_sent_once(
     ) is same
 
 
-def test_a_request_recorded_after_one_like_it_keeps_the_ids_the_history_has() -> None:
-    # Two requests alike were both read before either was recorded, as when a
-    # person approved both before the eval resent either. Each read gave its
-    # messages ids of its own.
+@pytest.mark.parametrize("sent_first", [0, 1])
+def test_requests_alike_judged_before_either_is_sent_share_their_ids(
+    sent_first: int,
+) -> None:
+    # Two requests alike are judged before either goes to the provider, as
+    # when a person approved both before the eval resent either. They go in
+    # either order.
     conversation = Conversation()
-    first, second = _read("s:Be brief.", "u:Go."), _read("s:Be brief.", "u:Go.")
-    record_sent(conversation, second, sent_keys(second, b""))
-    record_sent(conversation, first, sent_keys(first, b""))
+    judged = [
+        with_sent_ids(conversation, _read("s:Be brief.", "u:Go."), b"")
+        for _ in range(2)
+    ]
+    for request in (judged[sent_first], judged[1 - sent_first]):
+        record_sent(conversation, request, sent_keys(request, b""))
 
     third = with_sent_ids(conversation, _read("s:Be brief.", "u:Go."), b"")
 
-    # a later request's messages have the ids the history holds them under
-    assert [message.id for message in third] == [
-        message.id for message in conversation.sent
-    ]
+    # every request's messages have the ids the sentinel first saw, and the
+    # history holds them under those ids
+    seen = [message.id for message in judged[0]]
+    assert [message.id for message in judged[1]] == seen
+    assert [message.id for message in third] == seen
+    assert [message.id for message in conversation.sent] == seen

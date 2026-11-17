@@ -36,40 +36,39 @@ def record_sent(
         input: The messages the request sends the model.
         keys: Each message of `input`, by `sent_keys`.
     """
-    matched = _matched(conversation, keys)
+    matched = _matched(conversation.recent, keys)
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
-    # A message matched to one sent before is kept under the id it had then.
-    # The request may have been read before that one was recorded, as when a
-    # person approved both before the eval resent either.
-    ids = [
-        matched[position] if matched.get(position) is not None else message.id
-        for position, message in enumerate(input)
-    ]
-    conversation.recent.append(Sent(list(keys), ids))
+    conversation.recent.append(Sent(list(keys), [message.id for message in input]))
     del conversation.recent[:-RECENT_REQUESTS]
 
 
 def with_sent_ids(
     conversation: Conversation, input: Sequence[ChatMessage], body: bytes
 ) -> list[ChatMessage]:
-    """The request's messages, each that the conversation sent before under the id it had then.
+    """The request's messages, each that the sentinel was shown before under the id it had then.
 
-    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one an earlier request sent, as `record_sent` matches it, is given that message's id, and any other keeps the new one.
+    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one of an earlier request, as `record_sent` matches them, is given that message's id, and any other keeps the new one.
+
+    The earlier requests are those the sentinel judged (`Conversation.shown`), whether or not they have gone to the provider. A request a person is asked about goes later, when the eval resends it, and a request judged meanwhile takes its ids all the same. The request is added to them here, so this is called once for each request judged.
 
     Args:
         conversation: The conversation.
         input: The messages the request sends the model, as read from `body`.
         body: The request body they were read from.
     """
-    matched = _matched(conversation, _keys(input, body))
-    return [
+    keys = _keys(input, body)
+    matched = _matched(conversation.shown, keys)
+    given = [
         message.model_copy(update={"id": matched[position]})
         if matched.get(position) is not None
         else message
         for position, message in enumerate(input)
     ]
+    conversation.shown.append(Sent(keys, [message.id for message in given]))
+    del conversation.shown[:-RECENT_REQUESTS]
+    return given
 
 
 def _keys(input: Sequence[ChatMessage], body: bytes) -> list[str]:
@@ -77,13 +76,13 @@ def _keys(input: Sequence[ChatMessage], body: bytes) -> list[str]:
     return [_digest(_key(message, carried)) for message in input]
 
 
-def _matched(conversation: Conversation, keys: Sequence[str]) -> dict[int, str | None]:
-    # The positions of the request that the earlier request it continues
-    # sent, each with the id the message had there.
-    begins = [_begun(earlier.keys, keys) for earlier in conversation.recent]
+def _matched(requests: Sequence[Sent], keys: Sequence[str]) -> dict[int, str | None]:
+    # The positions of the request that the one of `requests` it continues
+    # held, each with the id the message had there.
+    begins = [_begun(earlier.keys, keys) for earlier in requests]
     longest = max(begins, default=0)
     matched: dict[int, str | None] = {}
-    for earlier, begun in zip(conversation.recent, begins, strict=True):
+    for earlier, begun in zip(requests, begins, strict=True):
         if begun != longest:
             continue
         shared = _shared(earlier.keys, keys, begun)

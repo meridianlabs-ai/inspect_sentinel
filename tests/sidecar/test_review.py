@@ -10,6 +10,8 @@ import anyio
 import httpx
 import jsonschema
 import pytest
+from inspect_ai.tool import ToolCallContent
+from inspect_ai.tool._tool_call import substitute_tool_call_content
 from starlette.applications import Starlette
 
 from inspect_sentinel import human, preprocess_step, sequential
@@ -1576,6 +1578,103 @@ async def test_a_request_question_shows_a_changed_call_as_it_ran() -> None:
     assert "the arguments the tool ran with" in call["view"]["content"]
     assert "The model is sent its own arguments" in call["view"]["content"]
     assert "Tokyo" not in json.dumps(question["request"])
+
+
+@protocol
+def changes_the_lookup(arguments: dict[str, Any]) -> Protocol:
+    # changes every weather lookup to one with `arguments`
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision(
+            action="modify", modified=replace(step.call, arguments=arguments)
+        )
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_changed_calls_arguments_are_shown_as_they_are() -> None:
+    # the call ran with an argument that reads like a placeholder for another
+    ran_with = {"location": "{{unit}}", "unit": "C"}
+    handler = Handler(
+        sequential([changes_the_lookup(ran_with), human(stages=["model_input"])])
+    )
+    held_by_the_eval: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": ran_with,
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Rain."}
+            ],
+        },
+    ]
+    async with _serving(handler) as client:
+        await _sent_on(handler, client, _from_eval(), "irid-1")
+        await handler.reply(reply(message(weather("Tokyo")), id="x2"))
+
+        question = await _paused_question_at_request(
+            handler, client, _sends("y", "irid-2", then=held_by_the_eval)
+        )
+
+    # Inspect fills a view's placeholders from the call's arguments. As it
+    # fills this view, each value is shown as the tool was given it.
+    [call] = question["request"]["new"][0]["message"]["tool_calls"]
+    shown = substitute_tool_call_content(
+        ToolCallContent(**call["view"]), call["arguments"]
+    ).content
+    assert "location: {{unit}}" in shown
+    assert "unit: C" in shown
+
+
+@protocol
+def notes_ids(seen: list[list[str | None]]) -> Protocol:
+    # notes the id of each message the sentinel is shown before each request
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        seen.append([message.id for message in step.input])
+        return None
+
+    return decide
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("resent_first", ["irid-1", "irid-2"])
+async def test_requests_approved_together_keep_their_messages_ids_however_they_are_resent(
+    resent_first: str,
+) -> None:
+    seen: list[list[str | None]] = []
+    handler = Handler(sequential([notes_ids(seen), human(stages=["model_input"])]))
+    sent = {"irid-1": _from_eval("a", "irid-1"), "irid-2": _from_eval("b", "irid-2")}
+    async with _serving(handler) as client:
+        # a person approves two requests alike before the eval resends either
+        for request in sent.values():
+            assert await handler.request(request) is PENDING
+        for question in await _list_pending(client):
+            await _answer(client, question["id"], "approve")
+        for irid in sent:
+            await _result(client, irid, until="awaiting_resend")
+        resent_last = "irid-2" if resent_first == "irid-1" else "irid-1"
+        for irid in (resent_first, resent_last):
+            resend = replace(sent[irid], id=f"{sent[irid].id}2")
+            assert isinstance(await handler.request(resend), Pass)
+
+        assert await handler.request(_from_eval("c", "irid-3")) is PENDING
+
+    # A monitor that reads only what is new tells a message by its id. The
+    # sentinel saw the same ids each time, so it has nothing to read again.
+    assert seen[0] == seen[1] == seen[2]
 
 
 @protocol
