@@ -811,6 +811,39 @@ def check_internal_kept(
         )
 
 
+def bound_body(provider: str, body: bytes, format: Format | None = None) -> bytes:
+    """The form of a request's body that a paused model call is bound to. A later try of the call must have the same bound body. It is the body as written, without what a client changes from one try to the next when that doesn't change what the model is sent.
+
+    That is Anthropic's `cache_control`, at the places where the Messages API reads it: on the request itself, and on each system block, tool, message content block and tool result content block. inspect_ai's Anthropic client moves a sample's prompt cache to the one-hour TTL once five minutes have passed since the sample's last cached request. A person's review often takes longer than that, so later tries of the call carry a different `cache_control`. A `cache_control` key anywhere else, such as in a tool's schema, a call's input or a tool's result, is part of the request's own data and stays bound. A body in any other format, or one that can't be read, is bound as written.
+    """
+    try:
+        if request_format(provider, body, format) != "anthropic-messages":
+            return body
+        request = json_object(body, "request")
+    except UnreadableError:
+        return body
+    request.pop("cache_control", None)
+    for block in _blocks(request.get("system")):
+        block.pop("cache_control", None)
+    for tool in _blocks(request.get("tools")):
+        tool.pop("cache_control", None)
+    for message in _blocks(request.get("messages")):
+        for block in _blocks(message.get("content")):
+            block.pop("cache_control", None)
+            if block.get("type") == "tool_result":
+                for part in _blocks(block.get("content")):
+                    part.pop("cache_control", None)
+    return json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _blocks(value: object) -> list[dict[str, Any]]:
+    # the JSON objects in `value`, if `value` is a list; otherwise none
+    if not isinstance(value, list):
+        return []
+    items = cast("list[object]", value)
+    return [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
+
+
 def json_object(body: bytes, what: str) -> dict[str, Any]:
     try:
         parsed: object = json.loads(body)

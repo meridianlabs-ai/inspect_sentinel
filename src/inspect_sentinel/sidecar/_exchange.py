@@ -64,6 +64,12 @@ class Reply:
     format: Format | None = None
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
 
+    body_follows: bool = False
+    """Whether the body is still arriving and passing to the client, so it isn't in `body`. A proxy that passes a provider's error on as it arrives hands the error over this way. Whoever handed the reply over then calls `Handler.error_body` with the body once all of it has arrived from the provider, or `Handler.reply_not_judged` if the body was cut off."""
+
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The reply's headers as the provider sent them, by lowercase name, if the proxy hands them over. The sidecar keeps them with the reply it holds for a paused model call, because the eval reads that reply as if the provider had sent it."""
+
 
 def succeeded(status: int) -> bool:
     """Whether a provider's reply in this status is the model's, to judge, rather than an error, which goes on unjudged.

@@ -259,7 +259,7 @@ as_scanner(sentinel, human="approve")
 
 A fixed answer behaves as if the person had picked it, so a protocol decides as it would live. A `terminate` answer doesn't stop the replay, which still runs the later steps.
 
-A `human()` that does not offer the fixed answer gets `terminate`, the answer given when nobody can be asked, which `human()` takes whatever it offers. For example, `reject` is not offered after a tool call runs or at `"model_output"`, so by default a `human()` at `"tool_result"` gets `terminate`.
+A `human()` that does not offer the fixed answer gets `terminate`, the answer given when nobody can be asked, which `human()` takes whatever it offers. For example, `reject` is not offered after a tool call runs or at `"model_input"` and `"model_output"`, so by default a `human()` at `"tool_result"` gets `terminate`.
 
 To answer as a person would, pass a *stand-in*: an `async` function that takes the step, the escalations and the choices, and returns a `HumanAnswer` (e.g. an oracle built from labels, or a model). This one answers from the labels file used above:
 

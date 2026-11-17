@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
 import anyio
@@ -35,6 +35,9 @@ KEEPALIVE_SECONDS = 15.0
 KEEPALIVE = b": keepalive\n\n"
 """A keepalive: an SSE comment, which every provider SDK skips."""
 
+ERROR_BODY_BYTES = 1024 * 1024
+"""The largest body of a provider's error that the sidecar copies for an eval whose model call was paused for a person. A larger body still passes to the client whole, and the eval then gets the error without its body."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class ReplyStart:
@@ -60,6 +63,9 @@ class ReplyStart:
 
     format: Format | None = None
     """Which API the body is written in, if the proxy said. Without it, the API is worked out from `provider` and the body."""
+
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The reply's headers as the provider sent them, by lowercase name, if the proxy hands them over."""
 
 
 @dataclass(frozen=True)
@@ -165,6 +171,9 @@ class ReplyStream:
         """
         if self._ended:
             raise RuntimeError("The reply's input has already been ended.")
+        # A reply that is still arriving keeps its paused model call from being
+        # closed for waiting too long.
+        self._handler.reply_progress(self._start.id)
         if (
             succeeded(self._start.status)
             and len(self._held) + len(data) > self._max_held_bytes
@@ -282,23 +291,40 @@ class ReplyStream:
         await self._out(Finished())
 
     async def _provider_error(self) -> None:
-        # A provider's error goes on unjudged, and the handler reads nothing
-        # of it: it is told at the start, and the body goes out as it comes,
-        # whatever its size.
-        answer = await self._handler.reply(self._reply(b""))
+        # A provider's error passes to the client unjudged. This method reports
+        # the error to the handler at the start, and releases the body as it
+        # arrives, whatever its size. Once the whole body has arrived, it gives
+        # the handler a copy, if the body is no larger than `ERROR_BODY_BYTES`.
+        # The copy is for an eval whose model call was paused for a person.
+        answer = await self._handler.reply(self._reply(b"", body_follows=True))
         if isinstance(answer, Refuse):
             await self._out(answer)
             return
+        body: bytearray | None = bytearray()
         while True:
             await self._until(lambda: bool(self._held) or self._ended or self._aborted)
             if self._held:
                 data = bytes(self._held)
                 self._held.clear()
                 self._drained.set()
+                if body is not None:
+                    body.extend(data)
+                    if len(body) > ERROR_BODY_BYTES:
+                        body = None
                 await self._out(Release(data))
             if self._aborted:
+                # The body didn't all arrive, so there is no whole error to
+                # give the eval. The call failed as a reply that is cut off
+                # does.
+                await self._handler.reply_not_judged(self._start.id, "cut_off")
                 return
             if self._ended and not self._held:
+                # Always call this, so that the handler knows the whole error
+                # has arrived. The body is empty if there was none, or if it
+                # was too large to copy.
+                await self._handler.error_body(
+                    self._start.id, bytes(body) if body is not None else b""
+                )
                 await self._out(Finished())
                 return
 
@@ -471,7 +497,7 @@ class ReplyStream:
                     pass
             self._last_out = anyio.current_time()
 
-    def _reply(self, body: bytes) -> Reply:
+    def _reply(self, body: bytes, *, body_follows: bool = False) -> Reply:
         start = self._start
         return Reply(
             id=start.id,
@@ -482,6 +508,8 @@ class ReplyStream:
             status=start.status,
             content_type=start.content_type,
             body=body,
+            body_follows=body_follows,
+            headers=start.headers,
         )
 
 

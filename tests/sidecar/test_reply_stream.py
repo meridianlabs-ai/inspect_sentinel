@@ -1,4 +1,6 @@
 import json
+from dataclasses import replace
+from typing import Any
 
 import anyio
 import pytest
@@ -22,9 +24,12 @@ from inspect_sentinel.sidecar import (
     Request,
 )
 from inspect_sentinel.sidecar._handler import RequestResult
+from inspect_sentinel.sidecar._reply_stream import ERROR_BODY_BYTES
+from inspect_sentinel.sidecar._state import NotJudged
 from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     STREAM,
+    RecordingHandler,
     anthropic_recorded,
     holding,
     inspect_headers,
@@ -377,3 +382,97 @@ async def _not_judged(handler: Handler) -> tuple[str, str | None]:
     result = await handler.request_result("request_456", "eval_789")
     assert isinstance(result, RequestResult)
     return result.latest.state, result.latest.reason
+
+
+@pytest.mark.anyio
+async def test_a_provider_errors_headers_and_body_reach_the_handler() -> None:
+    asked, answered = _exchange("anthropic stream", inspect=True)
+    handler = RecordingHandler(weather_rule())
+    await holding(handler)
+    await handler.request(asked)
+    start = replace(_start(answered, status=529), headers={"retry-after": "7"})
+    error = b'{"type":"error","error":{"type":"overloaded_error"}}'
+
+    outputs = await _streamed(handler.reply_stream(start), error, 10)
+
+    # The error is released to the client as it arrives. The handler's `reply`
+    # gets the status and headers at the start, and `error_body` gets the body
+    # once the whole body has arrived.
+    assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
+    (shown,) = handler.replies
+    assert (shown.status, shown.headers, shown.body) == (529, {"retry-after": "7"}, b"")
+    # `body_follows` told the handler that the error's body was still to come
+    assert shown.body_follows
+    assert handler.error_bodies == [("x", error)]
+
+
+class _RecordsNotJudged(RecordingHandler):
+    """A handler that records the reason given in each `reply_not_judged` call."""
+
+    def __init__(self, *args: Any, **options: Any) -> None:
+        super().__init__(*args, **options)
+        self.not_judged: list[str] = []
+
+    async def reply_not_judged(self, id: str, reason: NotJudged) -> None:
+        self.not_judged.append(reason)
+        await super().reply_not_judged(id, reason)
+
+
+@pytest.mark.anyio
+async def test_a_provider_error_aborted_before_its_end_is_reported_as_cut_off() -> None:
+    asked, answered = _exchange("anthropic stream", inspect=True)
+    handler = _RecordsNotJudged(weather_rule())
+    await holding(handler)
+    await handler.request(asked)
+    stream = handler.reply_stream(_start(answered, status=529))
+    part = b'{"type":"error",'
+
+    # a stream that didn't end would leave the test waiting, so it fails fast
+    with anyio.fail_after(5):
+        async with anyio.create_task_group() as group:
+            group.start_soon(stream.run)
+            outputs = stream.__aiter__()
+            await stream.feed(part)
+            assert await outputs.__anext__() == Release(part)
+            # the client goes away before the rest of the error has arrived
+            await stream.abort()
+
+    # `reply` got the error with `body_follows` set. The stream then calls
+    # `reply_not_judged` with `cut_off`, and never calls `error_body`.
+    (shown,) = handler.replies
+    assert shown.body_follows
+    assert handler.not_judged == ["cut_off"]
+    assert handler.error_bodies == []
+
+
+@pytest.mark.anyio
+async def test_the_handler_learns_an_error_has_arrived_though_it_isnt_copied() -> None:
+    asked, answered = _exchange("anthropic stream", inspect=True)
+    handler = RecordingHandler(weather_rule())
+    await holding(handler)
+    await handler.request(asked)
+    # too large for the sidecar to keep a copy
+    error = b"x" * (ERROR_BODY_BYTES + 1)
+
+    outputs = await _streamed(
+        handler.reply_stream(_start(answered, status=500)), error, 65536
+    )
+
+    # The client gets the whole error. The stream still calls `error_body`,
+    # with an empty body, so the handler knows the whole error has arrived.
+    assert b"".join(o.data for o in outputs if isinstance(o, Release)) == error
+    assert handler.error_bodies == [("x", b"")]
+
+
+@pytest.mark.anyio
+async def test_a_streamed_replys_headers_reach_the_handler_with_it() -> None:
+    asked, answered = _exchange("anthropic stream")
+    handler = RecordingHandler(weather_rule())
+    await handler.request(asked)
+    start = replace(_start(answered), headers={"request-id": "req_011"})
+
+    await _streamed(handler.reply_stream(start), answered.body, 500)
+
+    (shown,) = handler.replies
+    assert shown.headers == {"request-id": "req_011"}
+    assert shown.body == answered.body

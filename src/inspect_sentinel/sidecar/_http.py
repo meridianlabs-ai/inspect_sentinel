@@ -29,6 +29,29 @@ async def read_within(http: HttpRequest, limit: int) -> bytes | None:
     return bytes(body)
 
 
+async def discard_within(http: HttpRequest, limit: int) -> bool:
+    """Read a request's body and discard it. Stop as soon as the body is known to be larger than a limit.
+
+    Use it for a request whose body the sidecar doesn't need, when the client sends a body anyway. A body within the limit is read to its end before the request is answered, so that a proxy still sending the body doesn't see the connection close while it sends.
+
+    Args:
+        http: The request.
+        limit: The largest body to read, in bytes.
+
+    Returns:
+        False if the body is larger than `limit`.
+    """
+    declared = http.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        return False
+    read = 0
+    async for chunk in http.stream():
+        read += len(chunk)
+        if read > limit:
+            return False
+    return True
+
+
 def health_route() -> Route:
     """A route that answers `ok` to a GET of `HEALTH_PATH`, for whatever restarts the sidecar to probe.
 

@@ -1,6 +1,140 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "AnswerQuestionParams": {
+      "description": "Parameters of `answer_question`: the person's choice.\n\nFor now the eval sends the answer, signed with the eval's token, and the sidecar accepts it only for a question from one of that eval's own runs. So any client that holds the eval's token can answer that eval's questions. Later, reviewers will answer with credentials of their own, which the sidecar will check.",
+      "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp, id, decision, reason or \"\"]], separators=(\",\", \":\"))`. Unlike the `mac` of other calls, it covers the answer, so a `mac` copied from one answer cannot sign a different answer.",
+          "title": "Mac",
+          "type": "string"
+        },
+        "id": {
+          "description": "The question's id.",
+          "title": "Id",
+          "type": "string"
+        },
+        "decision": {
+          "description": "The person's choice, one of the question's `choices`.",
+          "enum": [
+            "approve",
+            "reject",
+            "terminate"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The person's reason, if they gave one. For `reject`, the sidecar tells the model this reason.",
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "eval_id",
+        "timestamp",
+        "mac",
+        "id",
+        "decision"
+      ],
+      "title": "AnswerQuestionParams",
+      "type": "object"
+    },
+    "AnswerQuestionResult": {
+      "description": "The answer that the sidecar gave the step. Sending the same answer again returns the same result.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "reject",
+            "terminate"
+          ],
+          "title": "Decision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "decision"
+      ],
+      "title": "AnswerQuestionResult",
+      "type": "object"
+    },
+    "CancelPausedRequestParams": {
+      "description": "Parameters of `cancel_paused_request`: cancels a request paused for a person, which the eval has given up on.\n\nThe sidecar closes the request in whatever state it is, with nothing decided. It stops the judging and closes the request's questions. It lets no further try through to the provider. If a try is already with the provider, the sidecar does not judge, keep or pass on its reply. `request_result` then answers `not_judged` with the reason `cancelled`, and the request cannot be resumed.",
+      "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
+          "type": "string"
+        },
+        "id": {
+          "description": "The request's `x-irid`.",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eval_id",
+        "timestamp",
+        "mac",
+        "id"
+      ],
+      "title": "CancelPausedRequestParams",
+      "type": "object"
+    },
+    "CancelPausedRequestResult": {
+      "description": "Whether this call cancelled the request.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "cancelled": {
+          "description": "Whether this call is what closed the request. False if the request had already ended, if no person was asked about it, or if the sidecar doesn't know it. A second `cancel_paused_request` for the same request also answers false. So false does not mean the request is still paused: call `request_result` for its state.",
+          "title": "Cancelled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "cancelled"
+      ],
+      "title": "CancelPausedRequestResult",
+      "type": "object"
+    },
     "ChatMessageAssistant": {
       "description": "Assistant chat message.",
       "properties": {
@@ -1243,6 +1377,61 @@
       "title": "EndSampleResult",
       "type": "object"
     },
+    "Escalation": {
+      "description": "An escalation that a monitor or protocol passed to the protocol that asked the person.",
+      "properties": {
+        "name": {
+          "description": "The name of the monitor or protocol that escalated.",
+          "title": "Name",
+          "type": "string"
+        },
+        "explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why it escalated, if it gave a reason.",
+          "title": "Explanation"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Escalation",
+      "type": "object"
+    },
+    "FailureRecord": {
+      "description": "The provider's most recent failure, for a request that is paused for a person. The eval acts on this record, not on the error that its own request returned, because that error may be the sidecar's `pending review`.",
+      "properties": {
+        "try_number": {
+          "description": "The number of the try that the proxy passed on to the provider and that failed, counting from 1. The eval uses it to tell a new failure from one it has already handled.",
+          "title": "Try Number",
+          "type": "integer"
+        },
+        "reply": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplyRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provider's error. Left out if the provider's reply was cut off, which the eval treats as a failed connection."
+        }
+      },
+      "required": [
+        "try_number"
+      ],
+      "title": "FailureRecord",
+      "type": "object"
+    },
     "JsonValue": {},
     "JudgingUsage": {
       "description": "What the provider billed for a model a monitor or protocol called while a request was judged.",
@@ -1364,6 +1553,207 @@
         "steps"
       ],
       "title": "Judgment",
+      "type": "object"
+    },
+    "ListPendingQuestionsParams": {
+      "description": "Parameters of `list_pending_questions`: lists the eval's questions for a person that have no answer yet.",
+      "properties": {
+        "eval_id": {
+          "description": "The eval's id, as its requests name it.",
+          "title": "Eval Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "description": "When the caller signed, in whole seconds since the epoch. A call whose timestamp is further from the sidecar's clock than its window, five minutes by default, is refused with `unauthorized`.",
+          "title": "Timestamp",
+          "type": "integer"
+        },
+        "mac": {
+          "description": "An HMAC-SHA256, in hex, made with the eval's token over `json.dumps([str(v) for v in [method, eval_id, timestamp]], separators=(\",\", \":\"))`, such as `[\"sample_result\",\"eval_789\",\"1794182400\"]`. It proves only that the caller holds the token, not the call's other parameters. A call whose `mac` isn't made with the token the sidecar keeps for the eval is refused with `unauthorized`. A sidecar that keeps no token for the eval, as after a restart, holds nothing of it for anyone.",
+          "title": "Mac",
+          "type": "string"
+        },
+        "sample_uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "If given, the sidecar lists only this sample's questions. It is the sample's uuid, as `x-inspect-context` carries it. Inspect passes the sample whose model call is paused.",
+          "title": "Sample Uuid"
+        },
+        "wait": {
+          "default": 0,
+          "description": "How long to wait, in seconds, while there are no questions, at most 30. The sidecar answers as soon as there is one.",
+          "minimum": 0,
+          "title": "Wait",
+          "type": "number"
+        }
+      },
+      "required": [
+        "eval_id",
+        "timestamp",
+        "mac"
+      ],
+      "title": "ListPendingQuestionsParams",
+      "type": "object"
+    },
+    "ListPendingQuestionsResult": {
+      "description": "The eval's unanswered questions, oldest first.",
+      "properties": {
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/QuestionAsked"
+          },
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "questions"
+      ],
+      "title": "ListPendingQuestionsResult",
+      "type": "object"
+    },
+    "QuestionAsked": {
+      "description": "A question that a sentinel asked a person about one of the eval's model requests: about a tool call, or about the model's whole turn. The step waits for the answer.",
+      "properties": {
+        "id": {
+          "description": "The question's id. `answer_question` takes it.",
+          "title": "Id",
+          "type": "string"
+        },
+        "sample_uuid": {
+          "description": "The uuid of the sample whose run the question belongs to.",
+          "title": "Sample Uuid",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "The `x-irid` of the model request that the question paused. The request stays paused until the question has an answer.",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "stage": {
+          "description": "`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model. `model_output`: the model's turn is complete, and none of its calls has run.",
+          "enum": [
+            "tool_call",
+            "tool_result",
+            "model_output"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation. Left out at `model_output`.",
+          "title": "Call"
+        },
+        "message": {
+          "description": "The assistant's text: what came with the call, or at `model_output` the turn's own text.",
+          "title": "Message",
+          "type": "string"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How to display the call, as Inspect writes a `ToolCallView`. Left out at `model_output`.",
+          "title": "View"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The call's result, as Inspect writes a `ChatMessageTool`. Present at `tool_result`.",
+          "title": "Result"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model's turn, as Inspect writes a `ChatMessageAssistant`. The eval has been given none of it yet, so it is for showing to the person. Do not add it to the agent's conversation: its reasoning has no signature, and none of the cipher text a provider returns in place of reasoning it withheld. At `model_output` it is the whole turn, unless the reply held none: its text, its reasoning and every tool call it makes, each with the call part of its view. A viewer's separate context is only in the call's own question. At `tool_call` it is the turn that made the call, without its tool calls. Left out at `tool_result`, where the eval already has the turn.",
+          "title": "Turn"
+        },
+        "escalations": {
+          "description": "The escalations passed to the protocol that asked the person, in order: who escalated, and why.",
+          "items": {
+            "$ref": "#/$defs/Escalation"
+          },
+          "title": "Escalations",
+          "type": "array"
+        },
+        "choices": {
+          "description": "The choices the person may pick from. An answer must be one of these, and one of approve, reject, terminate.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Choices",
+          "type": "array"
+        },
+        "asked": {
+          "description": "When the sentinel asked the question, in seconds since the epoch. A client can show how long the question has waited.",
+          "title": "Asked",
+          "type": "number"
+        },
+        "closes": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the question expires, in seconds since the epoch, if the operator set a review timeout. At expiry the sidecar gives the sentinel the cautious answer, `reject` if the question offers it and otherwise `terminate`, and the sentinel continues judging. Left out if the question has no expiry.",
+          "title": "Closes"
+        }
+      },
+      "required": [
+        "id",
+        "sample_uuid",
+        "request_id",
+        "stage",
+        "message",
+        "escalations",
+        "choices",
+        "asked"
+      ],
+      "title": "QuestionAsked",
       "type": "object"
     },
     "RegisterTaskParams": {
@@ -1527,6 +1917,53 @@
       "title": "RegisterTaskResult",
       "type": "object"
     },
+    "ReplyRecord": {
+      "description": "A provider's reply as the proxy passes it on. The eval reads it with the same code that reads that provider's replies from the network.",
+      "properties": {
+        "status": {
+          "description": "The provider's HTTP status.",
+          "title": "Status",
+          "type": "integer"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The provider's headers, by lowercase name, without hop-by-hop headers such as `content-length`. It holds only `content-type` if the proxy gave the sidecar no reply headers.",
+          "title": "Headers",
+          "type": "object"
+        },
+        "body": {
+          "description": "The body, as base64: a whole JSON reply, or a streamed reply's events from first to last. It includes the sentinel's edits. Empty for a provider's error that was too large to keep.",
+          "title": "Body",
+          "type": "string"
+        },
+        "format": {
+          "description": "The API format of the request, which is also the format of the reply.",
+          "enum": [
+            "anthropic-messages",
+            "openai-chat",
+            "openai-responses"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "stream": {
+          "description": "Whether the body is a stream of events.",
+          "title": "Stream",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "status",
+        "headers",
+        "body",
+        "format",
+        "stream"
+      ],
+      "title": "ReplyRecord",
+      "type": "object"
+    },
     "RequestResultParams": {
       "description": "Parameters of `request_result`: one model request, by the eval's id for it.",
       "properties": {
@@ -1552,7 +1989,7 @@
         },
         "wait": {
           "default": 0,
-          "description": "How long to wait, in seconds, while the latest attempt is still being judged, at most 30. The answer comes as soon as the attempt is decided or not judged. An eval asks again while the state is still `judging`.",
+          "description": "How long to wait, in seconds, while the sentinel is still judging the request, at most 30. The sidecar answers as soon as the state is no longer `judging`. If the state is still `judging`, the eval calls again.",
           "minimum": 0,
           "title": "Wait",
           "type": "number"
@@ -1589,6 +2026,8 @@
             {
               "enum": [
                 "judging",
+                "awaiting_review",
+                "awaiting_resend",
                 "awaiting_reply",
                 "decided",
                 "not_judged"
@@ -1600,7 +2039,7 @@
             }
           ],
           "default": null,
-          "description": "Where the latest attempt stands.",
+          "description": "The state of the request. For a request no person was asked about, it is the state of the latest try. For a request paused for a person, it is the state of the whole model call, however many tries the eval has sent. `awaiting_review`: a question is open, so the eval shows it to a person and sends the answer with `answer_question`. `awaiting_resend`: the provider still has to be called, so the eval resends the same request under the same `x-irid`, and the proxy passes it on to the provider.",
           "title": "State"
         },
         "reason": {
@@ -1613,7 +2052,10 @@
                 "error",
                 "provider_error",
                 "cut_off",
-                "replaced_attempt"
+                "replaced_attempt",
+                "cancelled",
+                "result_under_review",
+                "expired"
               ],
               "type": "string"
             },
@@ -1622,7 +2064,7 @@
             }
           ],
           "default": null,
-          "description": "Why the latest attempt was not judged.",
+          "description": "With `not_judged`: why the sentinel did not judge the request. With `awaiting_resend`: `provider_error` or `cut_off` if the provider failed the last try, which `failure` describes. Left out if the request is only waiting for the eval to resend it.",
           "title": "Reason"
         },
         "outcome": {
@@ -1640,7 +2082,7 @@
             }
           ],
           "default": null,
-          "description": "What the latest attempt came to, once decided.",
+          "description": "The sentinel's final decision on the request. Present once the state is `decided`.",
           "title": "Outcome"
         },
         "message": {
@@ -1683,7 +2125,35 @@
             }
           ],
           "default": null,
-          "description": "What was decided during the latest attempt, once decided, which the eval acts on and logs. Trimmed where the sidecar doesn't send results."
+          "description": "The sentinel's decisions on the request, which the eval acts on and logs. Present once the state is `decided`. Trimmed if the sidecar doesn't send results."
+        },
+        "reviews": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ReviewRecord"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The record of each question a sentinel asked a person about the request, in order. It includes a question whose step the sidecar stopped before a decision. A judged step lists the ids of its questions in its own `reviews`. Left out if no person was asked.",
+          "title": "Reviews"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailureRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The provider's most recent failure. Present with `awaiting_resend` and a `reason`."
         },
         "judging_time": {
           "anyOf": [
@@ -1696,7 +2166,7 @@
             }
           ],
           "default": null,
-          "description": "How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
+          "description": "How long the sentinel spent judging the latest attempt's request and reply so far, in seconds. The client waited on its model call meanwhile, so an eval counts this time as waiting, not as the agent's working time. For a request paused for a person, it is the total over the request's tries, and each try counts only while its client was waiting on it. 0 where nothing was judged. Sent with `judging_usage` on every answer about records the sidecar holds, whether or not the judgment is trimmed.",
           "title": "Judging Time"
         },
         "judging_usage": {
@@ -1721,6 +2191,152 @@
         "records"
       ],
       "title": "RequestResultResult",
+      "type": "object"
+    },
+    "ReviewRecord": {
+      "description": "The record of one question that a sentinel asked a person while it judged the request or its reply.",
+      "properties": {
+        "id": {
+          "description": "The question's id, as `list_pending_questions` returned it.",
+          "title": "Id",
+          "type": "string"
+        },
+        "try_number": {
+          "description": "The number of the try at which the sentinel asked the question, counting from 1 in the order the sidecar received the tries. It is the try whose request or reply the sentinel was judging. A client that retries a request sends it again under the same `x-irid`.",
+          "title": "Try Number",
+          "type": "integer"
+        },
+        "stage": {
+          "description": "The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run, `model_output` about the model's whole turn, before any of its calls runs.",
+          "enum": [
+            "tool_call",
+            "tool_result",
+            "model_output"
+          ],
+          "title": "Stage",
+          "type": "string"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The id of the tool call the question was about. Left out at `model_output`, where the question was about the whole turn.",
+          "title": "Call"
+        },
+        "asked": {
+          "description": "When the sentinel asked the question, in seconds since the epoch.",
+          "title": "Asked",
+          "type": "number"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "approve",
+                "reject",
+                "terminate"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The choice in the eval's answer, if the sidecar accepted an answer. The answer's `mac` proves that the eval sent it, not that a person chose it.",
+          "title": "Decision"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The reason in the eval's answer, if it gave one.",
+          "title": "Reason"
+        },
+        "answered": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the sidecar accepted the answer, in seconds since the epoch.",
+          "title": "Answered"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "enum": [
+                "answered",
+                "timed_out",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the wait for an answer ended. `answered`: the sidecar gave the sentinel the eval's answer. `timed_out`: the question expired, because the operator set a review timeout, and the sidecar gave the sentinel the cautious answer: `reject` if the question offers it, otherwise `terminate`. `cancelled`: the sidecar stopped the wait and the step reached no decision, so an answer accepted just before had no effect. Left out while the step is still waiting.",
+          "title": "Resolution"
+        },
+        "cause": {
+          "anyOf": [
+            {
+              "enum": [
+                "replaced_attempt",
+                "sample_ended",
+                "run_ended",
+                "cancelled",
+                "stopped"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why the sidecar cancelled the wait. `replaced_attempt`: a later attempt at the sample began. `sample_ended`: the eval ended the sample. `run_ended`: a sentinel ended the run at another request. `cancelled`: the eval cancelled the request with `cancel_paused_request`. `stopped`: anything else, such as the sidecar shutting down. Present only when `resolution` is `cancelled`.",
+          "title": "Cause"
+        },
+        "resolved": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the wait ended, in seconds since the epoch.",
+          "title": "Resolved"
+        }
+      },
+      "required": [
+        "id",
+        "try_number",
+        "stage",
+        "asked"
+      ],
+      "title": "ReviewRecord",
       "type": "object"
     },
     "SampleResultParams": {
@@ -1880,6 +2496,22 @@
           "default": null,
           "description": "The models the step's monitors and protocols called, each once, in the order first called. The sidecar takes a role's model from its own configuration, not from the eval's. Left out where none was called, and of a trimmed field.",
           "title": "Models"
+        },
+        "reviews": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The ids of the questions a person was asked while the step was judged, each of which `request_result`'s `reviews` says more about. Left out where nobody was asked.",
+          "title": "Reviews"
         }
       },
       "required": [
@@ -2114,7 +2746,7 @@
     }
   },
   "title": "Inspect Sentinel: the endpoint for evals",
-  "description": "JSON-RPC 2.0 methods, POSTed to /sentinel/v1, with a probe at GET /sentinel/info. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
+  "description": "JSON-RPC 2.0 methods, POSTed to /sentinel/v1, with a probe at GET /sentinel/info. A POST of a paused call's model request to /sentinel/v1/judged-reply is not a method: it fetches the provider's reply that the sidecar holds for that call, in the provider's format. `methods` names the definitions that a method's `params` and `result` fit. `errors` lists the codes of the method errors of the endpoint's own.",
   "methods": {
     "register_task": {
       "params": {
@@ -2155,6 +2787,30 @@
       "result": {
         "$ref": "#/$defs/EndSampleResult"
       }
+    },
+    "list_pending_questions": {
+      "params": {
+        "$ref": "#/$defs/ListPendingQuestionsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ListPendingQuestionsResult"
+      }
+    },
+    "answer_question": {
+      "params": {
+        "$ref": "#/$defs/AnswerQuestionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AnswerQuestionResult"
+      }
+    },
+    "cancel_paused_request": {
+      "params": {
+        "$ref": "#/$defs/CancelPausedRequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CancelPausedRequestResult"
+      }
     }
   },
   "errors": {
@@ -2173,6 +2829,18 @@
     "-32009": {
       "name": "unknown_task",
       "description": "The sidecar holds no registration of the task by the eval: it was never registered, or is no longer kept. The eval registers the task again, then completes the sample's registration. Answered to a `register_task` with a `mac` when the sidecar holds no token for the eval, as after a restart or once the token expired: the eval registers again with its token."
+    },
+    "-32011": {
+      "name": "unknown_question",
+      "description": "The sidecar holds no such question for the eval. Either the question was never asked, or it belongs to another eval. Or it closed without an answer: it expired and the sidecar gave the sentinel the cautious answer, or its model call was closed first, for example because the eval cancelled the call or ended the sample. Or it was answered, and the sidecar no longer keeps the record of that answer, for example after the eval ended the sample."
+    },
+    "-32012": {
+      "name": "question_answered",
+      "description": "The question already has an answer with a different choice or reason. The sidecar keeps the first answer."
+    },
+    "-32013": {
+      "name": "answer_refused",
+      "description": "The answer's choice is not one the question offers."
     },
     "-32010": {
       "name": "unauthorized",
