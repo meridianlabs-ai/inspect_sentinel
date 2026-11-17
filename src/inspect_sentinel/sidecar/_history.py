@@ -228,34 +228,6 @@ def sent_keys(input: Sequence[ChatMessage], body: bytes) -> tuple[str, ...]:
     return tuple(_keys(input, body))
 
 
-def carried_ids(input: Sequence[ChatMessage], body: bytes) -> frozenset[str]:
-    """The ids in a request's messages that the request carries, as against those a reader made up, so that `message_key` can key a message of it without the body.
-
-    Args:
-        input: The messages the request sends the model, as read from `body`.
-        body: The request body they were read from.
-    """
-    carried = _strings(body)
-    found: set[str] = set()
-    for message in input:
-        dumped: dict[str, Any] = message.model_dump(mode="json")
-        found.add(str(dumped.get("tool_call_id")))
-        for field in ("tool_calls", "content"):
-            items: object = dumped.get(field)
-            if isinstance(items, list):
-                found.update(
-                    str(cast("dict[str, Any]", item).get("id"))
-                    for item in cast("list[object]", items)
-                    if isinstance(item, dict)
-                )
-    return frozenset(id for id in found if _carried(id, carried))
-
-
-def message_key(message: ChatMessage, carried: frozenset[str]) -> str:
-    """One message, as `sent_keys` keys it, given the ids its request carries (`carried_ids`). A message a protocol took from the request, such as by `preprocess_step`, is keyed as it is in the request."""
-    return _digest(_key(message, carried))
-
-
 def record_sent_to(conversation: Conversation, model: str, keys: Sequence[str]) -> None:
     """Add a request that went to `model` to what the conversation has sent that model: for each message, the most copies of it that any one request held.
 

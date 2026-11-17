@@ -52,8 +52,6 @@ from ._exchange import (
     succeeded,
 )
 from ._history import (
-    carried_ids,
-    message_key,
     not_sent_before,
     record_sent,
     record_sent_to,
@@ -1961,7 +1959,6 @@ class Handler:
             request=None if named else request,
             binding=binding,
             message_keys=sent_keys(messages, body),
-            carried=carried_ids(messages, body),
         )
         said = call_texts(request.provider, request.body, request.format)
         # a changed call's result is of the call that ran, whichever the client holds
@@ -2553,18 +2550,18 @@ class Handler:
             message = ""
             if isinstance(step, BeforeGenerate):
                 # The request the model is about to be sent: the messages it
-                # has not been sent before, and the tools it is offered.
+                # has not been sent before, and the tools it is offered. The
+                # messages are the request's own, whatever of them the step
+                # holds: a protocol may ask about a step it thinned, as with
+                # `preprocess_step`, and the person approves the whole request.
                 sent = RequestAsked(
                     step.model,
-                    len(step.input),
+                    len(held.input),
                     tuple(
                         (position, _as_the_eval_holds(message, run, held))
                         for position, message in not_sent_before(
-                            step.input,
-                            [
-                                message_key(message, held.carried)
-                                for message in step.input
-                            ],
+                            held.input,
+                            held.message_keys,
                             _sent_to(run, held, step.model),
                         )
                     ),

@@ -311,9 +311,7 @@ class Held:
     binding: str = ""
     """For an eval's request, a digest that identifies the request. A request sent again under the same `x-irid` must have the same digest to count as a try of the same model call."""
     message_keys: tuple[str, ...] = ()
-    carried: frozenset[str] = frozenset()
-    """The ids in the request's messages that the request carries (`carried_ids`), to key a message a protocol took from the request."""
-    """The request's messages as the model is sent them (`sent_keys`), for `Conversation.sent_to` once the request goes to the provider."""
+    """Each of the request's messages as the model is sent it (`sent_keys`): what a question before a generate compares, and what `Conversation.sent_to` counts once the request goes to the provider."""
 
     @property
     def sent(self) -> int:

@@ -1438,6 +1438,34 @@ async def test_a_later_request_shows_only_what_the_model_was_not_sent_before() -
 
 
 @pytest.mark.anyio
+async def test_a_third_request_shows_nothing_the_first_two_sent() -> None:
+    handler = _at_requests()
+    async with _serving(handler) as client:
+        await _answered_once(handler, client)
+        await _sent_on(handler, client, _result_request(), "irid-2")
+        said = message({"type": "text", "text": "It rains."}, stop_reason="end_turn")
+        assert isinstance(await handler.reply(reply(said, id="y2")), Pass)
+        third = _sends(
+            "z",
+            "irid-3",
+            then=[
+                *ran("Oslo", "Rain."),
+                {"role": "assistant", "content": "It rains."},
+                {"role": "user", "content": "Continue."},
+            ],
+        )
+
+        question = await _paused_question_at_request(handler, client, third)
+
+    # The call and its result were sent with the second request, under ids
+    # the request carries. Only the model's last turn and what follows are new.
+    assert [(position, role) for position, role, _ in _shown(question)] == [
+        (5, "assistant"),
+        (6, "user"),
+    ]
+
+
+@pytest.mark.anyio
 async def test_a_message_rewritten_since_it_was_sent_is_shown_again() -> None:
     handler = _at_requests()
     async with _serving(handler) as client:
@@ -1743,9 +1771,13 @@ async def test_a_request_a_protocol_thinned_can_be_asked_about() -> None:
     async with _serving(handler) as client:
         question = await _paused_question_at_request(handler, client)
 
-    # the question shows the messages the protocol kept, by their own place
-    assert question["request"]["messages"] == 1
-    assert _shown(question) == [(1, "user", "What is the weather?")]
+    # The protocol's step has no system message. The question is still about
+    # the request the provider is sent, with both of its messages.
+    assert question["request"]["messages"] == 2
+    assert [(position, role) for position, role, _ in _shown(question)] == [
+        (1, "system"),
+        (2, "user"),
+    ]
 
 
 @pytest.mark.anyio
