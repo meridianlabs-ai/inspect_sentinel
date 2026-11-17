@@ -24,7 +24,7 @@ def _read(*texts: str) -> list[ChatMessage]:
 def _sent(*requests: list[ChatMessage], body: bytes = b"") -> list[str]:
     conversation = Conversation()
     for input in requests:
-        record_sent(conversation, input, body)
+        record_sent(conversation, input, body, "model")
     return [f"{message.role[0]}:{message.text}" for message in conversation.sent]
 
 
@@ -37,7 +37,7 @@ def _ids_kept(*requests: list[ChatMessage]) -> list[list[bool]]:
         given = with_sent_ids(conversation, input, b"")
         before = {message.text: message.id for message in conversation.sent}
         kept.append([before.get(message.text) == message.id for message in given])
-        record_sent(conversation, given, b"")
+        record_sent(conversation, given, b"", "model")
     return kept
 
 
@@ -276,7 +276,7 @@ def test_many_messages_alike_are_matched_in_time_proportional_to_their_number() 
 
     started = time.perf_counter()
     for input in [*requests, compacted]:
-        record_sent(conversation, input, b"")
+        record_sent(conversation, input, b"", "model")
     elapsed = time.perf_counter() - started
 
     # each counted once, and the summary new

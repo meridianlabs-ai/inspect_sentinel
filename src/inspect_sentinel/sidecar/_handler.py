@@ -50,9 +50,8 @@ from ._exchange import (
     Request,
     succeeded,
 )
-from ._history import record_sent, with_sent_ids
+from ._history import not_sent_before, record_sent, with_sent_ids
 from ._host import (
-    Askable,
     AskHuman,
     ModelUsed,
     Record,
@@ -93,7 +92,14 @@ from ._reply_stream import (
     ReplyStart,
     ReplyStream,
 )
-from ._review import Question, Review, Reviews, escalated, shown_turn
+from ._review import (
+    Question,
+    RequestAsked,
+    Review,
+    Reviews,
+    escalated,
+    shown_turn,
+)
 from ._sign import TIMESTAMP_WINDOW, call_values, request_values, unproven
 from ._state import (
     MADE_KEPT,
@@ -1970,7 +1976,7 @@ class Handler:
             return self._judged(refusal, proxy, held.exchange, attempt)
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
-        record_sent(conversation, messages, body)
+        record_sent(conversation, messages, body, held.model)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -2431,7 +2437,7 @@ class Handler:
             return None
 
         async def ask(
-            step: Askable,
+            step: Step,
             escalations: Escalations,
             choices: Sequence[str],
         ) -> HumanAnswer:
@@ -2514,7 +2520,19 @@ class Handler:
             view: ToolCallView | None = None
             result: ChatMessageTool | None = None
             turn: ChatMessageAssistant | None = None
-            if isinstance(step, AfterGenerate):
+            sent: RequestAsked | None = None
+            message = ""
+            if isinstance(step, BeforeGenerate):
+                # The request the model is about to be sent: the messages it
+                # has not been sent before, and the tools it is offered.
+                sent = RequestAsked(
+                    step.model,
+                    len(step.input),
+                    tuple(not_sent_before(step.input, _sent_to(run, held, step.model))),
+                    tuple(tool.name for tool in step.tools),
+                    step.tool_choice,
+                )
+            elif isinstance(step, AfterGenerate):
                 # The whole turn, as the model returned it, before any of its calls is
                 # judged. Each call has the call part of its view, which is all that
                 # `ToolCall.view` holds, as Inspect's own `generate` sets it. A viewer's
@@ -2547,6 +2565,7 @@ class Handler:
                 view=view,
                 result=result,
                 turn=turn,
+                request=sent,
                 escalations=escalated(escalations),
                 choices=tuple(choices),
                 closes=asked + timeout if timeout is not None else None,
@@ -2987,3 +3006,10 @@ def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
     digest.update(b"\x00")
     digest.update(result.model_dump_json(exclude={"id"}).encode())
     return digest.hexdigest()
+
+
+def _sent_to(run: Run, held: Held, model: str) -> Mapping[str, int]:
+    # What the held request's conversation has sent the model. `step.history`
+    # is what it has sent any model.
+    conversation = run.conversations.get(held.conversation)
+    return conversation.sent_to.get(model, {}) if conversation is not None else {}

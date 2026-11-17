@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 from inspect_ai.model import ChatMessageUser, GenerateConfig, ModelOutput
@@ -37,18 +38,6 @@ _CALL = BeforeToolCall(
 )
 
 
-_TURN = AfterGenerate(
-    model="anthropic/claude-test",
-    conversation="c",
-    input=[ChatMessageUser(content="Hello")],
-    agent_messages=None,
-    tools=[],
-    tool_choice="none",
-    config=GenerateConfig(),
-    output=ModelOutput.from_content("anthropic/claude-test", "Hi."),
-)
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("choices", "expected"),
@@ -80,21 +69,49 @@ async def test_an_escalation_to_a_person_is_not_let_through() -> None:
     assert isinstance(answer, Refuse)
 
 
+_GENERATE: dict[str, Any] = {
+    "model": "anthropic/claude-test",
+    "conversation": "c",
+    "input": [ChatMessageUser(content="Hello")],
+    "agent_messages": None,
+    "tools": [],
+    "tool_choice": "none",
+    "config": GenerateConfig(),
+}
+
+_TURN = AfterGenerate(
+    **_GENERATE, output=ModelOutput.from_content("anthropic/claude-test", "Hi.")
+)
+
+
 @pytest.mark.anyio
-async def test_a_turn_nobody_can_be_asked_about_ends_the_run(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    ("step", "about"),
+    [
+        pytest.param(BeforeGenerate(**_GENERATE), "the model's request", id="request"),
+        pytest.param(_TURN, "the model's turn", id="turn"),
+    ],
+)
+async def test_a_generate_nobody_can_be_asked_about_ends_the_run(
+    step: BeforeGenerate | AfterGenerate, about: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING):
-        answer = await SidecarHost().ask_human(_TURN, (), ["approve", "terminate"])
+        answer = await SidecarHost().ask_human(step, (), ["approve", "terminate"])
 
-    # a turn can't be rejected, so the cautious answer ends the run
+    # neither a request nor a turn can be rejected, so the cautious answer
+    # ends the run
     assert answer.decision == "terminate"
-    assert "the model's turn" in caplog.text
+    assert about in caplog.text
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("asks", ["nobody", "the eval"])
-async def test_a_turn_cannot_be_offered_for_rejection(asks: str) -> None:
+@pytest.mark.parametrize(
+    "step", [BeforeGenerate(**_GENERATE), _TURN], ids=["request", "turn"]
+)
+async def test_a_generate_cannot_be_offered_for_rejection(
+    step: BeforeGenerate | AfterGenerate, asks: str
+) -> None:
     asked: list[object] = []
 
     async def ask(
@@ -105,28 +122,13 @@ async def test_a_turn_cannot_be_offered_for_rejection(asks: str) -> None:
 
     host = RunHost(SidecarHost(), None, ask if asks == "the eval" else None)
 
-    # A turn can't be rejected, so the answer could not become a decision. The
-    # protocol is told when it asks, as Inspect's own host tells it.
+    # Neither a request nor a turn can be rejected, so the answer could not
+    # become a decision. The protocol is told when it asks, as Inspect's own
+    # host tells it.
     with pytest.raises(ValueError, match="cannot be offered 'reject'"):
-        await host.ask_human(_TURN, (), ["approve", "reject", "terminate"])
+        await host.ask_human(step, (), ["approve", "reject", "terminate"])
 
     assert asked == []
-
-
-@pytest.mark.anyio
-async def test_a_person_cannot_be_asked_before_a_generate() -> None:
-    step = BeforeGenerate(
-        model="anthropic/claude-test",
-        conversation="c",
-        input=[ChatMessageUser(content="Hello")],
-        agent_messages=None,
-        tools=[],
-        tool_choice="none",
-        config=GenerateConfig(),
-    )
-
-    with pytest.raises(NotImplementedError, match="model_input stage"):
-        await SidecarHost().ask_human(step, (), ["approve"])
 
 
 @pytest.mark.anyio

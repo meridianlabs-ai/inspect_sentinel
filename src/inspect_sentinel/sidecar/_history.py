@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from bisect import bisect_right
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from difflib import SequenceMatcher
 from typing import Any, cast
 
@@ -24,7 +25,7 @@ RECENT_REQUESTS = 16
 
 
 def record_sent(
-    conversation: Conversation, input: Sequence[ChatMessage], body: bytes
+    conversation: Conversation, input: Sequence[ChatMessage], body: bytes, model: str
 ) -> None:
     """Add what one request of the conversation sent the model to what it has sent.
 
@@ -34,7 +35,11 @@ def record_sent(
         conversation: The conversation.
         input: The messages the request sends the model, as read from `body`.
         body: The request body they were read from, which tells an id the request carries from one a reader made up.
+        model: The model the request is sent to. `Conversation.sent_to` keeps what each model was sent.
     """
+    held = conversation.sent_to.setdefault(model, Counter())
+    for key, copies in Counter(sent_key(message) for message in input).items():
+        held[key] = max(held[key], copies)
     keys = _keys(input, body)
     matched = _matched(conversation, keys)
     for position, message in enumerate(input):
@@ -210,3 +215,33 @@ def _without_made_up_id(item: object, carried: frozenset[str]) -> object:
 
 def _carried(id: object, carried: frozenset[str]) -> bool:
     return isinstance(id, str) and id in carried
+
+
+def not_sent_before(
+    input: Sequence[ChatMessage], sent: Mapping[str, int]
+) -> list[tuple[int, ChatMessage]]:
+    """The messages of a request that the model has not been sent before, each with its position in the request, counting from 1.
+
+    A message was sent before if the model has been sent one that says the same (`sent_key`) that no earlier message of the request has been matched to, as in Inspect's own process. So a message rewritten since it was sent is here as its new version, as is an assistant message the client wrote itself. A message sent before is left out wherever it now sits, so one that moved is not here. A message that repeats an earlier one, such as an agent's fixed prompt to continue, is here when the request holds it more times than any request the model was sent did.
+
+    Args:
+        input: The messages the request sends the model.
+        sent: By `sent_key`, the most copies of a message that any one request sent to the model held (`Conversation.sent_to`).
+    """
+    left = Counter(sent)
+    new: list[tuple[int, ChatMessage]] = []
+    for position, message in enumerate(input, 1):
+        key = sent_key(message)
+        if left[key] > 0:
+            left[key] -= 1
+        else:
+            new.append((position, message))
+    return new
+
+
+def sent_key(message: ChatMessage) -> str:
+    """What the model is sent of a message, as a digest: all but its id, source, metadata and the model it names."""
+    said = message.model_dump(mode="json", exclude=set(_NOT_SENT))
+    return hashlib.sha256(
+        json.dumps(said, sort_keys=True, default=str).encode()
+    ).hexdigest()
