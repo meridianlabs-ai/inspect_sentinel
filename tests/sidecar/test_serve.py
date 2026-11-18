@@ -245,6 +245,7 @@ server:
     monitor: mockllm/model
   port: 9000
   reject_status: 503
+  judging_timeout: 30
   release: early
   keepalive: 5
   eval_results: false
@@ -269,6 +270,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
 
     assert arguments.model_role == ["monitor=mockllm/model"]
     assert (arguments.port, arguments.reject_status) == (9000, 503)
+    assert arguments.judging_timeout == 30
     assert arguments.release == "early"
     assert arguments.keepalive == 5
     assert (arguments.no_eval_results, arguments.no_runtime_task_registration) == (
@@ -307,6 +309,26 @@ def test_an_option_given_wins_over_the_stanza_even_at_its_default(
     assert arguments.port == 9000
 
 
+def test_a_judging_timeout_given_as_an_option_wins_over_the_stanzas(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(_STANZA)
+
+    arguments = parse_arguments(["--sentinel", str(config), "--judging-timeout", "5"])
+
+    assert arguments.judging_timeout == 5
+
+
+def test_the_judging_timeouts_old_option_is_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_arguments(["--sentinel", "no_tokyo", "--time-limit", "5"])
+
+    assert "unrecognized arguments: --time-limit" in capsys.readouterr().err
+
+
 @pytest.mark.anyio
 async def test_a_handler_is_built_from_a_file_with_a_stanza(tmp_path: Path) -> None:
     config = tmp_path / "sentinel.yaml"
@@ -339,6 +361,7 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     ("text", "says"),
     [
         ("sentinel:\n  name: no_tokyo\nserver:\n  colour: blue\n", "doesn't fit"),
+        ("sentinel:\n  name: no_tokyo\nserver:\n  time_limit: 5\n", "doesn't fit"),
         (
             "sentinel:\n  name: no_tokyo\nserver:\n  envoy:\n    colour: blue\n",
             "doesn't fit",
@@ -357,6 +380,7 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     ],
     ids=[
         "a setting the server doesn't have",
+        "the judging timeout's old name",
         "a setting the Envoy shim doesn't have",
         "another key",
         "no sentinel",
