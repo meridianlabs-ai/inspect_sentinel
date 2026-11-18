@@ -1998,6 +1998,27 @@ async def test_a_reply_sent_back_as_several_messages_is_none_of_them(
 
 
 @pytest.mark.anyio
+async def test_a_reply_sent_back_as_two_messages_is_neither_when_one_changes() -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen))
+    await handler.request(request("a"))
+    both = message(weather("Paris"), weather("Oslo", "toolu_2"))
+    await handler.reply(reply(both, id="a"))
+    judged, _ = _noted(seen, "call")
+    split = _both_ran(together=False)
+    await handler.request(request("b", then=split))
+    fine = {"type": "text", "text": "Fine."}
+    await handler.reply(reply(message(fine, stop_reason="end_turn"), id="b"))
+
+    # the message with the lookup of Oslo is as the last request held it,
+    # and still holds a call of the reply
+    split[0]["content"][0]["text"] = "Checking the weather in Paris."
+    await handler.request(request("c", then=split))
+
+    assert judged not in _noted(seen, "input")[-1]
+
+
+@pytest.mark.anyio
 async def test_a_message_holding_the_calls_of_two_replies_is_neither() -> None:
     seen: list[tuple[str, Any]] = []
     handler = Handler(notes_message_ids(seen))

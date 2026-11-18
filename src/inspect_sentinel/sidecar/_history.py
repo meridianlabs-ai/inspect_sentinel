@@ -80,25 +80,31 @@ def _replied(
     # The positions of the request that hold a reply's message no earlier
     # request held, each with the id the reply was judged under. The reply
     # is known by its calls, whose ids the request carries, so a call the
-    # sentinel rejected or changed doesn't hide it. A message is one only if
-    # each of its calls is from the same reply, and nothing else in the
-    # request has that reply's id or claims it: a client may send one reply's
-    # calls back as several messages, and none of those is the reply's.
+    # sentinel rejected or changed doesn't hide it. A message is the reply's
+    # only if each of its calls is from that reply, no other message of the
+    # request holds a call of it, and none has its id. A client may send one
+    # reply's calls back as several messages, and none of those is the
+    # reply's, whether or not an earlier request held it.
     origins = _reply_ids(conversation)
+    holders: Counter[str] = Counter()
     claims: dict[int, str] = {}
     for position, message in enumerate(input):
-        if matched.get(position) is not None or message.role != "assistant":
+        if message.role != "assistant":
             continue
         made = {origins.get(call.id) for call in message.tool_calls or []}
-        if len(made) == 1 and (reply := made.pop()) is not None:
-            claims[position] = reply
-    taken = Counter(claims.values())
-    taken.update(
-        id
-        for position, message in enumerate(input)
-        if (id := matched.get(position) or message.id) is not None
-    )
-    return {position: reply for position, reply in claims.items() if taken[reply] == 1}
+        holders.update(reply for reply in made if reply is not None)
+        if matched.get(position) is None and len(made) == 1:
+            reply = next(iter(made))
+            if reply is not None:
+                claims[position] = reply
+    used = {
+        matched.get(position) or message.id for position, message in enumerate(input)
+    }
+    return {
+        position: reply
+        for position, reply in claims.items()
+        if holders[reply] == 1 and reply not in used
+    }
 
 
 def _reply_ids(conversation: Conversation) -> dict[str, str | None]:
