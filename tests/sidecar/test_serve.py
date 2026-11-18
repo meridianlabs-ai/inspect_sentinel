@@ -15,10 +15,12 @@ import pytest
 import uvicorn
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision, Escalations
+from inspect_sentinel._decorators import monitor, protocol
+from inspect_sentinel._protocols import observe_only
+from inspect_sentinel._report import Decision, Escalations, Observation
+from inspect_sentinel._runner import run_monitors
 from inspect_sentinel._step import BeforeToolCall
-from inspect_sentinel._types import Protocol
+from inspect_sentinel._types import Monitor, Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
 from inspect_sentinel.sidecar._eval_endpoint import TOKEN_VARIABLE
 from inspect_sentinel.sidecar._inspect_client import judgment
@@ -235,6 +237,70 @@ async def test_a_sidecar_can_be_told_how_strict_to_be() -> None:
     # a request no eval names, such as a grader's
     with pytest.raises(UnregisteredSampleError, match="no x-inspect-context"):
         await handler.request(request())
+
+
+@monitor(portable=False)
+def reads_the_sandbox() -> Monitor:
+    async def observe(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    return observe
+
+
+@protocol(portable=False)
+def reads_the_store() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.proceed()
+
+    return decide
+
+
+@protocol
+def builds_its_monitor() -> Protocol:
+    return observe_only([reads_the_sandbox()])
+
+
+@protocol
+def runs_its_monitor() -> Protocol:
+    held = reads_the_sandbox()
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        await run_monitors(held, context, step)
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.parametrize(
+    ("sentinel", "named"),
+    [
+        ("name: reads_the_store", "reads_the_store"),
+        (
+            "name: observe_only\n  monitors:\n    - name: reads_the_sandbox",
+            "reads_the_sandbox",
+        ),
+        ("name: builds_its_monitor", "reads_the_sandbox"),
+        ("name: runs_its_monitor", "reads_the_sandbox"),
+    ],
+    ids=[
+        "the sentinel itself",
+        "a monitor the configuration gives a protocol",
+        "a monitor a protocol's factory builds and returns",
+        "a monitor a protocol's factory builds and runs itself",
+    ],
+)
+def test_a_sentinel_that_holds_an_eval_only_monitor_or_protocol_is_refused(
+    tmp_path: Path, sentinel: str, named: str
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(f"sentinel:\n  {sentinel}\n")
+
+    with pytest.raises(ValueError, match=f"holds {named}, declared `portable=False`"):
+        handler_from_arguments(parse_arguments(["--sentinel", str(config)]))
 
 
 _STANZA = """
