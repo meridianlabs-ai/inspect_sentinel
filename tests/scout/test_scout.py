@@ -2876,8 +2876,8 @@ def test_replay_hands_tool_steps_the_assistant_message_they_had_live(
 
     assert replay_check_differences(replayed, recorded).empty
     # each turn's four tool steps (two calls, each before and after) digest
-    # one message, not None; the digest leaves out ids, so the turns differ
-    # by their reasoning and text
+    # one message, not None, and the two turns' messages differ (the digest
+    # leaves out message ids, so they differ by content and calls)
     digests: dict[str, list[str]] = {}
     for row in cast(list[Row], recorded.to_dict("records")):
         if not str(row["metadata.stage"]).startswith("tool"):

@@ -190,7 +190,7 @@ If your scaffold rebuilds the model's message as a new message before running it
 
 For an agent run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html), `assistant_message` is the model's message with the call ids the bridge handed the agent. When the model's id can't name the call (e.g. the model gave an earlier, different call the same id), the bridge hands the call over under a new id, and the message carries that id, so `step.call.id` still finds the call.
 
-The bridge can't always tell which call a result answers: when the model gives two calls in one turn the same id and the bridge hands both over under it, or when the model proposes the same call under the same id in more than one turn. At `AfterToolCall`, the four fields from the model call are then `None`. At `BeforeToolCall` they are set, and two calls handed over under one id are both in the message under `step.call.id`.
+The bridge can't always tell which call a result answers: when the model gives two calls in one turn the same id and the bridge hands both over under it, or when the bridge hands the same call to the agent more than once under the same id (e.g. in more than one turn). At `AfterToolCall`, the four fields from the model call are then `None`. At `BeforeToolCall` these cases don't clear them, and two calls handed over under one id are both in the message under `step.call.id`.
 
 Replay from a log skips a bridged agent's tool steps.
 :::
