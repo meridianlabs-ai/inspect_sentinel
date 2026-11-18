@@ -206,7 +206,8 @@ def _renamed(runs: list[tuple[str, str | None, bool]], checked: set[str]) -> set
     # "parsing" or "approval" is of a call rejected before its step was built.
     # A run whose steps replay skips for reasons the events don't show (one no
     # model call proposed, one in a region that checks no tool calls) still
-    # counts as built here
+    # counts as built here, and so does a checked run replay skips with a
+    # warning, whose checks then keep the call id replay gives a later run
     holders: dict[str, str | None] = {}
     renamed: set[str] = set()
     for call_id, execution, unbuilt in runs:

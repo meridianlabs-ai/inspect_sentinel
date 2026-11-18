@@ -1465,7 +1465,7 @@ wheels = [
 
 [[package]]
 name = "inspect-scout"
-version = "0.6.2"
+version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1499,9 +1499,9 @@ dependencies = [
     { name = "wrapt" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f4/8d/f7951eeb8e0f52d46a6fd58ef8ed6e4d67beb939a56f82cf42c04332ce41/inspect_scout-0.6.2.tar.gz", hash = "sha256:ba7f49ef11eceaf0308d88a91b6b2d8be7b1a8e50510a5f4f18df9b2cc83312a", size = 2582977, upload-time = "2026-10-29T15:54:09.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/e0/a80ee08ae39b7edc5755f9839b5b225fb2bebaeb8aeb3782e330a17aeeea/inspect_scout-0.6.3.tar.gz", hash = "sha256:d93d0f0c9c85a020bbb33356fdaf35d60266e7855668c7d91631ad970abc1a8d", size = 2592655, upload-time = "2026-11-18T02:42:10.452Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/c0/ee61aae33677749c06a77b080e8090b71ff949769c630f8ed5e1a6e38f8d/inspect_scout-0.6.2-py3-none-any.whl", hash = "sha256:7d50bce004c11e2103bc2b354d3271d181c2f173eb316ff9d0d796404bc50a0f", size = 2663746, upload-time = "2026-10-29T15:54:08.065Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/70/6a5b506d653c071f51fd750f257cf6edf05b8361469cd5bb6db0dbf2bf92/inspect_scout-0.6.3-py3-none-any.whl", hash = "sha256:ca0d999bcd62f388b443f32022cf2072641352e6c3b1bda48c14afc1f0cf8e3f", size = 2684434, upload-time = "2026-11-18T02:42:08.273Z" },
 ]
 
 [[package]]
@@ -1581,8 +1581,8 @@ requires-dist = [
     { name = "grpcio", marker = "extra == 'envoy'", specifier = ">=1.74.0" },
     { name = "httpx", marker = "extra == 'dev'" },
     { name = "inspect-ai", specifier = ">=0.3.291" },
-    { name = "inspect-scout", specifier = ">=0.6.2" },
-    { name = "inspect-scout", marker = "extra == 'scout'", specifier = ">=0.6.2" },
+    { name = "inspect-scout", specifier = ">=0.6.3" },
+    { name = "inspect-scout", marker = "extra == 'scout'", specifier = ">=0.6.3" },
     { name = "ipython", marker = "extra == 'dev'" },
     { name = "jinja2", specifier = ">=3.0" },
     { name = "jsonschema", marker = "extra == 'dev'" },
