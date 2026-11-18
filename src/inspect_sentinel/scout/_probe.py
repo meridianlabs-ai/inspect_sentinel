@@ -152,7 +152,7 @@ def _without_ids(value: Any) -> Any:
 def replay_check_differences(replayed: DataFrame, recorded: DataFrame) -> DataFrame:
     """The differences between `replay_check()` replayed and read over the same transcripts: empty where replay handed the monitor what it saw live.
 
-    Pass the results of `as_scanner(replay_check())` and of `as_reader("replay_check")`, each a scanner's dataframe from `scan_results_df()`, from one scan or two. Rows are matched by transcript, conversation, stage and step id where the replay took its conversations from the log's span tree, as read mode does, by the origins the log records (`turns` `"recorded"`). Otherwise the transcript's rows are matched by transcript, stage and step id alone: where its conversations came from a stored timeline (`as_scanner(timeline=)`, `"stored"`), or its turns were inferred (`"inferred"`), from the events of a log without origins or from the messages of a transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 (including a sample a retried eval carried over from one when its span tree shows the older layout).
+    Pass the results of `as_scanner(replay_check())` and of `as_reader("replay_check")`, each a scanner's dataframe from `scan_results_df()`, from one scan or two. A read row's step id is its `replay_step_id`, so an agent bridge's check is matched with the replayed step of the call it checked, and one with no such step is listed as only recorded. Rows are matched by transcript, conversation, stage and step id where the replay took its conversations from the log's span tree, as read mode does, by the origins the log records (`turns` `"recorded"`). Otherwise the transcript's rows are matched by transcript, stage and step id alone: where its conversations came from a stored timeline (`as_scanner(timeline=)`, `"stored"`), or its turns were inferred (`"inferred"`), from the events of a log without origins or from the messages of a transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 (including a sample a retried eval carried over from one when its span tree shows the older layout).
 
     Args:
         replayed: The replay scanner's results.
@@ -247,12 +247,17 @@ def _digests(frame: DataFrame, side: str) -> list[_Digested]:
         }
         fields["eval"] = digests["eval"]
         turns = row.get("metadata.turns")
+        # a read row's replayed step, which an agent bridge's check names
+        # apart from its own key
+        joined = row.get("metadata.replay_step_id")
         found.append(
             _Digested(
                 transcript_id=str(row["transcript_id"]),
                 conversation=str(row["metadata.conversation"]),
                 stage=str(row["metadata.stage"]),
-                step_id=str(row["metadata.step_id"]),
+                step_id=joined
+                if isinstance(joined, str)
+                else str(row["metadata.step_id"]),
                 turns=turns if isinstance(turns, str) else None,
                 fields=fields,
             )
