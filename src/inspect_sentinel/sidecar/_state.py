@@ -39,7 +39,7 @@ Registered: TypeAlias = Literal["kept", "full", "tokens_full", "another_token"]
 NotJudged: TypeAlias = Literal[
     "unreadable",
     "unregistered",
-    "time_limit",
+    "judging_timeout",
     "error",
     "provider_error",
     "cut_off",

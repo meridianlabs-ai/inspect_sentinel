@@ -720,12 +720,12 @@ From comparing inspect_ai's in-process dispatch with the sidecar handler in #102
 - **The sidecar's `ask_human` doesn't approve on its own.** At the tool stages it answers `approve` and logs a warning, so a `human()` gate lets every call through. Answer the most cautious choice offered, or raise as at the generate stages, or make approving an explicit option.
 - **A retry answer for the proxy.** The sidecar refuses a rejected turn with `--reject-status` and relies on the client to send the request again; many clients take a 400 as final. A result carrying the body to send again would let the proxy hook ask the model again before it answers the client, as the bridge does.
 - **`modify` in the sidecar**, by rewriting the tool call in the reply through `ReplaceReplyResult`; it raises `NotImplementedError` today.
-- **What a proxy does when the sentinel fails or runs out of time.** Say in `proxy_endpoint.schema.json` that `SENTINEL_FAILED` and `TIME_LIMIT` refuse the call by default, as in-process fails the sample.
+- **What a proxy does when the sentinel fails or runs out of time.** Say in `proxy_endpoint.schema.json` that `SENTINEL_FAILED` and `JUDGING_TIMEOUT` refuse the call by default, as in-process fails the sample.
 - **The proxy is told which stages are watched**, by a method or on `/health`, so a proxy whose sentinel watches only `BeforeGenerate` need not hold streamed replies back. A change to the endpoint's schema.
 - **The proxy marks calls that aren't the agent's turns** (a client's titles, compaction summaries), with a field in `judge_request` or a header, so the sidecar can skip them as `is_agent_generate()` does in-process. Until then they are judged as agent turns.
 - **The sidecar's records carry the step id and conversation**, as `SentinelEvent` does, so the two can be shown in one viewer or converted to a log.
 - **Say that a monitor's model calls must not go through the proxy.** The sidecar calls models directly, but an environment that points a provider's base URL at the proxy would have the monitor's own calls judged.
-- **A time limit for the sentinel in-process.** Sample limits are suspended while the sentinel runs, and nothing bounds it, so a hung monitor model call hangs the sample. The sidecar's `--time-limit` is the precedent.
+- **A time limit for the sentinel in-process.** Sample limits are suspended while the sentinel runs, and nothing bounds it, so a hung monitor model call hangs the sample. The sidecar's `--judging-timeout` is the precedent.
 - **The runner refuses actions a stage can't carry out yet.** Until "Generate stages, part 2" (under Later) lands, a `reject` or `modify` at `BeforeGenerate` or `AfterGenerate` is dropped by both hosts without a word; refusing it in `run_sentinel` makes every host agree, and part 2 lifts the refusal.
 
 ### Later

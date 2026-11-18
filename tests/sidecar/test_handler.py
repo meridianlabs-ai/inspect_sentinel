@@ -17,12 +17,12 @@ from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
     Answer,
     Handler,
+    JudgingTimeoutError,
     ModifyError,
     Pass,
     Record,
     Refuse,
     Replace,
-    TimeLimitError,
     UnreadableError,
     _handler,
     read_reply,
@@ -250,11 +250,11 @@ def takes(seconds: float) -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_sentinel_past_the_time_limit_is_cancelled() -> None:
-    handler = Handler(takes(30), time_limit=0.05)
+async def test_sentinel_past_the_judging_timeout_is_cancelled() -> None:
+    handler = Handler(takes(30), judging_timeout=0.05)
     await handler.request(request())
 
-    with pytest.raises(TimeLimitError, match="reply 'x' within 0.05 seconds"):
+    with pytest.raises(JudgingTimeoutError, match="reply 'x' within 0.05 seconds"):
         await handler.reply(reply(message(weather("Oslo"))))
 
     # the rejection it was about to make is not kept
@@ -263,7 +263,7 @@ async def test_sentinel_past_the_time_limit_is_cancelled() -> None:
 
 @pytest.mark.anyio
 async def test_sentinel_is_not_timed_unless_a_limit_is_set() -> None:
-    within = Handler(takes(0.05), time_limit=30)
+    within = Handler(takes(0.05), judging_timeout=30)
     unlimited = Handler(takes(0.05))
 
     for handler in (within, unlimited):

@@ -98,7 +98,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="The HTTP status a rejected turn is refused with. 400, the default, is final to a client. One a client retries by itself, such as 503, brings it back, and the model is then told of the rejection.",
     )
     parser.add_argument(
-        "--time-limit",
+        "--judging-timeout",
         type=float,
         default=None,
         metavar="SECONDS",
@@ -165,7 +165,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         metavar="SECONDS",
-        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. The eval's prompt for it stays open until someone answers, and that answer is then not used. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --time-limit.",
+        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. The eval's prompt for it stays open until someone answers, and that answer is then not used. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --judging-timeout.",
     )
 
 
@@ -195,7 +195,7 @@ class ServerSettings(BaseModel):
     eval_port: int | None = None
     envoy: EnvoySettings | None = None
     reject_status: int | None = None
-    time_limit: float | None = None
+    judging_timeout: float | None = None
     eval_results: bool | None = None
     runtime_task_registration: bool | None = None
     strictness: Literal["open", "known_tasks", "registered_only"] | None = None
@@ -232,7 +232,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "eval_port",
             "envoy_port",
             "reject_status",
-            "time_limit",
+            "judging_timeout",
             "strictness",
             "task_expiry",
             "max_task_registrations",
@@ -357,7 +357,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         host=SidecarHost(roles),
         state=MemoryState(expiry=arguments.run_expiry),
         reject_status=arguments.reject_status,
-        time_limit=arguments.time_limit,
+        judging_timeout=arguments.judging_timeout,
         eval_results=not arguments.no_eval_results,
         tasks=read_tasks_folder(arguments.tasks_folder)
         if arguments.tasks_folder

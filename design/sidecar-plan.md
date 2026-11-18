@@ -94,7 +94,7 @@ Repository: `inspect_sentinel`. Depends on: step 1.
 Repository: `inspect_sentinel`. Depends on: step 2.
 
 - JSON-RPC 2.0 at `POST /proxy/v1`: `judge_request` and `judge_reply`, answered with `pass`, `replace` or `refuse` (section 1).
-- The server command: one port by default, `GET /health`, `--max-body-bytes`, `--time-limit` and `--reject-status`.
+- The server command: one port by default, `GET /health`, `--max-body-bytes`, `--judging-timeout` and `--reject-status`.
 - The schema file `proxy_endpoint.schema.json`, generated from the endpoint's models, with a test that fails when it is stale.
 - Tests: the endpoint through its methods, held to its schema file.
 
