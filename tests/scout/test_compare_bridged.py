@@ -17,6 +17,7 @@ from inspect_ai.tool import ToolCall
 from inspect_scout import scan, scan_results_df, transcripts_from
 
 from inspect_sentinel import (
+    AfterGenerate,
     AfterToolCall,
     BeforeToolCall,
     Context,
@@ -151,7 +152,7 @@ async def _anthropic_loop(task: str) -> None:
 
 @protocol
 def judge(bad: str = "bad") -> ProtocolGroup:
-    """Rejects a call to read the file `bad`, and proceeds otherwise, recording the call's arguments or the result it saw."""
+    """Rejects a call to read the file `bad`, and proceeds otherwise, recording the call's arguments or the result it saw; proceeds at each generate's output."""
 
     async def tool_call(
         context: Context, step: BeforeToolCall, escalations: Escalations
@@ -166,7 +167,12 @@ def judge(bad: str = "bad") -> ProtocolGroup:
     ) -> Decision:
         return Decision(action="proceed", metadata={"result": step.result.text})
 
-    return ProtocolGroup(tool_call, tool_result)
+    async def model_output(
+        context: Context, step: AfterGenerate, escalations: Escalations
+    ) -> Decision:
+        return Decision(action="proceed")
+
+    return ProtocolGroup(tool_call, tool_result, model_output)
 
 
 def run(
@@ -325,12 +331,11 @@ def test_a_bridge_check_names_the_replayed_step_of_the_call_it_checked(
     assert not {r["metadata.step_id"] for r in tools} & {
         joined(step, uuids) for _, step, _ in expected
     }
-    # each generate's checks are read under the generate's id, as replay names it
-    assert all(
-        r["metadata.replay_step_id"] == r["metadata.step_id"]
-        for r in read
-        if r["metadata.stage"].startswith("model")
-    )
+    # each generate's check, one per model call the bridge made, is read under
+    # the generate's id, as replay names it
+    generates = [r for r in read if r["metadata.stage"].startswith("model")]
+    assert len(generates) == len(uuids)
+    assert all(r["metadata.replay_step_id"] == r["metadata.step_id"] for r in generates)
 
 
 def _text(value: object) -> str | None:
@@ -341,7 +346,9 @@ def _text(value: object) -> str | None:
 def replayed_bridged_steps(frame: Any) -> None:
     # replay rebuilds bridged agents' tool steps from the inspect_ai release
     # with the follow-up to #6446 that replays them as the conversation;
-    # earlier releases skip them
+    # earlier releases skip them. The skip goes when this repository's
+    # inspect-ai floor is raised to that release, so that a regression that
+    # drops every bridged step fails rather than skips
     if not any(r["metadata.stage"].startswith("tool") for r in records(frame)):
         pytest.skip("this inspect_ai's replay skips bridged agents' tool steps")
 

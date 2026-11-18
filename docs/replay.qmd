@@ -416,13 +416,15 @@ Logs written by older versions of inspect_ai, and transcripts from other sources
 
 ### Bridged Agents
 
-Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools. For these agents, replay shows each tool call as the model wrote it, and each result as the model next received it. So a monitor replayed at a tool call sees what a live sentinel saw there: the model's call. A call a sentinel rejected has the rejection the model received as its result, and a result that never reached the model has no step. A person's decision at a bridge's check still reaches the later steps of the conversation.
+Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools. For these agents, replay shows each tool call as the model wrote it, and each result as the model next received it. A live sentinel saw the call as the bridge showed it at the check, which is usually the model's call but not always: after an approver's `modify`, the sentinel saw the modified arguments, and at a host tool a sandbox bridge ran, it saw the call under that tool's own name, where replay shows the name the model used (e.g. `mcp__host__addition`). A call a sentinel rejected has the rejection the model received as its result, and a result that never reached the model has no step. A person's decision at a bridge's check still reaches the later steps of the conversation.
 
 #### Comparing With the Recorded Sentinel
 
 `compare_decisions()` pairs each of a bridge's checks with the replayed step of the call it checked, so you can compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions (see [Comparing Decisions](#comparing-decisions)).
 
 A check is paired with the step of the model call that proposed the call: the latest model call the bridge made in the same conversation before the check whose response holds the call id. The read-mode row names that step in `metadata.replay_step_id`. The check's own `metadata.step_id` and citations stay as read mode gives them.
+
+Pairing a check with its step doesn't make their inputs the same. Where the live sentinel saw a modified call or a host tool's own name (see [Bridged Agents](#bridged-agents)), the replayed monitor decides on the model's call, so a difference in decision there can come from the input as well as the monitor.
 
 A row is never paired by a guess. A check is `"only recorded"` when no replayed step is the check's alone, for example when:
 
