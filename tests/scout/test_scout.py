@@ -100,6 +100,7 @@ from inspect_sentinel.scout import (
     replay_check_differences,
 )
 from inspect_sentinel.scout._context import Contexts
+from inspect_sentinel.scout._probe import _hash
 from inspect_sentinel.scout._select import selector_from, table_rows
 from inspect_sentinel.scout._steps import transcript_steps
 from tests._fakes import View
@@ -2875,9 +2876,8 @@ def test_replay_hands_tool_steps_the_assistant_message_they_had_live(
 
     assert replay_check_differences(replayed, recorded).empty
     # each turn's four tool steps (two calls, each before and after) digest
-    # one message, not None, and the two turns' messages differ
-    from inspect_sentinel.scout._probe import _hash
-
+    # one message, not None; the digest leaves out ids, so the turns differ
+    # by their reasoning and text
     digests: dict[str, list[str]] = {}
     for row in cast(list[Row], recorded.to_dict("records")):
         if not str(row["metadata.stage"]).startswith("tool"):
