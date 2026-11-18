@@ -2874,9 +2874,11 @@ def test_replay_hands_tool_steps_the_assistant_message_they_had_live(
     replayed, recorded = frames["replayed"], frames["recorded"]
 
     assert replay_check_differences(replayed, recorded).empty
-    # each turn's tool steps digest one message, and the two turns' differ,
-    # so neither is None
-    digests: dict[str, set[str]] = {}
+    # each turn's four tool steps (two calls, each before and after) digest
+    # one message, not None, and the two turns' messages differ
+    from inspect_sentinel.scout._probe import _hash
+
+    digests: dict[str, list[str]] = {}
     for row in cast(list[Row], recorded.to_dict("records")):
         if not str(row["metadata.stage"]).startswith("tool"):
             continue
@@ -2884,10 +2886,12 @@ def test_replay_hands_tool_steps_the_assistant_message_they_had_live(
         metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
         step = metadata["step"]
         turn = str(row["metadata.step_id"]).split("c")[0]
-        digests.setdefault(turn, set()).add(step["assistant_message"])
+        digests.setdefault(turn, []).append(step["assistant_message"])
     assert sorted(digests) == ["t1", "t2"]
-    assert all(len(found) == 1 for found in digests.values())
-    assert digests["t1"] != digests["t2"]
+    assert all(len(found) == 4 for found in digests.values())
+    [first], [second] = (set(found) for found in digests.values())
+    assert _hash(None) not in (first, second)
+    assert first != second
 
 
 def digested(conversation: str, call: str, turns: str | None) -> Row:
