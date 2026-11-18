@@ -189,6 +189,12 @@ def deletes_then_submits() -> Monitor:
 If your scaffold rebuilds the model's message as a new message before running its calls, the four fields from the model call (`input`, `tools`, `tool_choice`, and `assistant_message`) are `None` in an eval, while replay from a log fills them in.
 :::
 
+::: {.callout-note appearance="simple"}
+For an agent run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html), `assistant_message` is the message as the bridge handed it to the agent. When the model reuses a call id, the bridge hands the call over under a new id, and the message carries that id, so `step.call.id` still finds the call. Apart from the ids, its text, reasoning, and calls are the model's.
+
+If the model gives two calls in one turn the same id, the bridge hands both over under that id, so the message holds two calls with `step.call.id`. Look the call up by its function and arguments as well.
+:::
+
 ### Tool Results and Truncation
 
 At `AfterToolCall`, `result` is the tool message the agent's model will see, and `output` is the tool's full return value. They differ when the output was longer than Inspect's output limit, because `result` then holds the truncated text. To score what the agent's model saw, use `result`. If you use `output`, check it for `None`: replay sets it to `None`, because the log records only `result`.

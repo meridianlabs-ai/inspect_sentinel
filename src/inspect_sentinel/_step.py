@@ -138,6 +138,8 @@ class BeforeToolCall:
 
     They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
 
+    Under an agent bridge, the call ids in `assistant_message` are the ones the bridge handed the agent, which are new ids where the model reused one, so `call.id` finds the call in it.
+
     `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
     """
 
@@ -189,6 +191,8 @@ class AfterToolCall:
     `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log.
 
     They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
+
+    Under an agent bridge, the call ids in `assistant_message` are the ones the bridge handed the agent, which are new ids where the model reused one, so `call.id` finds the call in it.
 
     `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
     """
