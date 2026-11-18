@@ -1,7 +1,7 @@
 ---
 title: "Replay"
 description: "Measuring a monitor or protocol on agent runs you already have, by replaying it over their logs with Inspect Scout."
-llms-description: "as_scanner() replays a monitor or protocol over Inspect logs as an Inspect Scout scanner (one result per step per stage; stage=, results=, steps=, human=, timeline=, depth=); measuring a monitor with observe_only(), score percentiles and precision/recall from scan_results_df(); @monitor(version=); step selectors and human stand-ins as plain module-level functions; as_reader() for read mode and joining its rows with a replay's; replay_check() and replay_check_differences(); what a replayed step holds; older logs (turns inferred from the span tree), transcripts replayed from messages, and stored timelines."
+llms-description: "as_scanner() replays a monitor or protocol over Inspect logs as an Inspect Scout scanner (one result per step per stage; stage=, results=, steps=, human=, timeline=, depth=); measuring a monitor with observe_only(), score percentiles and precision/recall from scan_results_df(); @monitor(version=); step selectors and human stand-ins as plain module-level functions; as_reader() for read mode, and compare_decisions() to compare its decisions with a replay's; replay_check() and replay_check_differences(); what a replayed step holds; older logs (turns inferred from the span tree), transcripts replayed from messages, and stored timelines."
 ---
 
 ## Overview
@@ -306,33 +306,60 @@ Counting the `"unanswered"` and `"simulated"` rows tells you how many steps woul
 
 Pass `stage` to keep one stage's rows, as for `as_scanner()`. A step where the instance abstained recorded nothing, so it has no read-mode row. A protocol decision that was superseded at its step also gets a row, with `metadata.status` `"superseded"`, so read mode can give more than one row for a step.
 
-To compare a replayed monitor with what it recorded live, scan in both modes and join the rows:
+Read mode is also the only way to see what a protocol's decisions did during the eval, since a replay doesn't change the transcript.
+
+### Comparing Decisions
+
+Replay lets you see how a new monitor or protocol would have decided on runs you already have. To compare its decisions with the ones made live, scan the logs in both modes and pass the two results to `compare_decisions()`:
 
 ``` python
-from inspect_sentinel.scout import as_reader, as_scanner
+from inspect_sentinel.scout import as_reader, as_scanner, compare_decisions
 
 status = scan(
     scanners={
-        "replayed": as_scanner(suspicion(), stage="tool_call"),
-        "recorded": as_reader("suspicion", stage="tool_call"),
+        "replayed": as_scanner(new_protocol()),
+        "recorded": as_reader(),
     },
     transcripts=transcripts_from("./logs"),
 )
 frames = scan_results_df(status.location).scanners
+compared = compare_decisions(frames["replayed"], frames["recorded"])
+compared[~compared["agree"]]
+```
+
+The result has one row per step:
+
+| Column | Holds |
+|---------------------------|---------------------------------------------|
+| transcript, conversation, step and stage | Which step. The conversation is `None` where rows were matched without it. |
+| `replayed`, `recorded` | Each side's decision: a protocol's action (e.g. `"reject"`), or a monitor's suspicion score. `None` on a side that has no row for the step, or where the replay abstained. |
+| `agree` | `True` where both sides have the step and decided the same. |
+| `replayed_explanation`, `recorded_explanation` | Each side's explanation. |
+| `status` | `"matched"`, or `"only replayed"` or `"only recorded"` for a step only one side has. |
+
+So `compared[~compared["agree"]]` lists every step worth a look: the steps decided differently, and the steps only one side has. Scores are compared exactly, so for a monitor, compare the `replayed` and `recorded` scores themselves rather than `agree`.
+
+Some steps are on one side only by design:
+
+- A step where the live instance abstained has no read-mode row, so the replayed row there is `"only replayed"`, with `replayed` `None` if the replay abstained too.
+- A protocol decision that was superseded (`metadata.status` `"superseded"`) didn't take effect, so it's left out.
+- An agent bridge's check that no replayed step is the check's alone is `"only recorded"` (see [Bridged Agents](#bridged-agents)).
+
+`compare_decisions()` is an outer join of the two results, and for other columns you can do the same join yourself:
+
+``` python
 keys = ["transcript_id", "metadata.conversation", "metadata.stage"]
 both = frames["replayed"].merge(
     frames["recorded"],
     left_on=[*keys, "metadata.step_id"],
     right_on=[*keys, "metadata.replay_step_id"],
+    how="outer",
     suffixes=("_replayed", "_recorded"),
+    indicator=True,
 )
 ```
 
-A read-mode row's `metadata.replay_step_id` is the replayed step it joins. It's the row's own `metadata.step_id`, except for a check made by an agent bridge (see [Bridged Agents](#bridged-agents)). Since the two sides join on different columns, the result keeps both, as `metadata.step_id_replayed` and `metadata.step_id_recorded`.
-
-A read-mode row's conversation is the one the log recorded, from its span tree. A replayed row has the same conversation only where its `metadata.turns` is `"recorded"`, so join on the conversation only there. Any other replay (with `timeline`, of an older log, or from messages; see [Older Logs and Other Sources](#older-logs-and-other-sources)) may have conversations of its own, so leave `metadata.conversation` out of `keys`. That join is ambiguous where two agents' tool calls share an id, in a log that records no execution ids.
-
-Read mode is also the only way to see what a protocol's decisions did during the eval, since a replay does not change the transcript.
+A read-mode row's `metadata.replay_step_id` is the replayed step it joins: its own `metadata.step_id`, except for a check made by an agent bridge. Join on the conversation only where the replay's `metadata.turns` is `"recorded"`. Any other replay (with `timeline`, of an older log, or from messages; see [Older Logs and Other Sources](#older-logs-and-other-sources)) may have conversations of its own, so leave `metadata.conversation` out of `keys`. Two agents' tool calls that share an id then give one side two rows with one key. `compare_decisions()` lists each of them as unmatched rather than pair them by a guess, but a plain merge pairs them all.
 
 ## Checking Replay
 
@@ -393,34 +420,17 @@ Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-br
 
 #### Comparing With the Recorded Sentinel
 
-To compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions, scan in both modes and join the rows as in [Read Mode](#read-mode). Each read-mode row of a bridge's check names the replayed step of the call it checked in `metadata.replay_step_id`, so the same join pairs them. Join with `how="outer"` to also list the rows that have no partner:
+`compare_decisions()` pairs each of a bridge's checks with the replayed step of the call it checked, so you can compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions (see [Comparing Decisions](#comparing-decisions)).
 
-``` python
-both = frames["replayed"].merge(
-    frames["recorded"],
-    left_on=[*keys, "metadata.step_id"],
-    right_on=[*keys, "metadata.replay_step_id"],
-    how="outer",
-    suffixes=("_replayed", "_recorded"),
-    indicator=True,
-)
-unmatched = both[both["_merge"] != "both"]
-```
+A check is paired with the step of the model call that proposed the call: the latest model call the bridge made in the same conversation before the check whose response holds the call id. The read-mode row names that step in `metadata.replay_step_id`. The check's own `metadata.step_id` and citations stay as read mode gives them.
 
-A row is never paired by a guess. One that only one side has is listed in `unmatched`:
-
-| `_merge` | Why |
-|---------------------------|---------------------------------------------|
-| `"left_only"` (replayed) | No check is paired with this step: the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or its check is listed as `right_only`. |
-| `"right_only"` (recorded) | No replayed step is this check's alone. |
-
-A check is `right_only` when, for example:
+A row is never paired by a guess. A check is `"only recorded"` when no replayed step is the check's alone, for example when:
 
 - the model's response holds the call id more than once (replay builds no steps for those calls);
 - the bridge checked the same result twice, as it can after the model reuses a call id;
 - the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call.
 
-A bridge's check is paired with the step of the model call that proposed the call: the latest model call the bridge made in the same conversation before the check whose response holds the call id. The check's own `metadata.step_id` and citations stay as read mode gives them.
+A replayed step is `"only replayed"` when the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or when its check is `"only recorded"`.
 
 ### Sub-agents and Timelines
 
@@ -438,7 +448,7 @@ Some transcripts carry a stored timeline of their own (e.g. Petri's `"target"`).
 as_scanner(suspicion(), timeline="target")
 ```
 
-`metadata.turns` is then `"stored"`, except for a transcript replayed from messages, which stays `"inferred"`. A stored timeline only groups steps: in a log without origins, it doesn't change which calls are inferred as agent turns. A transcript with no timeline of that name raises an error. With `timeline`, join replayed rows with read-mode rows without the conversation (see [Read Mode](#read-mode)), because the conversations differ.
+`metadata.turns` is then `"stored"`, except for a transcript replayed from messages, which stays `"inferred"`. A stored timeline only groups steps: in a log without origins, it doesn't change which calls are inferred as agent turns. A transcript with no timeline of that name raises an error. With `timeline`, replayed rows are joined with read-mode rows without the conversation (see [Comparing Decisions](#comparing-decisions)), because the conversations differ.
 
 ### Running and Resuming
 

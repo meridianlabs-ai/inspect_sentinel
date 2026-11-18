@@ -291,6 +291,7 @@ def test_the_scout_adapter_exports_the_replay_api() -> None:
         "StepTable",
         "as_reader",
         "as_scanner",
+        "compare_decisions",
         "replay_check",
         "replay_check_differences",
     }

@@ -29,6 +29,7 @@ from inspect_sentinel import (
 from inspect_sentinel.scout import (
     as_reader,
     as_scanner,
+    compare_decisions,
     replay_check,
     replay_check_differences,
 )
@@ -149,14 +150,14 @@ async def _anthropic_loop(task: str) -> None:
 
 
 @protocol
-def judge() -> ProtocolGroup:
+def judge(bad: str = "bad") -> ProtocolGroup:
     """Rejects a call to read the file `bad`, and proceeds otherwise, recording the call's arguments or the result it saw."""
 
     async def tool_call(
         context: Context, step: BeforeToolCall, escalations: Escalations
     ) -> Decision:
         seen = {"args": step.call.arguments}
-        if step.call.arguments.get("path") == "bad":
+        if step.call.arguments.get("path") == bad:
             return Decision(action="reject", message="Not that file.", metadata=seen)
         return Decision(action="proceed", metadata=seen)
 
@@ -404,6 +405,45 @@ UNCHECKED: dict[str, list[tuple[str, str]]] = {
     "duplicate ids": [],
     "retried request, reused id": [],
 }
+
+
+def rejects_a(stage: str, step: str) -> str:
+    # the new protocol's decision at a step, whose call id is the file it reads
+    return "reject" if stage == "tool_call" and step.endswith("/a") else "proceed"
+
+
+@pytest.mark.parametrize("case", list(CASES))
+def test_compare_decisions_pairs_a_new_protocols_decisions_with_a_bridges_checks(
+    tmp_path: Path, case: str
+) -> None:
+    turns, expected = CASES[case]
+    uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
+    # a new protocol that rejects reading `a` rather than `bad`
+    frames = scanned(
+        tmp_path, replayed=as_scanner(judge(bad="a")), recorded=as_reader()
+    )
+    replayed_bridged_steps(frames["replayed"])
+
+    compared = records(compare_decisions(frames["replayed"], frames["recorded"]))
+
+    tools = [r for r in compared if r["stage"].startswith("tool")]
+    # each joined check beside the new protocol's decision at its step
+    assert sorted(
+        (r["stage"], r["step_id"], r["replayed"], r["recorded"], r["agree"])
+        for r in tools
+        if r["status"] == "matched"
+    ) == sorted(
+        (s, joined(step, uuids), rejects_a(s, step), a, rejects_a(s, step) == a)
+        for s, step, a in expected
+        if step is not None
+    )
+    # a check that joins no step is listed, and so is a step no check joins
+    assert sum(r["status"] == "only recorded" for r in tools) == sum(
+        step is None for _, step, _ in expected
+    )
+    assert {
+        (r["stage"], r["step_id"]) for r in tools if r["status"] == "only replayed"
+    } == {(s, joined(step, uuids)) for s, step in UNCHECKED[case]}
 
 
 def test_replay_check_matches_a_bridge_check_with_the_step_it_checked(
