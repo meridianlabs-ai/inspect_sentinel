@@ -494,7 +494,7 @@ A transcript where an approver changed a tool call, but the log records a differ
 
 ### Imported Transcripts
 
-Scout imports transcripts from other agent frameworks (Claude Code, LangSmith, Logfire, Phoenix, Weave and ATIF). Recent versions of Scout keep one id per message across a transcript's model calls and its messages, and record which model calls the messages come from. Such a transcript replays from its model calls, with `metadata.turns` `"inferred"`:
+Scout imports transcripts from other agent frameworks (Claude Code, LangSmith, Logfire, Phoenix, Weave and ATIF). Scout 0.6.3 and later keep one id per message across a transcript's model calls and its messages, and record which model calls the messages come from. Such a transcript replays from its model calls, with `metadata.turns` `"inferred"`:
 
 -   Its agent turns are inferred as for an older Inspect log (see [Older Inspect Logs](#older-inspect-logs)), and each gives a `model_input` and a `model_output` step.
 
@@ -502,9 +502,11 @@ Scout imports transcripts from other agent frameworks (Claude Code, LangSmith, L
 
 -   A tool call that isn't in the transcript's messages, such as a sub-agent's, has no tool steps.
 
+-   A tool call whose id an earlier call in the messages already has is skipped, with a warning, since step ids are unique in a transcript. Replay takes an import's tool calls from its messages, which carry no execution id, so a later call can't be renamed by one as a repeated call id in an Inspect log is (see `metadata.step_id` in [Results](#results)).
+
 What a step holds otherwise depends on the source. Its tool steps have no `truncated` and no `view.context`, and its model calls hold what the importer recorded: for example, Claude Code's have no system prompt and no tools.
 
-A transcript imported by an older version of Scout replays from its messages.
+A transcript imported by an earlier version of Scout replays from its messages.
 
 ### Transcripts From Messages
 
