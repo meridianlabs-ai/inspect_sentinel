@@ -1,6 +1,6 @@
 # Implementation plan: the sidecar
 
-How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after step 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as step 16, before Middleman, on 2026-10-20. Measuring what a sentinel did added as steps 18 to 20 on 2026-11-16, and the record log as step 21 on the same day.
+How [sidecar.md](sidecar.md) becomes code. Each pull request can be reviewed on its own, has its own tests, and leaves `main` importable and passing. Proposed 2026-10-14; Envoy, incremental streaming and human review added 2026-10-17; the work after step 7 reordered and renumbered, with streaming split into proxy and Inspect client phases, on 2026-10-19; TLS on the sidecar's listeners added as step 16, before Middleman, on 2026-10-20. Measuring what a sentinel did added as steps 18 to 20 on 2026-11-16, and the record log as step 21 on the same day; reordered as steps 18 to 24 on 2026-11-18, at Meridian's request, so typed log fields and the viewer come first.
 
 Earlier prototype code exists for much of this. It is reused where it fits the design in `sidecar.md`, and rewritten where it does not.
 
@@ -10,6 +10,8 @@ Earlier prototype code exists for much of this. It is reused where it fits the d
 | --- | --- | --- |
 | `inspect_sentinel` | Meridian | the core package, the sidecar (`inspect_sentinel.sidecar`) with its Envoy shim, and the proxy hooks, each a package of its own under `src/proxies` |
 | `inspect_ai` | Meridian | Inspect's sidecar client, and the asks in `sidecar.md`, "Asked of inspect_ai" |
+| ts-mono | Meridian | the log viewer: types generated from inspect_ai's schema, and how it shows the fields of step 18 |
+| `inspect_scout` | Meridian | its schema, regenerated when inspect_ai's `SentinelEvent` changes |
 | `hawk` | METR | Middleman's passthrough hook, and routing `/sentinel/*` at the load balancer in front of Middleman |
 | LiteLLM | the LiteLLM project | nothing. The guardrail depends only on LiteLLM's behaviour, and is tested against each LiteLLM version it supports |
 
@@ -58,10 +60,13 @@ inspect_sentinel
 17 Middleman: inspect_sentinel and hawk, after 3 and 5; scheduled after 15 and 16
    Implementation also needs Hawk/METR accepting the passthrough hook
    Middleman streaming follows 10 and 17 and METR accepting chunk delivery
-18 times and counts in results: inspect_sentinel, after 6 and 13
-19 times and counts in the eval's log: inspect_ai, after 11 and 18
-20 reading the measures from logs: inspect_sentinel, after 18 and 19
-21 the record log: inspect_sentinel, after 18
+18 typed fields in the log: inspect_ai, ts-mono types, inspect_scout schema
+19 the log viewer shows them: ts-mono, after 18
+20 a sentinel inside Inspect fills them: inspect_ai, after 18
+21 times and counts in results: inspect_sentinel, after 6 and 13
+22 the sidecar client fills them: inspect_ai, after 11, 18 and 21
+23 reading the measures from logs: inspect_sentinel, after 18, 20 and 22
+24 the record log: inspect_sentinel, after 21
 shared state: inspect_sentinel, before more than one sidecar worker or restart continuity
 ```
 
@@ -73,9 +78,9 @@ Step 11's technical prerequisites remain 5, 6 and 7; placing it after 10 is a de
 
 [Shared and durable state](#follow-up-shared-and-durable-state) is delivered before the sidecar runs as more than one worker or promises that a run outlasts a restart; until then a deployment is one process. Step 14 needs nothing and can start at any time, with each upstream issue accepted first. Step 15 implements trusted run identity after registration and the Inspect client, using Envoy and LiteLLM first, without waiting for a Hawk change. Step 16 adds TLS, and client certificates, on every port the sidecar listens on, for Envoy and LiteLLM first. Step 17 is scheduled after steps 15 and 16 and waits on Hawk/METR accepting Middleman's passthrough hook. Extending Middleman to hand over chunks also needs step 10 and METR accepting that change; it does not block Envoy, LiteLLM, identity or the Inspect client work.
 
-Steps 18 to 20 let an operator report what a sentinel did: coverage, review latency and escalation rate ([sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did)). They follow step 13, whose record of each question they build on, and hold up nothing else. Step 18 adds times and totals to the sidecar's results, step 19 puts them in the eval's log, and step 20 reads them from many logs.
+Steps 18 to 23 let an operator report what a sentinel did: coverage, review latency and escalation rate ([sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did)). They hold up nothing else. Step 18 comes first: it adds typed fields to inspect_ai's log format, a mechanical change, so that a sentinel inside Inspect and a sidecar fill the same fields, and the viewer and the schema know them. Step 19 shows them in the log viewer. Then the fields are filled: step 20 for a sentinel inside Inspect, and, through a sidecar, step 21 adds times and totals to the sidecar's results and step 22 writes them in. Step 21 builds on step 13's record of each question, and doesn't need step 18, so it can proceed in parallel. Step 23 reads the fields from many logs.
 
-Step 21 writes what the sidecar records to a log outside the sidecar. It follows step 18, because each entry in the log holds the times and the stage outcomes that step 18 adds. It holds up nothing else. An agent with no eval has no eval log, so step 21 is what gives it a record of what a sentinel decided, and the totals that step 18 leaves out.
+Step 24 writes what the sidecar records to a log outside the sidecar. It follows step 21, because each entry in the log holds the times and the stage outcomes that step 21 adds. It holds up nothing else. An agent with no eval has no eval log, so step 24 is what gives it a record of what a sentinel decided, and the totals that step 21 leaves out.
 
 ## Step 1: reading provider traffic
 
@@ -297,11 +302,50 @@ Repositories: `inspect_sentinel` and `hawk`. Technical prerequisites: steps 3 an
 - In `hawk`: the passthrough hook in Middleman, which is METR's to accept; and routing `/sentinel/*` to the sidecar at the load balancer in front of Middleman.
 - A README for the hook, including the load balancer's routing.
 
-## Step 18: times and counts in the sidecar's results
+## Step 18: typed fields for what a sentinel did
 
-Repository: `inspect_sentinel`. Depends on: steps 6 and 13. This is the first of three steps towards the measures in [sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did): coverage, review latency and escalation rate.
+Repository: `inspect_ai`, with ts-mono's generated types and then `inspect_scout`'s schema. Depends on: nothing. This is the first step towards the measures in [sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did): coverage, review latency and escalation rate. It takes in [#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167).
 
-The sidecar records what each monitor and protocol reported, and not when. It answers about one call at a time, and gives no totals. This PR adds both to what the endpoint for evals returns. Each addition is a new optional member, so an Inspect that doesn't know it ignores it.
+The measures need times, outcomes and totals that the log has no field for. This PR adds the fields, and fills none of them but #167's. A sentinel inside Inspect fills them in [step 20](#step-20-a-sentinel-inside-inspect-fills-the-fields), and Inspect's sidecar client in [step 22](#step-22-inspects-sidecar-client-fills-the-fields). Both write the same fields, so a reader reads one set for both sources. The names below are proposals for the PR to settle.
+
+- **On `SentinelEvent`, times.** `completed` and `working_time`, as `ModelEvent`, `ToolEvent` and `SubtaskEvent` have (`inspect_ai.event`). `timestamp` is when the monitor or protocol began on the step, `completed` when it reported, and `working_time` how long it worked. A sidecar's report is written after its call's judging ends, so its times are earlier than its place in the transcript ([#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229)).
+- **On `SentinelEvent`, the stage's outcome.** `outcome`, on the step's root event, the one at the empty path: `judged`, or `not_judged` with a `reason`. A stage that was reached and not judged can have no report to put it on, so a new status, `not_judged`, records no report, as `cancelled` does, and carries the outcome. The validator requires `outcome` on a `not_judged` event.
+- **On `SentinelEvent`, where a sidecar's report came from.** `sidecar`, a typed sub-object, `None` for a sentinel inside Inspect. It holds #167's fields, the proxy, the endpoint's version and release mode, the call's `x-irid`, whether the report was trimmed and the models called, which move there from `metadata.sentinel_sidecar`. It adds what only a sidecar has: when the sidecar was handed the call's request and its reply, and how many model calls the step's generate took. A trimmed report may then leave out `function`, as #167 says.
+- **On `EvalSample`, `sentinel_summary`.** A summary of the sample, as `model_usage`, `total_time` and `limit` are, not an event: one entry for the sentinel inside Inspect and one for each sidecar. Each has, for each stage, the steps seen, the steps judged, the steps not judged by reason, and the decisions by action. It has the questions asked of a person, and how many ended at each `resolution`, with `cancelled` by `cause`. For a sidecar it also has the calls that are not verifiable, whether the totals are `final`, `stale` or `absent` with why, and the `eval_results` mode, `sent`, `withheld` or `unknown`. Inside Inspect a step at the model stages is a generate, and through a sidecar an `x-irid` ([sidecar.md, "What is counted"](sidecar.md#what-is-counted)), so each entry says which source it is.
+- **On `EvalStats`, the same summary added up for the eval**, one entry for each source, from the samples whose totals are `final`, with how many samples were left out and why. It is optional.
+- **On `EvalConfig`, `sentinel_proxy`**, from #167, so `inspect eval-retry` restores it from the log.
+- Every field is optional and absent unless a sentinel ran. An older log reads them as `None`, and an older reader ignores them.
+- Landing, as #167 says, follows inspect_ai's `land-ts-mono` skill: regenerate inspect_ai's OpenAPI schema and ts-mono's generated types, land ts-mono and then inspect_ai, then regenerate `inspect_scout`'s schema, whose `SentinelEvent` changes, and land that.
+- Tests: each new field round-trips; a log written before this step reads with them `None`; a `not_judged` event needs an `outcome`, and records no report; a trimmed report may leave out `function`, and an untrimmed one may not; `#167`'s tests, as that issue lists them.
+
+## Step 19: the log viewer shows the fields
+
+Repository: ts-mono. Depends on: step 18. It can land before or alongside step 23.
+
+Step 18 puts the fields into the log, but without this step they show only as raw data. This PR shows them in Inspect's log viewer, so they can be seen without step 23's reader.
+
+- **In the transcript**, a sentinel event's card shows its `completed` and `working_time`, as a model or tool event's card shows its timing, and the step's outcome: judged, or not judged and why. A `not_judged` event has a card of its own. A sidecar's report shows its call's `x-irid`.
+- **For a sample**, its `sentinel_summary`: the steps seen, judged and not judged, the decisions that rejected, changed, ended the run or asked a person, and the questions by how they ended. Where they apply, it shows whether the totals are `stale` or `absent`, and why, and the `eval_results` mode.
+- **For the eval**, `EvalStats`' summary, with the log's other stats, and the number of samples it left out.
+- Tests, as ts-mono tests its other event cards and panels.
+
+## Step 20: a sentinel inside Inspect fills the fields
+
+Repository: `inspect_ai`. Depends on: step 18.
+
+A sentinel inside Inspect knows every step it judged, and when, as it judges. This PR writes that into step 18's fields.
+
+- Inspect's dispatcher (`_sentinel/_dispatch.py`) times each monitor and protocol on a step, and writes `timestamp`, `completed` and `working_time` on its event. Monitors run at once by default, so each is timed around its own function, not from the gaps between events.
+- The step's root event carries its outcome. The step was judged where its sentinel decided. It was not judged where the sentinel raised, which is the root's `error` event today, or where the step was cancelled. A stage no sentinel watches is skipped, and isn't a step seen.
+- The dispatcher counts the sample's steps, decisions and `human()` questions as it goes. Inspect writes them into the sample's `sentinel_summary` in the sample's teardown, before the sample is logged, which every final attempt reaches, cancelled samples included ([step 22](#step-22-inspects-sidecar-client-fills-the-fields) has the place). The counts are Inspect's own, so they are always whole, and the entry has no `final`, `stale` or `absent` marker.
+- How long a person took to answer `human()` inside Inspect stays unread, because nothing is logged until they answer ([workstreams.md, 12](workstreams.md#12-monitoring-the-monitors)).
+- Tests: a monitor's times lie inside its step, with two monitors run at once given durations of their own; a sentinel that raises gives the step `not_judged`; a sample cancelled by a time limit has its summary; the summary of a sample with a rejected call, a changed call and a question for a person.
+
+## Step 21: times and counts in the sidecar's results
+
+Repository: `inspect_sentinel`. Depends on: steps 6 and 13.
+
+The sidecar records what each monitor and protocol reported, and not when. It answers about one call at a time, and gives no totals. This PR adds both to what the endpoint for evals returns, for [step 22](#step-22-inspects-sidecar-client-fills-the-fields) to write into step 18's fields. Each addition is a new optional member, so an Inspect that doesn't know it ignores it. It doesn't need step 18 to land first.
 
 - Settle the definitions first, in `sidecar.md`, section 12: the unit (a model call or a tool call, at one stage, where a model call is one `x-irid`), what counts as judged, and what each time is measured from. The members below follow from them.
 - Each record gains the time it was made, in seconds since the epoch as the times of step 13's questions are, and how long its monitor or protocol took.
@@ -316,60 +360,60 @@ The sidecar records what each monitor and protocol reported, and not when. It an
 
 Not in this PR:
 
-- **Totals for an agent with no eval.** It has no sample to ask about. They wait for the record log ([step 21](#step-21-the-record-log)).
+- **Totals for an agent with no eval.** It has no sample to ask about. They wait for the record log ([step 24](#step-24-the-record-log)).
 - **Anything kept across a restart.** That is [shared and durable state](#follow-up-shared-and-durable-state).
 
-## Step 19: the sidecar's times and counts in the eval's log
+## Step 22: Inspect's sidecar client fills the fields
 
-Repository: `inspect_ai`. Depends on: steps 11 and 18. Fixes [#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229).
+Repository: `inspect_ai`. Depends on: steps 11, 18 and 21. Fixes [#229](https://github.com/meridianlabs-ai/inspect_sentinel/issues/229).
 
-Inspect's sidecar client writes each of the sidecar's records into the eval's log as a `SentinelEvent`, with the time Inspect wrote it. That is after the call's judging ended, and after a person's answer where step 13 asked one. This PR puts each record's own time in the log, and adds the counts that only Inspect has.
+Inspect's sidecar client writes each of the sidecar's records into the eval's log as a `SentinelEvent`, with the time Inspect wrote it. That is after the call's judging ended, and after a person's answer where step 13 asked one. This PR writes step 21's times, outcomes and totals into step 18's fields, and adds the counts that only Inspect has.
 
-- Each event carries its record's time and duration, from step 18, and the call's two hand-over times go in its `sentinel_sidecar` metadata, beside the call's `x-irid`. Where the record's time and duration go needs Meridian's decision before the PR. As the event's own `timestamp`, the time is true, but the event is written into the transcript later than that time. In the event's `metadata`, under `sentinel_sidecar`, nothing changes for a reader of the log, who then has to know to look there. Typed fields would follow with [#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167).
-- A sidecar that sends no times, because it is older, leaves the events as they are today.
-- At the end of a sample, Inspect records, for each sidecar: the generates it made and, for each generate, by its id, the model calls it sent, since a generate Inspect retried is several calls at the sidecar; and the calls the sidecar answered `unknown` or `dropped` for. Both are in [sidecar.md, "What each quantity is counted from"](sidecar.md#what-each-quantity-is-counted-from). It also records whether the sidecar sent its results, as the probe's `eval_results` said: `sent`, `withheld`, or `unknown` for a sidecar whose probe doesn't say, because it is older. Inspect doesn't infer it from `sample_result`, which it calls only when it copies monitor state before scoring, and which a cancelled sample's teardown skips ([sidecar.md, "The end of a sample"](sidecar.md#the-end-of-a-sample)). Nor from the trimmed events, since a call that ended not judged has no judgment, and so no event. The record is written in the sample's teardown in `_eval/task/run.py`, once the attempt's outcome is known and before `log_sample` writes the sample: the block that saves an unscored sample's monitor state (`save_sidecar_monitor_state`), which every final attempt reaches, whether it completed, failed or was cancelled. It is not written beside the `end_sample` call, since a cancelled sample is not ended ([sidecar.md, "The end of a sample"](sidecar.md#the-end-of-a-sample)), and `end_sidecar_sample` runs after the sample is logged. It is written as an info event, as step 13 writes a question's record. With step 18's totals, this is the sample's coverage and what lay outside it.
-- The end-of-sample record also carries each sidecar's totals for the sample, from step 18: steps seen, judged and not judged by reason, and questions by `resolution`. They come from the last `sample_result` that answered. Inspect asks for it at each copy of monitor state: before each scoring, which `react` also does during the sample, and when it saves a failed sample ([sidecar.md, "The end of a sample"](sidecar.md#the-end-of-a-sample)). So the last answer can predate the sample's last calls, and the totals say whether they are the sample's whole count:
+- Each event's `timestamp`, `completed` and `working_time` are its record's, from step 21. Its `sidecar` sub-object has the call's two hand-over times, and the number of model calls the step's generate took, since a generate Inspect retried is several calls at the sidecar.
+- Each stage's outcome, from step 21, goes on the step's root event. A stage the call reached and the sidecar didn't judge, such as a call that ended `not_judged`, is written as a `not_judged` event with its reason. So a request judged before its provider failed shows as judged at `model_input`.
+- A sidecar that sends no times or outcomes, because it is older, leaves the events as they are today.
+- The sample's `sentinel_summary` has an entry for each sidecar the sample's final attempt called. Its totals come from the last `sample_result` that answered. Inspect asks for it at each copy of monitor state: before each scoring, which `react` also does during the sample, and when it saves a failed sample ([sidecar.md, "The end of a sample"](sidecar.md#the-end-of-a-sample)). So the last answer can predate the sample's last calls, and the entry says whether the totals are the sample's whole count:
   - `final`: the latest copy answered, and no call was sent through the sidecar, or was still waiting on its result, after that copy began. Inspect notes each call it sends through a sidecar (`called_through` in `inspect_ai._sentinel._sidecar._task`), so it knows.
   - `stale`, with why: the latest copy failed after an earlier one answered, or calls went through the sidecar after the copy that answered, as when `react` scores, the agent carries on, and the sample is then cancelled by a time limit. The totals are kept, as the count up to that copy.
-  - `absent`, with why: no copy answered. The sample was cancelled before any scoring, and a cancelled sample's teardown asks no sidecar for its results (`end_sidecar_sample` in `inspect_ai._sentinel._sidecar._call`); every copy failed; or the sidecar withheld its results, which the mode above already says.
-- The info event Inspect writes for a call that ended not judged (`unjudged_reply` in `inspect_ai._sentinel._sidecar._lookup`) gains each stage's outcome, from step 18, so a request judged before its provider failed shows as judged at `model_input`.
-- A call the sidecar answered `unknown` or `dropped` for is recorded as not verifiable. It is never recorded as a call that went round the sidecar, because the sidecar gives the same answer for a call it refused before keeping anything, and for one it has forgotten.
+  - `absent`, with why: no copy answered. The sample was cancelled before any scoring, and a cancelled sample's teardown asks no sidecar for its results (`end_sidecar_sample` in `inspect_ai._sentinel._sidecar._call`); every copy failed; or the sidecar withheld its results.
+- The entry also counts the calls the sidecar answered `unknown` or `dropped` for, as not verifiable. Such a call is never counted as one that went round the sidecar, because the sidecar gives the same answer for a call it refused before keeping anything, and for one it has forgotten.
+- The entry records whether the sidecar sent its results, as the probe's `eval_results` said: `sent`, `withheld`, or `unknown` for a sidecar whose probe doesn't say, because it is older. Inspect doesn't infer it from `sample_result`, which a cancelled sample's teardown never asks for, nor from the trimmed events, since a call that ended not judged has no judgment, and so no event.
+- The summary is written in the sample's teardown in `_eval/task/run.py`, once the attempt's outcome is known and before `log_sample` writes the sample: the block that saves an unscored sample's monitor state (`save_sidecar_monitor_state`), which every final attempt reaches, whether it completed, failed or was cancelled. It is not written beside the `end_sample` call, since a cancelled sample is not ended ([sidecar.md, "The end of a sample"](sidecar.md#the-end-of-a-sample)), and `end_sidecar_sample` runs after the sample is logged.
 - Decide, with the PR, whether the records of a call that ended not judged, and of an attempt Inspect retried, are written into the log. Today only their judge models' usage is recorded. So a count taken from the log misses steps that were judged, and a monitor's report on an attempt that failed is not in the log. The sidecar returns such records in `recorded`, outside any judgment.
 - An eval with no sidecar is unchanged.
-- Tests: with a person who takes a while, an event's time is its record's and not the time of the lookup; a sidecar that sends no times; a sample's counts with a call the sidecar never saw and a generate Inspect retried, whose calls are counted under its id; a sample scored twice records the totals of its last scoring as `final`; a sample `react` scored, which then made more calls and whose final copy failed, records the earlier totals as `stale`; a sample `react` scored, which then made more calls and was cancelled by a time limit, records them as `stale`; a sample cancelled by a time limit before any scoring records its totals as `absent`, as cancelled, and still has the record; a request judged before its provider failed is recorded as judged at `model_input`; a sample through a sidecar that withholds results is recorded as `withheld`, where its only call ended not judged as well, and where the sample was cancelled by a time limit before scoring; a sidecar whose probe has no `eval_results` is recorded as `unknown`.
+- Tests: with a person who takes a while, an event's times are its record's and not the time of the lookup; a sidecar that sends no times; a request judged before its provider failed is recorded as judged at `model_input`, and its reply as `not_judged`; a sample's summary with a call the sidecar never saw and a generate Inspect retried, whose events give its number of calls; a sample scored twice has the totals of its last scoring as `final`; a sample `react` scored, which then made more calls and whose final copy failed, has the earlier totals as `stale`; a sample `react` scored, which then made more calls and was cancelled by a time limit, has them as `stale`; a sample cancelled by a time limit before any scoring has its totals as `absent`, as cancelled, and still has its summary; a sample through a sidecar that withholds results is recorded as `withheld`, where its only call ended not judged as well, and where the sample was cancelled by a time limit before scoring; a sidecar whose probe has no `eval_results` is recorded as `unknown`.
 
-## Step 20: reading the measures from logs
+## Step 23: reading the measures from logs
 
-Repository: `inspect_sentinel`. Depends on: steps 18 and 19. This is the sidecar's part of [monitoring the monitors](workstreams.md#12-monitoring-the-monitors). It serves a sentinel inside Inspect as well, since both write `SentinelEvent`s.
+Repository: `inspect_sentinel`. Depends on: steps 18, 20 and 22. This is the sidecar's part of [monitoring the monitors](workstreams.md#12-monitoring-the-monitors). It serves a sentinel inside Inspect as well, since both fill the same fields.
 
-Steps 18 and 19 put the times and counts into each eval's log. Nothing adds them up. This PR adds a reader that does, over as many logs as it is given.
+Steps 20 and 22 put the times, outcomes and totals into each eval's log, and step 19 shows them for one log. Nothing adds them up across logs. This PR adds a reader that does, over as many logs as it is given.
 
-- A function that reads eval logs into one table, with a row for each step at each stage: the eval, sample and call it belongs to, the monitors and protocols that reported, the decision, whether it was judged and why not if it wasn't, its times where the log holds them, and any question for a person with how it ended.
-- At the model stages a row is one generate, and at the tool stages one tool call, for both sources. That is the step both write: a sentinel inside Inspect judges once for each generate, whatever was retried, and Inspect writes a sidecar's reports under the generate's id. A sidecar's row names the `x-irid` whose judgment it holds, and the number of model calls its generate took, from step 19's count for that generate.
+- A function that reads eval logs into one table, with a row for each step at each stage: the eval, sample and call it belongs to, the monitors and protocols that reported, the decision, its outcome, its times, and any question for a person with how it ended. It reads step 18's fields, the same for both sources.
+- At the model stages a row is one generate, and at the tool stages one tool call, for both sources. That is the step both write: a sentinel inside Inspect judges once for each generate, whatever was retried, and Inspect writes a sidecar's reports under the generate's id. A sidecar's row names the `x-irid` whose judgment it holds, and the number of model calls its generate took, from the event's `sidecar`.
 - A summary of that table, for a period, grouped by protocol, stage or eval: coverage; the share of steps a sentinel rejected, changed, ended the run at, or asked a person about; and the median and the 95th percentile of the time a monitor took and of the time a person took.
 - The figures follow the definitions in `sidecar.md`, section 12, and each is counted from the field its table names ([sidecar.md, "What each quantity is counted from"](sidecar.md#what-each-quantity-is-counted-from)). The summary says what it counted: the number of steps, and how many calls were not verifiable.
-- The sidecar's own count is by `x-irid`, in step 18's totals, which step 19 writes into the end-of-sample record. The summary reports those totals beside the table's figures, and never adds the two into one denominator.
-- A sample whose totals step 19 recorded as `stale` or `absent` is reported with its reason, such as a sample cancelled before scoring, or after `react` scored it and the agent carried on. Its rows are still in the table. The summary leaves it out of the sidecar's totals, says how many samples it left out and why, and doesn't make the totals up from the rows, which count generates and not `x-irid`s. Only `final` totals are reported as complete.
-- A record the log doesn't hold is reported as missing, and never as a step that wasn't judged. Until step 19 decides whether the records of a retried or not-judged attempt are logged, the reader says where a generate took more calls than the log has records for.
-- A log written through a sidecar that withholds results, with `--no-eval-results`, has trimmed decisions and no totals. The reader knows it from step 19's record for the sample, `withheld`, and not from the trimmed events alone. For such a log it reports coverage and the monitors' durations as withheld. It doesn't work them out from the trimmed decisions, and it doesn't count the missing steps as not judged. The trimmed decisions are still rows of the table, marked as trimmed.
-- Results that were withheld are reported apart from data that is missing for another reason, such as a log from before step 19, a record step 19 left out, or a sidecar recorded as `unknown`. For an `unknown` sidecar the reader reports coverage as unknown: it doesn't work it out from the events, which may be trimmed, and doesn't call the results withheld.
+- Each sample's totals are read from its `sentinel_summary`. A sidecar's count is by `x-irid`, so the summary reports a sidecar's totals beside the table's figures, and never adds the two into one denominator.
+- A sidecar's entry whose totals are `stale` or `absent` is reported with its reason, such as a sample cancelled before scoring, or after `react` scored it and the agent carried on. Its rows are still in the table. The summary leaves it out of the sidecar's totals, says how many samples it left out and why, and doesn't make the totals up from the rows, which count generates and not `x-irid`s. Only `final` totals are reported as complete, as in `EvalStats`.
+- A record the log doesn't hold is reported as missing, and never as a step that wasn't judged. Until step 22 decides whether the records of a retried or not-judged attempt are logged, the reader says where a generate took more calls than the log has records for.
+- A log written through a sidecar that withholds results, with `--no-eval-results`, has trimmed decisions and no totals. The reader knows it from the sample's summary, `withheld`, and not from the trimmed events alone. For such a log it reports coverage and the monitors' durations as withheld. It doesn't work them out from the trimmed decisions, and it doesn't count the missing steps as not judged. The trimmed decisions are still rows of the table, marked as trimmed.
+- Results that were withheld are reported apart from data that is missing for another reason, such as a log from before step 18, a record step 22 left out, or a sidecar recorded as `unknown`. For an `unknown` sidecar the reader reports coverage as unknown: it doesn't work it out from the events, which may be trimmed, and doesn't call the results withheld.
 - A page in the docs, with one worked example.
-- A monitor's duration is empty for a sentinel inside Inspect. Monitors run at once by default, so the gaps between their events don't give how long each took, and a `SentinelEvent` carries no duration ([sidecar.md, "Asked of inspect_ai"](sidecar.md#asked-of-inspect_ai)).
-- Tests: for a run with no retries, logs written by a sentinel inside Inspect and by a sidecar give the same table, the times apart; for a generate Inspect retried, each gives one row, and the sidecar's row has the number of calls; a log without the records of a retried attempt is reported as incomplete, with the sample's totals as the sidecar gave them; a sample cancelled before scoring gives its rows, and its totals as missing because it was cancelled; a sample whose totals are `stale` gives its rows, and is left out of the sidecar's totals as stale, not reported as complete; a log written through a sidecar that withholds results gives its decisions as trimmed rows, and its coverage and its monitors' durations as withheld, not as zero, a sample whose only call ended not judged included, and a sample cancelled by a time limit; a log through a sidecar recorded as `unknown` gives its coverage as unknown, apart from withheld; a sidecar's log from before step 19 is read with its times empty, not wrong.
+- Tests: for a run with no retries, logs written by a sentinel inside Inspect and by a sidecar give the same table, the times apart; for a generate Inspect retried, each gives one row, and the sidecar's row has the number of calls; a log without the records of a retried attempt is reported as incomplete, with the sample's totals as the sidecar gave them; a sample cancelled before scoring gives its rows, and its totals as missing because it was cancelled; a sample whose totals are `stale` gives its rows, and is left out of the sidecar's totals as stale, not reported as complete; a log written through a sidecar that withholds results gives its decisions as trimmed rows, and its coverage and its monitors' durations as withheld, not as zero, a sample whose only call ended not judged included, and a sample cancelled by a time limit; a log through a sidecar recorded as `unknown` gives its coverage as unknown, apart from withheld; a log from before step 18 is read with its times and totals empty, not wrong.
 
 Not in this PR:
 
 - **A dashboard, or a store of results over time.** The table is a pandas data frame, as a Scout scan's results are, for whatever an operator already uses.
 - **A person's later review of a decision**, which nothing records yet ([sidecar.md, section 12](sidecar.md#what-the-sidecar-doesnt-measure)).
 
-## Step 21: the record log
+## Step 24: the record log
 
-Repository: `inspect_sentinel`. Depends on: step 18.
+Repository: `inspect_sentinel`. Depends on: step 21.
 
 The sidecar keeps what a sentinel reported in memory, for a limited window, so that an eval can read it with `request_result`. An eval then writes it into the eval's own log. An agent with no eval has no log, so what a sentinel decided about its calls is kept nowhere. This PR adds the record log: the sidecar writes an entry to a log outside the sidecar as each thing happens ([sidecar.md, section 10](sidecar.md#10-operations)). The log is then the record. What the sidecar keeps in memory is a copy, for the endpoint for evals.
 
 - Settle the design first, in `sidecar.md`, section 10. The next seven bullets are what the design has to answer. The options and the format of an entry follow from the answers.
-- **What an entry holds.** Each record a monitor or protocol made, with its time and duration. Each stage's outcome for a call. Each question for a person, with how it ended. These come from steps 13 and 18. Each entry names its run. Where an eval made the call, the entry also names the eval, the sample and the call's `x-irid`.
+- **What an entry holds.** Each record a monitor or protocol made, with its time and duration. Each stage's outcome for a call. Each question for a person, with how it ended. These come from steps 13 and 21. Each entry names its run. Where an eval made the call, the entry also names the eval, the sample and the call's `x-irid`.
 - **Whether the log says which sentinel the sidecar runs, and holds the judge models' calls.** An eval's log has both for a sentinel inside Inspect, and neither for a sidecar ([sidecar.md, section 9](sidecar.md#the-sidecars-reports-in-inspects-transcript)).
 - **Where entries are written.** The operator chooses the destination. So the sidecar writes through one interface, and each destination is an implementation of it. The first destination is chosen with the design. An entry leaves the sidecar when it is made. It doesn't wait for the call or the run to end.
 - **How the log is kept from being rewritten.** The operator secures this: the sidecar is given a way to add entries, and no way to change or delete them. The docs say how to set that up for each destination this PR supports.
@@ -377,13 +421,12 @@ The sidecar keeps what a sentinel reported in memory, for a limited window, so t
 - **Whether entries are numbered**, so that a reader of the log can tell that an entry is missing.
 - **How an entry is matched to the proxy's own log.** A proxy can keep its own log of every request and reply. The record log doesn't copy that traffic. Each entry holds the proxy's id for the exchange, so that a reader can find the request and the reply in the proxy's log. LiteLLM's guardrail makes that id itself, and doesn't use LiteLLM's call id, because a caller can set LiteLLM's call id ([sidecar.md, section 1](sidecar.md#litellm)). So the design says what a reader matches on behind LiteLLM.
 - The option that names the destination, in the sidecar's configuration file, and a page in the docs.
-- Reading the record log into step 20's table, so that an agent with no eval gets the same measures as an eval, and so does a deployment that withholds results from its evals with `--no-eval-results`. Whichever of steps 20 and 21 lands second adds this. An agent with no eval is counted less exactly, because its requests carry no `x-irid` ([sidecar.md, section 12](sidecar.md#what-is-counted)).
+- Reading the record log into step 23's table, so that an agent with no eval gets the same measures as an eval, and so does a deployment that withholds results from its evals with `--no-eval-results`. Whichever of steps 23 and 24 lands second adds this. An agent with no eval is counted less exactly, because its requests carry no `x-irid` ([sidecar.md, section 12](sidecar.md#what-is-counted)).
 - Tests: the entries for a call match what `request_result` answers for that call, with the same times; an agent with no eval has its entries in the log; a destination that can't be written to gives the behaviour the design chose; the sidecar's memory can drop a call's records and the log still holds them.
 
 Not in this PR:
 
 - **The proxy's own log of requests and replies.** It is the proxy's feature, and the operator turns it on. The docs page says to keep it, and how an entry is matched to it.
-- **Typed fields in the eval's log.** That is [#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167).
 - **Reading the log back into the sidecar after a restart.** The log is a record. The sidecar's working state is [shared and durable state](#follow-up-shared-and-durable-state).
 
 ## Follow-up: shared and durable state

@@ -209,11 +209,11 @@ Defined further on 2026-11-16. The reporting has to answer three questions an op
 - **Review latency:** how long did a monitor take, and then a person, where one was asked?
 - **Escalation rate:** how often did a sentinel stop or change an action, or ask a person about one?
 
-[sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did) gives the unit they are counted in, and what a percentage may claim. The sidecar's part is [steps 18 to 20](sidecar-plan.md#step-18-times-and-counts-in-the-sidecars-results) of the sidecar plan. Step 20's reader of eval logs serves a sentinel inside Inspect too.
+[sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did) gives the unit they are counted in, and what a percentage may claim. The work is [steps 18 to 23](sidecar-plan.md#step-18-typed-fields-for-what-a-sentinel-did) of the sidecar plan. Step 18 adds typed fields to inspect_ai's log, which a sentinel inside Inspect (step 20) and a sidecar (step 22) both fill, and step 19 shows them in the log viewer. Step 23's reader of eval logs serves both.
 
 What a sentinel inside Inspect still lacks for these measures:
 
-- A `SentinelEvent` has a time and no duration. Monitors run at once by default, so the gaps between their events don't give how long each took. A monitor's duration can't be read from the log until the event carries one.
+- A `SentinelEvent` has a time and no duration. Monitors run at once by default, so the gaps between their events don't give how long each took. Steps 18 and 20 add and fill a duration, with each step's outcome and a summary for the sample.
 - When `human()` asks a person, nothing is logged until they answer, so how long they took can't be read.
 - Nothing records that a person looked at a decision afterwards.
 
