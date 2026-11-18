@@ -214,7 +214,7 @@ Defined further on 2026-11-16. The reporting has to answer three questions an op
 What a sentinel inside Inspect still lacks for these measures:
 
 - A `SentinelEvent` has a time and no duration. Monitors run at once by default, so the gaps between their events don't give how long each took. Steps 18 and 20 add and fill a duration, with an event for a step that wasn't judged and stats for the sample.
-- When `human()` asks a person, nothing is logged until they answer, so how long they took can't be read.
+- When `human()` asks a person, nothing is logged until they answer, so how long they took can't be read. With steps 18 and 20, `human()`'s event has when the person was asked and when they answered.
 - Nothing records that a person looked at a decision afterwards.
 
 What monitoring after the fact, with Scout, still lacks:
