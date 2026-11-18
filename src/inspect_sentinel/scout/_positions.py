@@ -259,7 +259,12 @@ def _propose(
 ) -> None:
     # the calls a bridged model call proposed, each under replay's step id for
     # it (inspect_ai's `_BridgedCall.step_id`), or None where the output holds
-    # the id more than once, which replay builds no steps for
+    # the id more than once, which replay builds no steps for. Every bridged
+    # model call counts, including one replay builds no steps for (an output
+    # with no message id, or one made where calls are not checked): a check
+    # it proposed then names a step no replayed row has, and is listed
+    # unmatched, where skipping it would pair the check with an earlier
+    # proposal of the id
     calls = Counter(call.id for call in event.output.message.tool_calls or [])
     for call_id, count in calls.items():
         at, steps = proposals.setdefault((conversation, call_id), ([], []))
