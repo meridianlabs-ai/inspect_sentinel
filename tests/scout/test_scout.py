@@ -291,6 +291,7 @@ def test_the_scout_adapter_exports_the_replay_api() -> None:
         "StepTable",
         "as_reader",
         "as_scanner",
+        "compare_decisions",
         "replay_check",
         "replay_check_differences",
     }
@@ -326,6 +327,10 @@ def test_replay_and_read_agree_through_scout(tmp_path: Path, stage: Stage) -> No
     replayed = keyed(found["replay"], "metadata.metadata")
     read = keyed(found["read"], "metadata.metadata")
     assert replayed.keys() == read.keys()
+    # a native check's replayed step is its own
+    assert all(
+        r["metadata.replay_step_id"] == r["metadata.step_id"] for r in found["read"]
+    )
     # each sample's turns and its helper's
     expected = {"model_input": 10, "model_output": 10, "tool_call": 7}
     assert len(read) == expected.get(stage, 7)
@@ -3052,6 +3057,27 @@ def test_replay_check_differences_never_drops_a_row_it_cannot_match(
         (r["conversation"], r["field"], r["reason"])
         for r in cast(list[Row], differences.to_dict("records"))
     ] == expected
+
+
+def test_replay_check_differences_matches_a_read_row_by_its_replayed_step() -> None:
+    # an agent bridge's check is keyed apart from replay's steps and names the
+    # step it joins; one that joins none is only recorded
+    replayed = [digested("agent", "a", "recorded") | {"metadata.step_id": "m/a"}]
+    recorded = [
+        digested("agent", "b", None)
+        | {"metadata.step_id": "e1", "metadata.replay_step_id": "m/a"},
+        digested("agent", "a", None)
+        | {"metadata.step_id": "e2", "metadata.replay_step_id": None},
+    ]
+
+    differences: Any = replay_check_differences(
+        pandas.DataFrame(replayed), pandas.DataFrame(recorded)
+    )
+
+    assert [
+        (r["step_id"], r["reason"])
+        for r in cast(list[Row], differences.to_dict("records"))
+    ] == [("e2", "only recorded"), ("m/a", "differs")]
 
 
 @monitor

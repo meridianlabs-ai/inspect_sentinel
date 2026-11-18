@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from bisect import bisect_left, bisect_right
+from collections import Counter
 
 from inspect_ai.event import (
     Event,
@@ -52,6 +53,12 @@ class Positions:
         runs: list[tuple[str, str | None, bool]] = []
         # the executions some check names
         checked: set[str] = set()
+        # each conversation's model calls an agent bridge made, by the id of
+        # each call in their output and position: the call's step id in
+        # replay, or None where the output holds the id more than once
+        proposals: dict[tuple[str, str], tuple[list[int], list[str | None]]] = {}
+        # each bridge check's span, with the replayed step it was of, if any
+        joins: dict[str, tuple[str, str, str | None]] = {}
         for index, event in enumerate(events):
             if isinstance(event, SpanBeginEvent):
                 self._begins[event.id] = index
@@ -77,6 +84,10 @@ class Positions:
                 self._attempt(event, retrying)
                 if event.output.choices and event.output.message.id:
                     self._outputs.add(event.output.message.id)
+                if event.requested_model is not None and event.output.choices:
+                    _propose(
+                        event, index, self._conversations.of(event.span_id), proposals
+                    )
             elif isinstance(event, ToolEvent):
                 at, tools = self._tools.setdefault(
                     (self._conversations.of(event.span_id), event.id), ([], [])
@@ -98,10 +109,22 @@ class Positions:
             elif isinstance(event, SentinelEvent):
                 if event.execution_id is not None:
                     checked.add(event.execution_id)
+                span = event.span_id
+                if (
+                    span is not None
+                    and span in self._bridge_spans
+                    and self._sentinel_spans[span] not in joins
+                ):
+                    joins[self._sentinel_spans[span]] = (
+                        event.conversation,
+                        event.stage,
+                        _proposed(proposals, event, index),
+                    )
                 if event.stage == "model_input" and event.span_id is not None:
                     inputs.setdefault(event.span_id, event.conversation)
         self._generates = _preceded(inputs, models, self._begins, self._ends)
         self._renamed = _renamed(runs, checked)
+        self._joined = _one_to_one(joins)
 
     def step_id(self, event: SentinelEvent) -> str:
         # the step a check was of, as replay keys it: the call id, except for a
@@ -119,6 +142,16 @@ class Positions:
         if event.execution_id is not None and event.execution_id in self._renamed:
             return event.execution_id
         return event.step_id
+
+    def replay_step_id(self, event: SentinelEvent) -> str | None:
+        # the replayed step a check joins: a native check's own step; an agent
+        # bridge's check, the step replay names by the model call that proposed
+        # the call and the call id, where that is one step only this check is
+        # of, else None
+        span = event.span_id
+        if span is not None and span in self._bridge_spans:
+            return self._joined.get(self._sentinel_spans[span])
+        return self.step_id(event)
 
     def cite(self, event: SentinelEvent, index: int) -> Reference | None:
         span = event.span_id
@@ -217,6 +250,55 @@ def _renamed(runs: list[tuple[str, str | None, bool]], checked: set[str]) -> set
         if execution is not None and holder != execution:
             renamed.add(execution)
     return renamed
+
+
+def _propose(
+    event: ModelEvent,
+    index: int,
+    conversation: str,
+    proposals: dict[tuple[str, str], tuple[list[int], list[str | None]]],
+) -> None:
+    # the calls a bridged model call proposed, each under replay's step id for
+    # it (inspect_ai's `_BridgedCall.step_id`), or None where the output holds
+    # the id more than once, which replay builds no steps for. Every bridged
+    # model call counts, including one replay builds no steps for (an output
+    # with no message id, or one made where calls are not checked): a check
+    # it proposed then names a step no replayed row has, and is listed
+    # unmatched, where skipping it would pair the check with an earlier
+    # proposal of the id
+    calls = Counter(call.id for call in event.output.message.tool_calls or [])
+    for call_id, count in calls.items():
+        at, steps = proposals.setdefault((conversation, call_id), ([], []))
+        at.append(index)
+        unique = count == 1 and event.uuid is not None
+        steps.append(f"{event.uuid}/{call_id}" if unique else None)
+
+
+def _proposed(
+    proposals: dict[tuple[str, str], tuple[list[int], list[str | None]]],
+    event: SentinelEvent,
+    index: int,
+) -> str | None:
+    # a bridge check's step: that of the latest bridged model call of its
+    # conversation before it that proposed the call id
+    found = proposals.get((event.conversation, event.step_id))
+    if found is None or event.stage not in ("tool_call", "tool_result"):
+        return None
+    at, steps = found
+    before = bisect_left(at, index) - 1
+    return steps[before] if before >= 0 else None
+
+
+def _one_to_one(joins: dict[str, tuple[str, str, str | None]]) -> dict[str, str]:
+    # each bridge check's step, where no other check is of it at that stage:
+    # the bridge can check one call more than once (a result reported again
+    # under a reused id), and position alone cannot say which check is whose
+    claims = Counter(joins.values())
+    return {
+        span: join[2]
+        for span, join in joins.items()
+        if join[2] is not None and claims[join] == 1
+    }
 
 
 def _bridged(event: ToolEvent) -> bool:
