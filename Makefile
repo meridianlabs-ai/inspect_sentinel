@@ -17,10 +17,16 @@ test:
 # environment, `.venv`, so set that up first (CONTRIBUTING.md). `uv run
 # --isolated --no-project` never reads or installs this repository's project.
 # `--no-config` keeps the cooldown in `pyproject.toml` off this environment:
-# the canary tests the newest LiteLLM, which is often less than 7 days old. It
-# also skips the user's uv config, so this environment has no cooldown. CI
-# builds the same environment with the shared install-python-dependencies
-# action (build.yaml, litellm-guardrail).
+# `make test-litellm LITELLM=<version>` tries a newer LiteLLM, which is often
+# less than 7 days old. It also skips the user's uv config, so this
+# environment has no cooldown. CI builds the same environment with the shared
+# install-python-dependencies action (build.yaml, litellm-guardrail).
+#
+# Raising this version, or the ones in build.yaml, takes a review that no test
+# makes: read what the new LiteLLM changed in how it reads a request on its
+# chat, Responses and Messages routes, add any field it rewrites the request
+# from to `_REWRITTEN_FROM` in the guardrail, and name the versions in the
+# guardrail's README (#119).
 LITELLM ?= 1.105.0
 LITELLM_ENV = cd src/proxies/litellm && uv run --isolated --no-project --no-config \
 	--with "litellm[proxy]==$(LITELLM)" --with-editable . \

@@ -44,7 +44,7 @@ from inspect_sentinel_litellm import LiteLLMGuardrail as LiteLLMGuardrail
 
 Requests to LiteLLM's `/v1/messages`, `/chat/completions` and `/responses` routes, and their replies, streamed or not. A request to another route goes on unread.
 
-A request on those routes is refused, whatever `unreachable_fallback` says, when it sets a field that LiteLLM rewrites the request from after the sidecar has judged it, since the provider would be sent something the sidecar never saw. These are `extra_body`, which the provider's SDK merges over the request; `ensure_alternating_roles` and the continue messages it inserts; the fields that load a stored prompt, such as `prompt_id`; `litellm_system_prompt`; the custom prompt template fields, such as `roles` and `final_prompt_value`; and `supports_system_message`. A client that calls through a provider's SDK sends none of them: the SDK merges its own `extra_body` into the request before sending it. A deployment that relies on LiteLLM's prompt management can't use it through the guardrail.
+A request on those routes is refused, whatever `unreachable_fallback` says, when it sets a field that LiteLLM rewrites the request from after the sidecar has judged it, since the provider would be sent something the sidecar never saw. These are `extra_body`, which the provider's SDK merges over the request; `ensure_alternating_roles` and the continue messages it inserts; the fields that load a stored prompt, such as `prompt_id`; `litellm_system_prompt`; the custom prompt template fields, such as `roles` and `final_prompt_value`; and `supports_system_message`. A client that calls through a provider's SDK sends none of them: the SDK merges its own `extra_body` into the request before sending it. A deployment that relies on LiteLLM's prompt management can't use it through the guardrail. The list is kept by hand for the LiteLLM versions the guardrail is tested with, named under [What LiteLLM decides](#what-litellm-decides).
 
 A request with an MCP tool that LiteLLM's own MCP gateway would run is refused too, whatever `unreachable_fallback` says. LiteLLM runs the model's calls to such a tool itself, and sends the provider follow-up requests that no guardrail is shown. The guardrail asks LiteLLM's own test, so it refuses what the installed LiteLLM would hand to its gateway: a `server_url` of `litellm_proxy`, or one ending in `/mcp/<name>`. An MCP tool that the provider calls itself goes to the sidecar as usual.
 
@@ -110,6 +110,8 @@ An eval also gets a judged reply this way. When a sentinel asks a person about a
 ## What LiteLLM decides
 
 The guardrail is tested with LiteLLM 1.83 and 1.105.
+
+The fields it refuses were found by reading those two versions. A later LiteLLM can add a field that it rewrites a request from after the guardrail has run, and the guardrail lets that field through until its list is brought up to date. Where the sidecar must judge exactly what the provider is sent, run one of the versions named here.
 
 LiteLLM writes the error a caller is sent when the guardrail refuses. With LiteLLM 1.83 and 1.105, a refusal has the sentinel's message and its status, as JSON, streamed or not. The one exception is a streamed `/responses` reply, which is answered with status 200 and a `response.failed` event that holds the message, and which the OpenAI SDK raises on.
 
