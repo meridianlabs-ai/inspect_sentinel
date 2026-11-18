@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import math
+import re
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -21,7 +22,7 @@ from inspect_ai.model import (
     ModelOutput,
     ModelUsage,
 )
-from inspect_ai.tool import ToolCall, ToolCallView
+from inspect_ai.tool import ToolCall, ToolCallContent, ToolCallView
 from inspect_ai.util import Store
 from pydantic import JsonValue
 
@@ -50,9 +51,14 @@ from ._exchange import (
     Request,
     succeeded,
 )
-from ._history import record_sent, with_sent_ids
+from ._history import (
+    not_sent_before,
+    record_sent,
+    record_sent_to,
+    sent_keys,
+    with_sent_ids,
+)
 from ._host import (
-    Askable,
     AskHuman,
     ModelUsed,
     Record,
@@ -70,6 +76,7 @@ from ._inspect_client import (
     Judged,
     SignedSample,
     Withheld,
+    redacted,
     signed_sample,
 )
 from ._registration import (
@@ -93,7 +100,14 @@ from ._reply_stream import (
     ReplyStart,
     ReplyStream,
 )
-from ._review import Question, Review, Reviews, escalated, shown_turn
+from ._review import (
+    Question,
+    RequestAsked,
+    Review,
+    Reviews,
+    escalated,
+    shown_turn,
+)
 from ._sign import TIMESTAMP_WINDOW, call_values, request_values, unproven
 from ._state import (
     MADE_KEPT,
@@ -317,6 +331,8 @@ class _Operation:
     """When the operation ended, on the monotonic clock. It is kept for the state's expiry after that, so that the eval can still read it. Reading it doesn't extend that time."""
     last_heard: float = 0.0
     """When the sidecar last had contact about the call, on the monotonic clock. It is set when the operation is created, and when the call begins to wait for a resend or for a reply. After that it is updated by each try of the call, by each `request_result` from its eval, and by each part of its reply that a proxy hands over. A waiting call with no contact for the state's expiry is closed."""
+    sent: bool = False
+    """Whether the request went to the provider, and so is in its conversation's history."""
 
 
 @dataclass(eq=False)
@@ -896,6 +912,16 @@ class Handler:
         self._operations_with_provider[request.id] = operation
         operation.with_provider = (request.id, held)
         await self._state.hold(request.id, held)
+        if not operation.sent:
+            # the request goes to the provider for the first time: a try after
+            # a provider's failure sends the same messages again
+            operation.sent = True
+            run = await self._state.run(held.run)
+            conversation = run.conversations.setdefault(
+                held.conversation, Conversation()
+            )
+            record_sent(conversation, held.input, held.message_keys)
+            record_sent_to(conversation, held.model, held.message_keys)
         return answer
 
     async def _released(self, id: str) -> Held | None:
@@ -1932,6 +1958,7 @@ class Handler:
             last=last,
             request=None if named else request,
             binding=binding,
+            message_keys=sent_keys(messages, body),
         )
         said = call_texts(request.provider, request.body, request.format)
         # a changed call's result is of the call that ran, whichever the client holds
@@ -1970,7 +1997,12 @@ class Handler:
             return self._judged(refusal, proxy, held.exchange, attempt)
         # the request goes on to the model, as the client sent it with what
         # this sidecar added
-        record_sent(conversation, messages, body)
+        judging = _JUDGING.get()
+        if judging is None or self._operation_of(judging.attempt) is None:
+            # it goes to the provider now; a request a person was asked about
+            # goes when the eval resends it (`_reattach`)
+            record_sent(conversation, messages, held.message_keys)
+            record_sent_to(conversation, held.model, held.message_keys)
         await self._state.hold(request.id, held)
         # an Inspect client is told of the request's steps with the reply
         return answer
@@ -2431,7 +2463,7 @@ class Handler:
             return None
 
         async def ask(
-            step: Askable,
+            step: Step,
             escalations: Escalations,
             choices: Sequence[str],
         ) -> HumanAnswer:
@@ -2514,7 +2546,28 @@ class Handler:
             view: ToolCallView | None = None
             result: ChatMessageTool | None = None
             turn: ChatMessageAssistant | None = None
-            if isinstance(step, AfterGenerate):
+            sent: RequestAsked | None = None
+            message = ""
+            if isinstance(step, BeforeGenerate):
+                # The request the model is about to be sent: the messages it
+                # has not been sent before, and the tools it is offered. All
+                # of it is the held request's own, and none of it the step's:
+                # a protocol may ask about a step it thinned or changed, as
+                # with `preprocess_step`, and the person approves the request
+                # the provider is sent.
+                sent = RequestAsked(
+                    held.model,
+                    len(held.input),
+                    tuple(
+                        (position, _as_the_eval_holds(message, run, held))
+                        for position, message in not_sent_before(
+                            held.input, held.message_keys, _sent_to(run, held)
+                        )
+                    ),
+                    tuple(tool.name for tool in held.offered.tools),
+                    held.offered.tool_choice,
+                )
+            elif isinstance(step, AfterGenerate):
                 # The whole turn, as the model returned it, before any of its calls is
                 # judged. Each call has the call part of its view, which is all that
                 # `ToolCall.view` holds, as Inspect's own `generate` sets it. A viewer's
@@ -2547,6 +2600,7 @@ class Handler:
                 view=view,
                 result=result,
                 turn=turn,
+                request=sent,
                 escalations=escalated(escalations),
                 choices=tuple(choices),
                 closes=asked + timeout if timeout is not None else None,
@@ -2987,3 +3041,70 @@ def _result_digest(said: str, call: ToolCall, result: ChatMessageTool) -> str:
     digest.update(b"\x00")
     digest.update(result.model_dump_json(exclude={"id"}).encode())
     return digest.hexdigest()
+
+
+def _sent_to(run: Run, held: Held) -> Mapping[str, int]:
+    # What the held request's conversation has sent the request's model.
+    # `step.history` is what it has sent any model.
+    conversation = run.conversations.get(held.conversation)
+    if conversation is None:
+        return {}
+    return conversation.sent_to.get(held.model, {})
+
+
+def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessage:
+    # The sidecar puts the model's own calls back only in what the provider is
+    # sent. The eval holds a call a decision rejected without its arguments,
+    # and one a decision changed as it ran. A question goes to the eval, so it
+    # shows each such call as the eval holds it, and says where arguments are
+    # hidden.
+    calls = message.tool_calls if isinstance(message, ChatMessageAssistant) else None
+    if not calls:
+        return message
+    conversation = run.conversations.get(held.conversation)
+    changed = {
+        id: call
+        for turn in (conversation.edited if conversation is not None else [])
+        for id, call in turn.modified.items()
+    }
+    if not any(call.id in changed or call.id in run.redacted for call in calls):
+        return message
+    return message.model_copy(
+        update={
+            "tool_calls": [
+                _as_it_ran(changed[call.id])
+                if call.id in changed
+                else replace(redacted(call), view=_ARGUMENTS_HIDDEN)
+                if call.id in run.redacted
+                else call
+                for call in calls
+            ]
+        }
+    )
+
+
+def _as_it_ran(call: ToolCall) -> ToolCall:
+    # A changed call, with a view that says whose arguments these are: the
+    # person approves a request that sends the model its own. The arguments
+    # are JSON, so a string is told from a number. Inspect fills each
+    # `{{name}}` of a view from the call's arguments, so one in a value is
+    # written with JSON's escape for its first brace, and stays as it is.
+    ran = _PLACEHOLDER.sub(
+        r"\\u007b", json.dumps(call.arguments, indent=2, default=str)
+    )
+    return replace(
+        call,
+        view=ToolCallContent(
+            format="text",
+            content=f"A decision changed this call. These are the arguments the tool ran with, as JSON. The model is sent its own arguments, which are hidden here.\n\n{call.function}\n{ran}",
+        ),
+    )
+
+
+_PLACEHOLDER = re.compile(r"\{(?=\{\w+\}\})")
+"""The first brace of a `{{name}}`, which Inspect would fill from a call's arguments."""
+
+_ARGUMENTS_HIDDEN = ToolCallContent(
+    format="text",
+    content="Its arguments are hidden here. A decision acted on this call, and the eval holds it without them. The model is sent them.",
+)

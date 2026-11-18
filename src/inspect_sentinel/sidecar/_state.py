@@ -206,6 +206,12 @@ class Conversation:
     recent: list[Sent] = field(default_factory=list[Sent])
     """What each of the conversation's latest requests sent the model, latest last, which a later request is matched against."""
 
+    shown: list[Sent] = field(default_factory=list[Sent])
+    """What each of the conversation's latest judged requests held, latest last, with the id the sentinel saw each message under. A later request's messages take their ids from these (`with_sent_ids`). A request is here from when it is judged, and in `recent` only once it goes to the provider."""
+
+    sent_to: dict[str, Counter[str]] = field(default_factory=dict[str, Counter[str]])
+    """For each model, by what a message says (`sent_keys`), the most copies of it that any one of the conversation's requests sent that model. What a question before a generate goes by, since `sent` holds what any model was sent. Like `sent`, it counts a request once it goes to the provider, not when it is judged: one a person approved counts when the eval's resend is passed on."""
+
 
 @dataclass
 class Run:
@@ -304,6 +310,8 @@ class Held:
     """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
     binding: str = ""
     """For an eval's request, a digest that identifies the request. A request sent again under the same `x-irid` must have the same digest to count as a try of the same model call."""
+    message_keys: tuple[str, ...] = ()
+    """Each of the request's messages as the model is sent it (`sent_keys`): what a question before a generate compares, and what `Conversation.sent_to` counts once the request goes to the provider."""
 
     @property
     def sent(self) -> int:
