@@ -49,7 +49,7 @@ def with_sent_ids(
 ) -> list[ChatMessage]:
     """The request's messages, each that the sentinel was shown before under the id it had then.
 
-    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one of an earlier request, as `record_sent` matches them, is given that message's id, and any other keeps the new one.
+    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one of an earlier request, as `record_sent` matches them, is given that message's id. A reply's message that a request sends back for the first time is given the id the reply was judged under, the `step.message_id` of its calls' tool stages: it is known by its calls, whose ids the request carries. Any other keeps the new one.
 
     The earlier requests are those the sentinel judged (`Conversation.shown`), whether or not they have gone to the provider. A request a person is asked about goes later, when the eval resends it, and a request judged meanwhile takes its ids all the same. The request is added to them here, so this is called once for each request judged.
 
@@ -60,15 +60,62 @@ def with_sent_ids(
     """
     keys = _keys(input, body)
     matched = _matched(conversation.shown, keys)
+    replied = _replied(conversation, input, matched)
     given = [
-        message.model_copy(update={"id": matched[position]})
-        if matched.get(position) is not None
+        message.model_copy(update={"id": id})
+        if (id := matched.get(position) or replied.get(position)) is not None
         else message
         for position, message in enumerate(input)
     ]
     conversation.shown.append(Sent(keys, [message.id for message in given]))
     del conversation.shown[:-RECENT_REQUESTS]
     return given
+
+
+def _replied(
+    conversation: Conversation,
+    input: Sequence[ChatMessage],
+    matched: Mapping[int, str | None],
+) -> dict[int, str]:
+    # The positions of the request that hold a reply's message no earlier
+    # request held, each with the id the reply was judged under. The reply
+    # is known by its calls, whose ids the request carries, so a call the
+    # sentinel rejected or changed doesn't hide it. A message is one only if
+    # each of its calls is from the same reply, and nothing else in the
+    # request has that reply's id or claims it: a client may send one reply's
+    # calls back as several messages, and none of those is the reply's.
+    origins = _reply_ids(conversation)
+    claims: dict[int, str] = {}
+    for position, message in enumerate(input):
+        if matched.get(position) is not None or message.role != "assistant":
+            continue
+        made = {origins.get(call.id) for call in message.tool_calls or []}
+        if len(made) == 1 and (reply := made.pop()) is not None:
+            claims[position] = reply
+    taken = Counter(claims.values())
+    taken.update(
+        id
+        for position, message in enumerate(input)
+        if (id := matched.get(position) or message.id) is not None
+    )
+    return {position: reply for position, reply in claims.items() if taken[reply] == 1}
+
+
+def _reply_ids(conversation: Conversation) -> dict[str, str | None]:
+    # the id of the reply that made each call, by the call's id: the calls a
+    # client was handed, and those of the turns a sentinel rejected, which no
+    # client was. A call id that two replies used tells neither.
+    replies: dict[str, str | None] = {}
+    made = [(id, call.message_id) for id, call in conversation.made.items()]
+    rejected = [
+        (call.id, message.id)
+        for point in conversation.rejected
+        for message, _, _ in point.turns
+        for call in message.tool_calls or []
+    ]
+    for call_id, reply in (*made, *rejected):
+        replies[call_id] = reply if replies.get(call_id, reply) == reply else None
+    return replies
 
 
 def _keys(input: Sequence[ChatMessage], body: bytes) -> list[str]:

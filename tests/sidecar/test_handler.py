@@ -1883,3 +1883,116 @@ async def test_a_request_that_waited_for_a_judgment_that_ended_the_run_is_refuse
 
     assert _Gate.judged == 1
     assert all(isinstance(answer, Refuse) for answer in answers.values())
+
+
+@protocol
+def notes_message_ids(seen: list[tuple[str, Any]], tokyo: str = "proceed") -> Protocol:
+    # notes the id a reply's message has when each of its calls is judged, and
+    # the ids of the messages each later request holds; decides `tokyo` for a
+    # lookup of Tokyo
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        if isinstance(step, BeforeGenerate):
+            seen.append(("input", [message.id for message in step.input]))
+            seen.append(("history", [message.id for message in step.history or []]))
+        if not isinstance(step, BeforeToolCall):
+            return Decision.proceed()
+        seen.append(("call", step.message_id))
+        if step.call.arguments.get("location") != "Tokyo" or tokyo == "proceed":
+            return Decision.proceed()
+        if tokyo == "modify":
+            changed = replace(step.call, arguments={"location": "Oslo"})
+            return Decision(action="modify", modified=changed)
+        return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+
+    return decide
+
+
+def _noted(seen: list[tuple[str, Any]], kind: str) -> list[Any]:
+    return [noted for of, noted in seen if of == kind]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tokyo", ["proceed", "modify", "reject"])
+async def test_a_replys_message_keeps_its_id_in_the_requests_that_send_it_back(
+    tokyo: str,
+) -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen, tokyo))
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    (judged,) = _noted(seen, "call")
+
+    # the client holds the turn as it was handed it; a turn rejected whole it
+    # was never handed, and the sidecar puts it back
+    turn = (
+        []
+        if tokyo == "reject"
+        else ran("Oslo" if tokyo == "modify" else "Tokyo", "Sunny.")
+    )
+    await handler.request(request("b", then=turn))
+    said = {"type": "text", "text": "Sunny."}
+    await handler.reply(reply(message(said, stop_reason="end_turn"), id="b"))
+    more = [
+        {"role": "assistant", "content": [said]},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+    await handler.request(request("c", then=[*turn, *more]))
+
+    _, second, third = _noted(seen, "input")
+    assert second.count(judged) == 1
+    assert third.count(judged) == 1
+    # and the message is in what the conversation has sent, once, under it
+    assert _noted(seen, "history")[-1].count(judged) == 1
+
+
+def _both_ran(*, together: bool) -> list[dict[str, Any]]:
+    # two lookups one reply made, sent back as one message or as two
+    paris, oslo = ran("Paris", "Sunny.", "toolu_1"), ran("Oslo", "Rain.", "toolu_2")
+    if not together:
+        return [*paris, *oslo]
+    return [
+        {
+            "role": "assistant",
+            "content": [weather("Paris"), weather("Oslo", "toolu_2")],
+        },
+        {"role": "user", "content": [*paris[1]["content"], *oslo[1]["content"]]},
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("together", [True, False], ids=["one message", "two messages"])
+async def test_a_reply_sent_back_as_several_messages_is_none_of_them(
+    together: bool,
+) -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen))
+    await handler.request(request("a"))
+    both = message(weather("Paris"), weather("Oslo", "toolu_2"))
+    await handler.reply(reply(both, id="a"))
+    first, second = _noted(seen, "call")
+    assert first == second
+
+    await handler.request(request("b", then=_both_ran(together=together)))
+
+    held = _noted(seen, "input")[-1]
+    assert held.count(first) == (1 if together else 0)
+    assert len(set(held)) == len(held)
+
+
+@pytest.mark.anyio
+async def test_a_message_holding_the_calls_of_two_replies_is_neither() -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen))
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Paris")), id="a"))
+    await handler.request(request("b", then=ran("Paris", "Sunny.")))
+    await handler.reply(reply(message(weather("Oslo", "toolu_2")), id="b"))
+    paris, oslo = _noted(seen, "call")
+
+    # a client that writes its two turns as one
+    await handler.request(request("c", then=_both_ran(together=True)))
+
+    held = _noted(seen, "input")[-1]
+    assert paris not in held and oslo not in held
