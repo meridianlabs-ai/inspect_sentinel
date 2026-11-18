@@ -102,11 +102,18 @@ def _replied(
 
 
 def _reply_ids(conversation: Conversation) -> dict[str, str | None]:
-    # the id of the reply that made each call, by the call's id: the calls a
-    # client was handed, and those of the turns a sentinel rejected, which no
-    # client was. A call id that two replies used tells neither.
+    # The id of the reply that made each call, by the call's id. The calls a
+    # client was handed are kept with the reply as the model wrote it, which
+    # also holds any call of it a sentinel rejected: the sidecar puts that
+    # call back in a later request. The turns a sentinel rejected whole, which
+    # no client was handed, are kept apart. Where what is kept disagrees about
+    # a call's reply, the call tells neither.
     replies: dict[str, str | None] = {}
-    made = [(id, call.message_id) for id, call in conversation.made.items()]
+    made = [
+        (id, handed.message_id)
+        for handed_id, handed in conversation.made.items()
+        for id in (handed_id, *(call.id for call in handed.message.tool_calls or []))
+    ]
     rejected = [
         (call.id, message.id)
         for point in conversation.rejected

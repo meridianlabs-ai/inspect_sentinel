@@ -1947,6 +1947,22 @@ async def test_a_replys_message_keeps_its_id_in_the_requests_that_send_it_back(
     assert _noted(seen, "history")[-1].count(judged) == 1
 
 
+@pytest.mark.anyio
+async def test_a_reply_with_one_call_rejected_keeps_its_messages_id() -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen, "reject"))
+    await handler.request(request("a"))
+    both = message(weather("Tokyo"), weather("Oslo", "toolu_2"))
+    assert isinstance(await handler.reply(reply(both, id="a")), Replace)
+    judged, _ = _noted(seen, "call")
+
+    # the client was handed the lookup of Oslo alone, and the sidecar puts
+    # the rejected one back beside it
+    await handler.request(request("b", then=ran("Oslo", "Rain.", "toolu_2")))
+
+    assert _noted(seen, "input")[-1].count(judged) == 1
+
+
 def _both_ran(*, together: bool) -> list[dict[str, Any]]:
     # two lookups one reply made, sent back as one message or as two
     paris, oslo = ran("Paris", "Sunny.", "toolu_1"), ran("Oslo", "Rain.", "toolu_2")
