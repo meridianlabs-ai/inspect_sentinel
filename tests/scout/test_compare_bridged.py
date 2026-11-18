@@ -1,3 +1,4 @@
+from itertools import count
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -64,13 +65,16 @@ def calls(*ids: str) -> ModelOutput:
 
 
 @agent(name="scaffold")
-def scaffold(client: Client) -> Agent:
-    """A tool loop over the `client` SDK that runs its tools itself, as Claude Code does."""
+def scaffold(client: Client, retry: bool = False) -> Agent:
+    """A tool loop over the `client` SDK that runs its tools itself, as Claude Code does.
+
+    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does.
+    """
 
     async def execute(state: AgentState) -> AgentState:
         async with agent_bridge(state) as bridge:
             if client == "openai":
-                await _openai_loop(state.messages[0].text)
+                await _openai_loop(state.messages[0].text, retry)
             else:
                 await _anthropic_loop(state.messages[0].text)
             return bridge.state
@@ -78,25 +82,36 @@ def scaffold(client: Client) -> Agent:
     return execute
 
 
-async def _openai_loop(task: str) -> None:
+async def _openai_loop(task: str, retry: bool) -> None:
     from openai import AsyncOpenAI
 
     messages: list[Any] = [{"role": "user", "content": task}]
     tool = {"name": "read_file", "description": READ_FILE, "parameters": PATH}
     async with AsyncOpenAI(api_key="sk-test") as openai:
-        while True:
-            completion = await openai.chat.completions.create(
-                model="inspect",
-                messages=messages,
-                tools=[{"type": "function", "function": tool}],  # type: ignore[list-item]
-            )
-            message = completion.choices[0].message
+        for turn in count():
+            # a retried request is sent again as is; the agent uses the last
+            # response
+            completions = [
+                await openai.chat.completions.create(
+                    model="inspect",
+                    messages=messages,
+                    tools=[{"type": "function", "function": tool}],  # type: ignore[list-item]
+                )
+                for _ in range(2 if retry and turn == 0 else 1)
+            ]
+            message = completions[-1].choices[0].message
             messages.append(message.model_dump(exclude_none=True))
             if not message.tool_calls:
                 return
+            # each result names its turn and call, so a check paired with
+            # another turn's result shows it
             for call in message.tool_calls:
                 messages.append(
-                    {"role": "tool", "tool_call_id": call.id, "content": "contents"}
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": f"t{turn}:{call.id}",
+                    }
                 )
 
 
@@ -135,32 +150,37 @@ async def _anthropic_loop(task: str) -> None:
 
 @protocol
 def judge() -> ProtocolGroup:
-    """Rejects a call to read the file `bad`, and proceeds otherwise."""
+    """Rejects a call to read the file `bad`, and proceeds otherwise, recording the call's arguments or the result it saw."""
 
     async def tool_call(
         context: Context, step: BeforeToolCall, escalations: Escalations
     ) -> Decision:
+        seen = {"args": step.call.arguments}
         if step.call.arguments.get("path") == "bad":
-            return Decision(action="reject", message="Not that file.")
-        return Decision(action="proceed")
+            return Decision(action="reject", message="Not that file.", metadata=seen)
+        return Decision(action="proceed", metadata=seen)
 
     async def tool_result(
         context: Context, step: AfterToolCall, escalations: Escalations
     ) -> Decision:
-        return Decision(action="proceed")
+        return Decision(action="proceed", metadata={"result": step.result.text})
 
     return ProtocolGroup(tool_call, tool_result)
 
 
 def run(
-    tmp_path: Path, turns: list[ModelOutput], client: Client, sentinel: Any
+    tmp_path: Path,
+    turns: list[ModelOutput],
+    client: Client,
+    sentinel: Any,
+    retry: bool = False,
 ) -> list[str]:
     # the eval's log, in tmp_path / "logs", and the uuids of the model calls
     # the bridge made, in order
     [log] = eval(
         Task(
             dataset=[Sample(input="Read the files.")],
-            solver=as_solver(scaffold(client)),
+            solver=as_solver(scaffold(client, retry)),
             sentinel=sentinel,
         ),
         model=get_model(
@@ -255,7 +275,25 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", "1/c", "proceed"),
         ],
     ),
+    # the agent sends its first request twice and uses the second response,
+    # then the model reuses "a": each result is the one the agent used, so
+    # its check joins the latest proposal of the id, never the first response
+    "retried request, reused id": (
+        [calls("a"), calls("a"), calls("a"), calls("a")],
+        [
+            ("tool_call", "0/a", "proceed"),
+            ("tool_call", "1/a", "proceed"),
+            ("tool_result", "1/a", "proceed"),
+            ("tool_call", "2/a", "proceed"),
+            ("tool_result", "2/a", "proceed"),
+            ("tool_call", "3/a", "proceed"),
+            ("tool_result", "3/a", "proceed"),
+        ],
+    ),
 }
+
+# the cases whose agent sends its first request twice
+RETRIED = {"retried request, reused id"}
 
 
 def ordered(rows: list[tuple[str, str | None, str]]) -> list[tuple[str, str, str]]:
@@ -270,7 +308,7 @@ def test_a_bridge_check_names_the_replayed_step_of_the_call_it_checked(
     tmp_path: Path, case: str, client: Client
 ) -> None:
     turns, expected = CASES[case]
-    uuids = run(tmp_path, turns, client, judge())
+    uuids = run(tmp_path, turns, client, judge(), retry=case in RETRIED)
 
     read = records(scanned(tmp_path, recorded=as_reader())["recorded"])
 
@@ -312,7 +350,7 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
     tmp_path: Path, case: str
 ) -> None:
     turns, expected = CASES[case]
-    uuids = run(tmp_path, turns, "openai", judge())
+    uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
     frames = scanned(tmp_path, replayed=as_scanner(judge()), recorded=as_reader())
     replayed_bridged_steps(frames["replayed"])
 
@@ -336,9 +374,11 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
     assert ordered(paired) == ordered(
         [(s, joined(step, uuids), a) for s, step, a in expected if step is not None]
     )
-    # each pair's decisions agree, as the replayed protocol is the recorded one
+    # each pair saw the same call or result (each turn's result names the
+    # turn) and so decided alike, as the replayed protocol is the recorded one
     assert all(
-        r["answer_replayed"] == r["answer_recorded"]
+        r["metadata.metadata_replayed"] == r["metadata.metadata_recorded"]
+        and r["answer_replayed"] == r["answer_recorded"]
         for r in tools
         if r["_merge"] == "both"
     )
@@ -362,6 +402,7 @@ UNCHECKED: dict[str, list[tuple[str, str]]] = {
     "rejection": [("tool_result", "0/ok"), ("tool_result", "0/bad")],
     "reused id": [("tool_result", "1/a")],
     "duplicate ids": [],
+    "retried request, reused id": [],
 }
 
 

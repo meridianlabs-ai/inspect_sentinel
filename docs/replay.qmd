@@ -411,8 +411,14 @@ A row is never paired by a guess. One that only one side has is listed in `unmat
 
 | `_merge` | Why |
 |---------------------------|---------------------------------------------|
-| `"left_only"` (replayed) | The sentinel didn't check the step live, e.g. the results of a turn in which it rejected a call. |
-| `"right_only"` (recorded) | No replayed step is this check's alone. For example, the model's response holds the call id more than once (replay builds no steps for those calls); the bridge checked the same result twice, as it can after the model reuses a call id; the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call; or the agent sent the same request twice and used the second response. |
+| `"left_only"` (replayed) | No check is paired with this step: the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or its check is listed as `right_only`. |
+| `"right_only"` (recorded) | No replayed step is this check's alone. |
+
+A check is `right_only` when, for example:
+
+- the model's response holds the call id more than once (replay builds no steps for those calls);
+- the bridge checked the same result twice, as it can after the model reuses a call id;
+- the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call.
 
 A bridge's check is paired with the step of the model call that proposed the call: the latest model call the bridge made in the same conversation before the check whose response holds the call id. The check's own `metadata.step_id` and citations stay as read mode gives them.
 
