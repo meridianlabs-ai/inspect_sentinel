@@ -851,6 +851,79 @@ async def test_a_registration_that_names_no_run_keeps_the_facts_until_it_expires
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("unnamed_first", [True, False])
+async def test_a_run_named_beside_one_that_wasnt_is_still_ended(
+    unnamed_first: bool,
+) -> None:
+    handler = await _two_samples()
+    for run in [None, "run_b"] if unnamed_first else ["run_b", None]:
+        await _complete(handler, run)
+
+    # the named run ends before its first request: it is remembered as
+    # ended, though the facts stay for the run that wasn't named
+    assert await _end(handler, "run_b") == "ended"
+    late = await handler.request(_asked("b", sample_uuid="run_b"))
+
+    assert isinstance(late, Refuse) and "has ended" in late.message
+    assert await _facts_held(handler) == [1]
+
+
+@pytest.mark.anyio
+async def test_a_registration_completed_after_its_sample_ended_doesnt_count() -> None:
+    handler = await _two_samples()
+    await _complete(handler, "run_a")
+    await _complete(handler, "run_b")
+    await _end(handler, "run_a")
+    held = await _held(handler)
+
+    # a completion of the ended run that arrives late
+    await _complete(handler, "run_a")
+
+    assert await _held(handler) == held
+    await _end(handler, "run_b")
+    assert await _facts_held(handler) == []
+
+
+@pytest.mark.anyio
+async def test_a_run_the_registration_has_no_room_for_isnt_counted() -> None:
+    handler = await _two_samples()
+    await _complete(handler, "run_b")
+    held = await _held(handler)
+    cast(Any, handler)._max_registration_bytes = held
+
+    # another run of the sample makes a request, as one whose task was
+    # registered again after it completed its registration
+    await handler.request(_asked("a", sample_uuid="run_a"))
+
+    assert await _held(handler) == held
+    # it goes on with the facts it found, once the sample's are freed
+    await _end(handler, "run_b")
+    await handler.request(_asked("a2", sample_uuid="run_a"))
+    assert (await _eval_seen(handler, "a2"))["sample_id"] == 1
+
+
+@pytest.mark.anyio
+async def test_freeing_a_samples_facts_never_holds_more() -> None:
+    handler = await holding(Handler(reports_the_eval()))
+    # an id that takes more bytes escaped than as it is written
+    sample_id = "\N{SNOWMAN}" * 40
+    registration = _registration(_TASK).model_copy(update={"sample_ids": []})
+    await handler.register_task("eval_789", registration)
+    await handler.complete_registration(
+        "eval_789",
+        "philadelphia",
+        SampleFacts(sample_id=sample_id, sample_input=""),
+        "run_a",
+    )
+    held = await _held(handler)
+
+    await _end(handler, "run_a")
+
+    assert await _facts_held(handler) == []
+    assert await _held(handler) < held
+
+
+@pytest.mark.anyio
 async def test_a_sample_ended_without_its_task_named_keeps_its_facts() -> None:
     handler = await _two_samples()
     await _complete(handler, "run_a")
@@ -920,12 +993,9 @@ async def test_a_run_with_no_facts_of_its_own_is_refused_once_its_samples_were_f
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("strictness", "judged"),
-    [("open", True), ("known_tasks", True), ("registered_only", False)],
-)
+@pytest.mark.parametrize("strictness", ["open", "known_tasks", "registered_only"])
 async def test_a_run_keeps_the_facts_it_found_when_its_samples_are_freed(
-    monkeypatch: pytest.MonkeyPatch, strictness: str, judged: bool
+    monkeypatch: pytest.MonkeyPatch, strictness: str
 ) -> None:
     monkeypatch.setattr(_state, "time", _Clock)
     _Clock.now = 0.0
@@ -939,13 +1009,13 @@ async def test_a_run_keeps_the_facts_it_found_when_its_samples_are_freed(
     await _end(handler, "run_b")
     assert await _facts_held(handler) == []
 
-    if judged:
-        await handler.request(_asked("a2", sample_uuid="run_a"))
-        assert (await _eval_seen(handler, "a2"))["sample_id"] == 1
-    else:
-        # which reads the registration at every request
-        with pytest.raises(UnregisteredSampleError, match="isn't complete"):
-            await handler.request(_asked("a2", sample_uuid="run_a"))
+    # judged with its own, where the sidecar takes only registered samples too
+    await handler.request(_asked("a2", sample_uuid="run_a"))
+    assert (await _eval_seen(handler, "a2"))["sample_id"] == 1
+    # and still held to the epochs the registration runs
+    if strictness == "registered_only":
+        with pytest.raises(UnregisteredSampleError, match="epochs 1 to 2"):
+            await handler.request(_asked("a3", sample_uuid="run_a", epoch=3))
 
 
 @pytest.mark.anyio

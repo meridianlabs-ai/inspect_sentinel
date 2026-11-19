@@ -168,7 +168,7 @@ class RegisteredTask:
 
         Args:
             sample: The sample.
-            run: The uuid of the run completing it. With none, or with one that is already a run of another sample, the facts are kept until the registration expires.
+            run: The uuid of the run completing it. With none, or with one that is already a run of another sample, the facts are kept until the registration expires, whatever runs of the sample are named before or after.
         """
         id = sample.sample_id
         self.held = self.holding(sample, run)
@@ -182,9 +182,19 @@ class RegisteredTask:
             self.runs.setdefault(id, set()).add(counted)
             self._sample_of[counted] = id
 
-    def begin(self, id: str | int, run: str) -> None:
-        """Count a run that made a request as in progress, where the sample's facts are held and may be freed. A run that completed its own registration already is."""
+    def begin(self, id: str | int, run: str, limit: int) -> None:
+        """Count a run that made a request as in progress, where the sample's facts are held and may be freed. A run that completed its own registration already is.
+
+        A run the registration has no room for isn't counted. It keeps the facts it finds at this request, so freeing them doesn't reach it.
+
+        Args:
+            id: The sample's id.
+            run: The run's sample uuid.
+            limit: How many bytes the registration may hold.
+        """
         if id not in self.samples or id in self.until_expiry or run in self._sample_of:
+            return
+        if self.held + _size(run) > limit:
             return
         self.runs.setdefault(id, set()).add(run)
         self._sample_of[run] = id
@@ -225,16 +235,18 @@ class RegisteredTask:
         return _eval_context(self.registration, found, sample)
 
     def _counted(self, id: str | int, run: str | None) -> str | None:
-        # a completion's run, if it is counted so that the sample's facts
-        # can be freed: not once any completion of the sample named no run
-        if run is None or id in self.until_expiry:
+        # a completion's run, if it names one that isn't already a run of
+        # another sample
+        if run is None:
             return None
         return run if self._sample_of.get(run, id) == id else None
 
 
 def _size(value: str | int) -> int:
-    # what a registration holds of an id, as JSON
-    return len(json.dumps(value))
+    # what a registration holds of an id, as JSON, in the bytes the facts
+    # that held it were counted in: a sample's freed mark is then never more
+    # than its facts were
+    return len(json.dumps(value, ensure_ascii=False).encode())
 
 
 def _bytes(model: BaseModel) -> int:

@@ -1730,6 +1730,12 @@ class Handler:
                 raise RegistrationError(
                     f"This sidecar takes only the samples a task's registration names, and the registration of {task!r} doesn't name the sample {sample.sample_id!r}."
                 )
+        if run is not None:
+            ended = await self._state.peek_run(_run_key(True, run))
+            if ended is not None and ended.closed and ended.eval_id == eval_id:
+                # a completion that arrives after its sample ended: counting
+                # the run again would hold the facts until the task expires
+                return False
         held = kept.holding(sample, run)
         if held > self._max_registration_bytes:
             raise self._full(task, held)
@@ -1776,7 +1782,9 @@ class Handler:
                     f"This sidecar freed the facts of the sample {sample.sample_id!r} of {sample.task!r} when its last run in progress ended, and this run hasn't completed the sample's registration since."
                 )
             if self._strictness == "registered_only":
-                if found is None:
+                # a run whose sample's facts were freed goes on with those it
+                # found, as it does where the sidecar is less strict
+                if found is None and not (holds and sample.sample_id in kept.freed):
                     raise UnregisteredSampleError(
                         f"This sidecar judges only the samples it holds, and the registration of {sample.task!r} isn't complete for the sample {sample.sample_id!r}."
                     )
@@ -1786,7 +1794,9 @@ class Handler:
                     )
             if found is not None:
                 # in progress from here, so the facts aren't freed under it
-                kept.begin(sample.sample_id, sample.sample_uuid)
+                kept.begin(
+                    sample.sample_id, sample.sample_uuid, self._max_registration_bytes
+                )
             return found
         found = fixed.eval_context(sample)
         if found is None:
