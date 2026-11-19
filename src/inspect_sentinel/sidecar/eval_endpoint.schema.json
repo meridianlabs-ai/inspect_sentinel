@@ -601,7 +601,7 @@
       "type": "object"
     },
     "CompleteRegistrationParams": {
-      "description": "Parameters of `complete_registration`: one sample of a registered task, sent before the sample's first epoch.",
+      "description": "Parameters of `complete_registration`: one sample of a registered task, sent before each run of the sample makes its first request.",
       "properties": {
         "eval_id": {
           "description": "The eval's id, as its requests name it.",
@@ -681,6 +681,19 @@
           "description": "The task's name, as `register_task` gave it.",
           "title": "Task",
           "type": "string"
+        },
+        "sample_uuid": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The uuid of the run completing the registration, as its requests' `x-inspect-context` gives it. The sidecar holds the sample's facts while a run that named itself here is in progress, and frees them when the last one has ended (`end_sample`), so each epoch and each retry of a sample sends them again. Where a registration of the sample names no run, its facts are kept until the task's registration expires.",
+          "title": "Sample Uuid"
         }
       },
       "required": [
@@ -1342,6 +1355,19 @@
           "description": "The sample's uuid, as `x-inspect-context` gives it.",
           "title": "Sample Uuid",
           "type": "string"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The sample's task, as `register_task` gave it. It finds the task's registration, where the run stops counting as one in progress of its sample (`complete_registration`). The sample is ended whatever it names.",
+          "title": "Task"
         }
       },
       "required": [
@@ -1361,7 +1387,7 @@
           "type": "string"
         },
         "state": {
-          "description": "`ended`, or `unknown` for a sample the sidecar never saw.",
+          "description": "`ended`, or `unknown` for a sample that neither made a request nor completed a registration naming it.",
           "enum": [
             "ended",
             "unknown"

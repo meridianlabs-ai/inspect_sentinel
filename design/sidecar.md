@@ -880,7 +880,7 @@ A sentinel in the sidecar gets a sample's details, as `context.eval`, only when 
 }
 ```
 
-**Then `complete_registration`, at each attempt's first agent call.** Before the first agent model call of each epoch and each retry of a sample, Inspect sends each sidecar that sample's input and metadata, with a `timestamp` and a `mac` made with the eval's token. The facts are the same every time. Sending them again lets a later epoch or a retry restore them to a sidecar that lost the task, as after a restart. Sending one sample at a time suits Inspect, which reads each sample only when it runs. Inspect is built not to hold a large dataset in memory (inspect_ai's `design/hf-lazy-dataset.md`), and a task can add samples while it runs (inspect_ai's `design/sample-source.md`).
+**Then `complete_registration`, at each attempt's first agent call.** Before the first agent model call of each epoch and each retry of a sample, Inspect sends each sidecar that sample's input and metadata, with the run's `sample_uuid`, and a `timestamp` and a `mac` made with the eval's token. The facts are the same every time. Sending them again lets a later epoch or a retry restore them to a sidecar that lost the task, as after a restart, or that freed them when the sample's last run ended (below). Sending one sample at a time suits Inspect, which reads each sample only when it runs. Inspect is built not to hold a large dataset in memory (inspect_ai's `design/hf-lazy-dataset.md`), and a task can add samples while it runs (inspect_ai's `design/sample-source.md`).
 
 ```json
 {
@@ -892,6 +892,7 @@ A sentinel in the sidecar gets a sample's details, as `context.eval`, only when 
     "timestamp": 1794182400,
     "mac": "485e08ca13d2759b919d57e7fe6fbc072024ccc0cb036d65123012b0502361b9",
     "task": "philadelphia",
+    "sample_uuid": "sample_123",
     "sample_id": 1,
     "sample_description": null,
     "sample_input": "File today's weather report for Philadelphia.",
@@ -908,8 +909,15 @@ Until a sample's registration is complete, its sentinel gets no `context.eval`, 
 - **`metadata` is the task's own.** A sentinel gets it merged with each sample's metadata, as in Inspect's process. A sample input made of chat messages is sent in inspect_ai's JSON form for messages.
 - **A registration is kept until no request has named its task for a day.** A caller may ask for another time with `expiry`, in seconds, and Inspect doesn't. Every model request naming the task, and every new registration of it, restarts that time. So a registration lasts while the eval's requests keep naming the task. A running eval that makes no such request for a day loses it. `--task-expiry` caps it, at 30 days by default, and the answer says when the sidecar shortened what was asked.
 - **The number of registrations is bounded** by `--max-task-registrations`, 1000 by default, because anything that can reach the endpoint for evals can register a task. A new registration past it fails with `registrations_full`, with the code `-32008`, and no registration in use is dropped to make room. This is a failure, not a refusal: the task may run there once a registration expires.
-- **Each registration is bounded by `--max-body-bytes`**, which is what a whole registration could hold in one call. The bound covers the registration, the facts of each completed sample, and the id of each sample a sample's registration added. A sample's registration past it also fails with `registrations_full`. Facts arrive at each sample's first agent call, so an eval whose facts exceed the bound fails its later samples partway through. Facts are kept until the registration expires, and dropping them as samples end is a follow-up ([#169](https://github.com/meridianlabs-ai/inspect_sentinel/issues/169)).
-- **Registering again changes no run that has started.** A new registration replaces the one held, unless that one is fixed, and keeps each completed sample it still names. A run takes its sample's facts at its first request and keeps them to its end. So resending the same registration has no effect, and Inspect can safely retry. Completing a sample's registration again replaces its facts for runs that start afterwards.
+- **Each registration is bounded by `--max-body-bytes`**, which is what a whole registration could hold in one call. The bound covers the registration, the facts the sidecar holds at the time, the id of each sample a sample's registration added, each run in progress, and a mark for each sample whose facts were freed. A sample's registration past it also fails with `registrations_full`.
+- **A sample's facts are held while a run of the sample is in progress** ([#169](https://github.com/meridianlabs-ai/inspect_sentinel/issues/169)), so a task may have more facts than the bound, as long as those in use at once fit.
+  - **A run is in progress** from the `complete_registration` that names its `sample_uuid`, or from a request of its own, until `end_sample` names it with its task. When a sample's last run ends, its facts are freed, and the next epoch or retry sends them again. No epochs are counted: Inspect runs every sample's first epoch before any sample's second, so a sample's epochs all end only near the end of the eval.
+  - **More than `max_samples` can be in progress.** A sample waiting to retry keeps its run, and a sample that is cancelled, or whose `end_sample` never arrives, is never ended. Those facts go when the registration expires.
+  - **A registration that names no run keeps the sample's facts until the registration expires**, as an Inspect that sends no `sample_uuid` leaves it. Nothing says when such a run ends, and it may be yet to make its first request. This holds for the sample from then on, whatever later registrations name.
+  - **A run that ends before its first request is remembered as ended**, for `--run-expiry`, as a run that made requests is. So a first request that arrives late is refused, and isn't taken for a run in progress.
+  - **A run is never judged without facts the sidecar freed.** A run keeps the facts it found at its first request, so freeing them reaches only a run that hasn't made one, and any run where the sidecar takes only registered samples. Such a request is refused as `unregistered`, whatever the strictness. Inspect completes each run's registration, so it comes here only when a task was registered again under a run: its remembered completions are for the task's registration at that sidecar, and a run completes again once the task has been registered again. What is left is a request that was already prepared. Its attempt fails, and recovers only where the eval has a sample retry left.
+  - **A whole task that expires is as before.** A registration made again holds no mark of what the lost one freed or held. A run that hasn't made a request is then judged without facts, or refused where the sidecar takes only registered samples ("A sidecar that loses the task", below).
+- **Registering again changes no run that has started.** A new registration replaces the one held, unless that one is fixed. Of each sample it still names, it keeps the facts, the runs in progress, and whether the facts were freed or are kept until expiry. A run takes its sample's facts at its first request and keeps them to its end. So resending the same registration has no effect, and Inspect can safely retry. Completing a sample's registration again replaces its facts for runs that start afterwards.
 - **The registration has no map of the task's tools.** A solver gives the model its tools while the sample runs, often adding them as it goes, so nobody can list them at the task's start.
 
 "When registration fails" below lists each answer to `register_task`, and what Inspect does.
@@ -1451,7 +1459,7 @@ sequenceDiagram
     S-->>P: The store, and whether a sentinel ended the sample
     P-->>I: The store, and whether a sentinel ended the sample
     Note over I: Copy the store into the sample store, then score
-    I->>P: end_sample: eval_id, mac, sample_uuid
+    I->>P: end_sample: eval_id, mac, sample_uuid, task
     P->>S: Forward
     Note over S: Drop the sample's state
     S-->>P: Ended
@@ -1720,7 +1728,7 @@ The copy fails when the sidecar lost the sample (as after a restart), never saw 
 - **The copy is only the state at scoring time.** Inside Inspect, monitor state gets a `StoreEvent` per change and survives checkpoint and resume ([sentinel-reference.md, State](sentinel-reference.md#state)). Through a sidecar it gets neither.
 - **Each copy is a call through the proxy.** If that cost shows up, Inspect can copy only when a model call has gone through since the last copy, because monitor state changes only when the sidecar judges a step.
 
-**After the final scoring, Inspect calls `end_sample`.** The sidecar drops the run's monitor state and everything else it keeps for the sample. Inspect calls `end_sample` where it already records every way a sample can end, exactly once (inspect_ai's `design/sample-lifecycle.md`).
+**After the final scoring, Inspect calls `end_sample`**, with the sample's task. The sidecar drops the run's monitor state and everything else it keeps for the sample, and the run stops counting as one in progress of its sample in the task's registration ("What the sidecar keeps, and for how long", above). The task only finds that registration: the run is ended whatever it names, and a call that names none ends the run as before. Inspect calls `end_sample` where it already records every way a sample can end, exactly once (inspect_ai's `design/sample-lifecycle.md`).
 
 - **A sample Inspect will retry is not ended**, because an ended sample is refused from then on, and the retry is the same sample. The retry starts with empty monitor state in the sidecar, as with an empty sample store in Inspect. Inspect copies only from the sidecars the scored attempt called, so a retry that calls none is never scored on an earlier attempt's state.
 - **A cancelled sample is not ended**, because its teardown can't wait on a sidecar that may not answer. The sidecar drops the sample once no request has named it for `--run-expiry`.
