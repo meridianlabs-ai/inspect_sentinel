@@ -297,14 +297,10 @@ def _watched(
     )
 
 
+# the registered names of the `portable=False` monitors and protocols in the
+# trees of `sentinels` (an instance, a group, or a sequence or mapping of them):
+# each instance's own record, which its factory's wrapper made, and its members
 def eval_only_names(sentinels: object) -> frozenset[str]:
-    """The registered names of the monitors and protocols declared `portable=False` in a sentinel's trees.
-
-    A monitor or protocol counts when it is the sentinel itself, was passed to a factory in the tree, or was built while a factory in the tree ran, whether or not the factory returned it.
-
-    Args:
-        sentinels: A configured monitor or protocol, a group, or a sequence or mapping of them.
-    """
     names: set[str] = set()
     for found in _given([sentinels]):
         # a group's functions may each be an instance some factory configured

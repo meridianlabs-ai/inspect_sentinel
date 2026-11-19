@@ -20,7 +20,7 @@ from inspect_sentinel._protocols import observe_only
 from inspect_sentinel._report import Decision, Escalations, Observation
 from inspect_sentinel._runner import run_monitors
 from inspect_sentinel._step import BeforeToolCall
-from inspect_sentinel._types import Monitor, Protocol
+from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
 from inspect_sentinel.sidecar._eval_endpoint import TOKEN_VARIABLE
 from inspect_sentinel.sidecar._inspect_client import judgment
@@ -275,6 +275,19 @@ def runs_its_monitor() -> Protocol:
     return decide
 
 
+_BUILT_AT_IMPORT = reads_the_sandbox()
+
+
+@monitor
+def returns_a_built_monitor() -> Monitor:
+    return _BUILT_AT_IMPORT
+
+
+@monitor
+def groups_a_built_monitor() -> MonitorGroup:
+    return MonitorGroup(_BUILT_AT_IMPORT)
+
+
 @pytest.mark.parametrize(
     ("sentinel", "named"),
     [
@@ -285,12 +298,22 @@ def runs_its_monitor() -> Protocol:
         ),
         ("name: builds_its_monitor", "reads_the_sandbox"),
         ("name: runs_its_monitor", "reads_the_sandbox"),
+        (
+            "name: observe_only\n  monitors:\n    - name: returns_a_built_monitor",
+            "reads_the_sandbox",
+        ),
+        (
+            "name: observe_only\n  monitors:\n    - name: groups_a_built_monitor",
+            "reads_the_sandbox",
+        ),
     ],
     ids=[
         "the sentinel itself",
         "a monitor the configuration gives a protocol",
         "a monitor a protocol's factory builds and returns",
         "a monitor a protocol's factory builds and runs itself",
+        "a monitor a factory returns but did not build",
+        "a monitor a factory groups but did not build",
     ],
 )
 def test_a_sentinel_that_holds_an_eval_only_monitor_or_protocol_is_refused(
