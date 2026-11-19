@@ -1530,18 +1530,30 @@ class Handler:
         )
 
     async def end_sample(
-        self, sample_uuid: str, eval_id: str
+        self, sample_uuid: str, eval_id: str, task: str | None = None
     ) -> Literal["ended", "unknown"]:
         """Drop the state kept for an eval's sample, once the eval has scored it. A later request of the sample is refused, as for a sample a sentinel ended.
+
+        With `task`, the run is no longer one in progress of its sample in the task's registration, and the sample's facts are freed if it was the last (`complete_registration`). The task only finds the registration: the run is ended whatever it names.
 
         Args:
             sample_uuid: The sample's uuid, as the eval names it.
             eval_id: The eval ending it. A sample of another eval is left as it is, and reads as unknown.
+            task: The sample's task, as the eval registered it, or None if the eval named none.
 
         Returns:
-            `ended`, or `unknown` for a sample the handler never saw or that isn't the eval's. Ending a sample again has no effect.
+            `ended`, or `unknown` for a sample that neither made a request nor completed a registration naming it, or that isn't the eval's. Ending a sample again has no effect.
         """
-        ended = await self._state.end_run(_run_key(True, sample_uuid), eval_id)
+        run_key = _run_key(True, sample_uuid)
+        ended = await self._state.end_run(run_key, eval_id)
+        if task is not None and task not in self._tasks:
+            # read without renewing: ending a sample doesn't keep its task
+            kept = await self._state.registration(eval_id, task, renew=False)
+            if kept is not None and kept.end(sample_uuid) and not ended:
+                # The run completed its registration and made no request. It
+                # is remembered as ended, so that a first request arriving
+                # late is refused, and not taken for a run in progress.
+                ended = await self._state.end_unseen_run(run_key, eval_id)
         if ended:
             # No one is left to answer the sample's questions, or to resend an answer to
             # one.
@@ -1632,7 +1644,7 @@ class Handler:
     ) -> float | None:
         """Keep a task an eval registered, so that its runs' sentinels are told which sample each is, once each sample's registration is complete.
 
-        A registration replaces the eval's last one for the task, and keeps the samples whose registration was complete that it still names, so that registering again has no effect. A run that has already found its sample keeps what it found.
+        A registration replaces the eval's last one for the task, and keeps what that one held of the samples it still names: their facts, their runs in progress, and which were freed or are kept until expiry. So registering again has no effect. A run that has already found its sample keeps what it found.
 
         Args:
             eval_id: The eval's id, as its requests name it.
@@ -1667,13 +1679,7 @@ class Handler:
         # kept the task it would have replaced alive.
         before = await self._state.registration(eval_id, registration.task, renew=False)
         if before is not None:
-            kept.keep_samples(
-                {
-                    id: sample
-                    for id, sample in before.samples.items()
-                    if id in kept.sample_ids
-                }
-            )
+            kept.keep_from(before)
         if kept.held > self._max_registration_bytes:
             raise self._full(registration.task, kept.held)
         self._kept(
@@ -1690,9 +1696,11 @@ class Handler:
         return granted
 
     async def complete_registration(
-        self, eval_id: str, task: str, sample: SampleFacts
+        self, eval_id: str, task: str, sample: SampleFacts, run: str | None = None
     ) -> bool:
-        """Keep a sample's facts, before the sample's first epoch, so that its runs' sentinels are told them.
+        """Keep a sample's facts, before a run of the sample makes its first request, so that its runs' sentinels are told them.
+
+        The facts are held while a run of the sample is in progress, and freed when the last one ends, so that a task may have more samples than a registration holds at once. Each epoch and each retry completes the sample's registration again. A run counts from here, or from a request of its own, until `end_sample`. With no `run`, nothing says when the sample's runs end, so its facts are kept until the registration expires.
 
         Completing a sample's registration again replaces its facts, for the runs that start after. A sample the task's registration doesn't name, such as one a task adds while it runs, extends the registration, unless the handler is `registered_only`. A task registered beforehand already holds its samples, so nothing is stored, and the sample is not compared with the file, since the answer would tell a caller whether its guess at the file is right.
 
@@ -1700,6 +1708,7 @@ class Handler:
             eval_id: The eval's id, as its requests name it.
             task: The task's name.
             sample: The sample.
+            run: The sample uuid of the run completing the registration, as its requests name it, or None if the eval named none.
 
         Returns:
             Whether the task was registered beforehand, so nothing was stored.
@@ -1721,15 +1730,21 @@ class Handler:
                 raise RegistrationError(
                     f"This sidecar takes only the samples a task's registration names, and the registration of {task!r} doesn't name the sample {sample.sample_id!r}."
                 )
-        held = kept.holding(sample)
+        if run is not None:
+            ended = await self._state.peek_run(_run_key(True, run))
+            if ended is not None and ended.closed and ended.eval_id == eval_id:
+                # a completion that arrives after its sample ended: counting
+                # the run again would hold the facts until the task expires
+                return False
+        held = kept.holding(sample, run)
         if held > self._max_registration_bytes:
             raise self._full(task, held)
-        kept.complete(sample)
+        kept.complete(sample, run)
         return False
 
     def _full(self, task: str, held: int) -> RegistrationsFullError:
         return RegistrationsFullError(
-            f"The registration of {task!r} would hold {held} bytes, and this sidecar keeps no more than {self._max_registration_bytes} for a task: its registration, and the facts of each sample whose registration is complete."
+            f"The registration of {task!r} would hold {held} bytes, and this sidecar keeps no more than {self._max_registration_bytes} for a task: its registration, and the facts of each sample with a run in progress."
         )
 
     def _view(self, call: ToolCall, run: Run) -> ToolCallView:
@@ -1742,9 +1757,12 @@ class Handler:
             tool = f"inspect_ai/{call.function}"
         return tool_call_view(call, tool)
 
-    async def _eval(self, sample: InspectSample) -> EvalContext | None:
+    async def _eval(
+        self, sample: InspectSample, holds: bool = False
+    ) -> EvalContext | None:
         # the sample a request names, from the task's registration; asking
-        # counts as the task being named, so its registration is kept
+        # counts as the task being named, so its registration is kept.
+        # `holds` is whether the request's run keeps the facts it first found.
         fixed = self._tasks.get(sample.task)
         if fixed is None:
             kept = await self._state.registration(sample.eval_id, sample.task)
@@ -1755,8 +1773,18 @@ class Handler:
                     )
                 return None
             found = kept.eval_context(sample)
+            if found is None and not holds and sample.sample_id in kept.freed:
+                # The facts were held and are gone, so the run is never
+                # judged without them, whatever the strictness. An eval that
+                # completes the registration of each run doesn't come here: a
+                # run whose task was registered again meanwhile can.
+                raise UnregisteredSampleError(
+                    f"This sidecar freed the facts of the sample {sample.sample_id!r} of {sample.task!r} when its last run in progress ended, and this run hasn't completed the sample's registration since."
+                )
             if self._strictness == "registered_only":
-                if found is None:
+                # a run whose sample's facts were freed goes on with those it
+                # found, as it does where the sidecar is less strict
+                if found is None and not (holds and sample.sample_id in kept.freed):
                     raise UnregisteredSampleError(
                         f"This sidecar judges only the samples it holds, and the registration of {sample.task!r} isn't complete for the sample {sample.sample_id!r}."
                     )
@@ -1764,6 +1792,11 @@ class Handler:
                     raise UnregisteredSampleError(
                         f"The registration of {sample.task!r} runs epochs 1 to {kept.registration.epochs}, not epoch {sample.epoch}."
                     )
+            if found is not None:
+                # in progress from here, so the facts aren't freed under it
+                kept.begin(
+                    sample.sample_id, sample.sample_uuid, self._max_registration_bytes
+                )
             return found
         found = fixed.eval_context(sample)
         if found is None:
@@ -1858,7 +1891,7 @@ class Handler:
         # retry may replace the run's store meanwhile
         store = run.store
         if sample is not None:
-            found = await self._eval(sample)
+            found = await self._eval(sample, run.eval is not None)
             if run.eval is None:
                 # a run keeps the facts it first found
                 run.eval = found

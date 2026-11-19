@@ -445,6 +445,18 @@ class State(Protocol):
         """
         ...
 
+    async def end_unseen_run(self, key: str, eval_id: str) -> bool:
+        """Remember that an eval's run ended before any request of it came, for as long as an ended run is remembered. A request of it that arrives late finds it ended.
+
+        Args:
+            key: The run's key.
+            eval_id: The eval ending it.
+
+        Returns:
+            Whether it is remembered as ended: not if a run is kept or was ended under the key, which is left as it is.
+        """
+        ...
+
     async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:
         """Begin a new attempt at a request an eval names, once its header has passed the check.
 
@@ -641,6 +653,15 @@ class MemoryState:
             self._ended.put(
                 key, Run(refusal=run.refusal, closed=True, eval_id=run.eval_id)
             )
+        return True
+
+    async def end_unseen_run(self, key: str, eval_id: str) -> bool:
+        if await self.peek_run(key) is not None:
+            return False
+        ended = Run(
+            refusal=Refuse(400, "This run has ended."), closed=True, eval_id=eval_id
+        )
+        self._ended.put(key, ended)
         return True
 
     async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:

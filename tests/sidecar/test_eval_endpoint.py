@@ -331,6 +331,37 @@ async def test_a_samples_registration_is_completed() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_sample_that_names_its_run_has_its_facts_freed_when_it_ends() -> None:
+    handler = Handler(weather_rule())
+    async with _client(handler) as client:
+        await _registered(client)
+        for run in ["sample_123", "sample_124"]:
+            await _call(
+                client,
+                "complete_registration",
+                _COMPLETION | eval_call("complete_registration") | {"sample_uuid": run},
+            )
+        ended = [
+            await _call(
+                client,
+                "end_sample",
+                {"sample_uuid": run} | eval_call("end_sample") | named,
+            )
+            # one names its task, and one doesn't, as an older Inspect
+            for run, named in [
+                ("sample_123", {"task": "philadelphia"}),
+                ("sample_124", {}),
+            ]
+        ]
+    kept = await handler._state.registration("eval_789", "philadelphia")
+
+    assert [answered["result"]["state"] for answered in ended] == ["ended", "unknown"]
+    # the run that named no task is still one in progress
+    assert kept is not None and list(kept.samples) == [1]
+    assert kept.runs == {1: {"sample_124"}}
+
+
+@pytest.mark.anyio
 async def test_a_samples_registration_for_a_task_not_registered_is_its_own_error() -> (
     None
 ):

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.applications import Starlette
 
 from .._config import parse_config_file
+from .._decorators import eval_only_names
 from ..config import sentinel_from_config
 from ._eval_endpoint import TOKEN_VARIABLE, eval_routes
 from ._exchange import MAX_BODY_BYTES
@@ -344,7 +345,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         arguments: Parsed arguments that `add_arguments` defined.
 
     Raises:
-        ValueError: If a `--model-role` is not `ROLE=MODEL`, or the sentinel configuration or a tasks file is invalid.
+        ValueError: If a `--model-role` is not `ROLE=MODEL`, the sentinel configuration or a tasks file is invalid, or the sentinel holds a monitor or protocol declared `portable=False`.
     """
     roles: dict[str, str] = {}
     for role in arguments.model_role:
@@ -352,8 +353,18 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         if not sep or not name or not model:
             raise ValueError(f"--model-role takes ROLE=MODEL, not {role!r}.")
         roles[name] = model
+    sentinel = sentinel_from_config(
+        getattr(arguments, "sentinel_config", arguments.sentinel)
+    )
+    eval_only = sorted(eval_only_names(sentinel))
+    if eval_only:
+        raise ValueError(
+            f"The sentinel holds {', '.join(eval_only)}, declared `portable=False`, which runs only in an eval's process. "
+            "No sample runs in a sidecar, so what it reaches for there, such as `sandbox()`, `store()` or `transcript()`, isn't the eval's. "
+            "Take it out of this sidecar's sentinel, or make it portable."
+        )
     return Handler(
-        sentinel_from_config(getattr(arguments, "sentinel_config", arguments.sentinel)),
+        sentinel,
         host=SidecarHost(roles),
         state=MemoryState(expiry=arguments.run_expiry),
         reject_status=arguments.reject_status,
