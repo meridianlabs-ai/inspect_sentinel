@@ -426,6 +426,7 @@ class Handler:
         keepalive: float | None = KEEPALIVE_SECONDS,
         timestamp_window: float = TIMESTAMP_WINDOW,
         review_timeout: float | None = None,
+        run_header: str | None = None,
     ) -> None:
         """Create a handler.
 
@@ -446,6 +447,7 @@ class Handler:
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
             timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
             review_timeout: How long, in seconds, a question waits for a person's answer before it expires, when a sentinel asks a person during a run an Inspect eval names. The eval lists the question with `list_pending_questions` and answers it with `answer_question`. The sidecar answers an expired question with caution: `reject` if that was offered, otherwise `terminate`. The judging then continues. None, the default, means no expiry, because a person may take days. The time a question is open doesn't count against `judging_timeout`.
+            run_header: A request header whose value names the run of a request no eval names, such as an agent's id for its session. Conversations that send the same value are one run, however they open: a tally is kept for the run, and a sentinel that ends it ends them all. The caller sets the header, so the name is trusted as the caller is, and one not seen before starts a run. By default no header does, and such a run is named by how its conversation opens. An eval's `x-inspect-context` names its run whatever else the request carries.
 
         Raises:
             ValueError: If `keepalive`, `timestamp_window` or `review_timeout` isn't a positive number of seconds.
@@ -459,6 +461,7 @@ class Handler:
                 f"The timestamp window is some seconds, not {timestamp_window}."
             )
         self._timestamp_window = timestamp_window
+        self._run_header = run_header.strip().lower() or None if run_header else None
         self._reviews = Reviews(review_timeout)
         self._judgings_in_progress: set[_Judging] = set()
         # The model calls that a sentinel asked a person about, by eval id and x-irid.
@@ -527,6 +530,11 @@ class Handler:
     def timestamp_window(self) -> float:
         """How far, in seconds, an Inspect eval's `timestamp` may be from this process's clock."""
         return self._timestamp_window
+
+    @property
+    def run_header(self) -> str | None:
+        """The request header whose value names the run of a request no eval names, by lowercase name, or None if no header does."""
+        return self._run_header
 
     @property
     def eval_review(self) -> bool:
@@ -1828,13 +1836,30 @@ class Handler:
         )
         # an Inspect eval names the run: its sample, across retries
         named = sample is not None
-        key = sample.sample_uuid if sample is not None else opening
+        # For a request no eval names, a header may name the run, such as an
+        # agent's id for its session. The caller set it, so it is trusted as
+        # the caller is: a name not seen before starts a run, whatever the
+        # request holds.
+        by_header = None if named else _named_by(request.headers, self._run_header)
+        key = (
+            sample.sample_uuid
+            if sample is not None
+            else by_header
+            if by_header is not None
+            else opening
+        )
         sample_attempt = sample.attempt if sample is not None else ""
         # a conversation is told apart within a named run by the attempt it
         # is part of, since a retry opens as the attempt it replaces did, and
         # then by how it opens
-        conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
-        run_key = _run_key(named, key)
+        conversation_key = (
+            f"{key}/{sample_attempt}/{opening}"
+            if named or by_header is not None
+            else key
+        )
+        run_key = (
+            _header_run_key(key) if by_header is not None else _run_key(named, key)
+        )
         if sample is not None:
             # Whose run it is was checked before the request was read, and
             # another eval may have begun the run while it was. So it is
@@ -1969,7 +1994,7 @@ class Handler:
         # ended at this request remembers it without keeping what it holds
         digests = (
             []
-            if named
+            if named or by_header is not None
             else entry_digests(request.provider, request.body, request.format)
         )
         last = digests[-1] if digests else None
@@ -1977,6 +2002,7 @@ class Handler:
             run=run_key,
             conversation=conversation_key,
             named=named,
+            by_header=by_header is not None,
             sample_attempt=sample_attempt,
             answered=any(mark in run.answered for mark in marks[:-1]),
             model=_step_model(request.provider, request.model, sample),
@@ -1989,7 +2015,7 @@ class Handler:
             store=store,
             attempt=attempt,
             last=last,
-            request=None if named else request,
+            request=None if named or by_header is not None else request,
             binding=binding,
             message_keys=sent_keys(messages, body),
         )
@@ -2737,6 +2763,14 @@ class Handler:
                 conversation.rejected.clear()
                 conversation.edited.clear()
             return refusal
+        if held.by_header:
+            # a run a header names ends whole too: every conversation of it,
+            # such as a subagent's, or one compacted to a new opening
+            run.refusal = refusal
+            for conversation in run.conversations.values():
+                conversation.rejected.clear()
+                conversation.edited.clear()
+            return refusal
         if held.answered:
             run.ended_at[held.mark] = refusal
             if held.sent > 0 and held.last is not None:
@@ -2787,6 +2821,28 @@ def _withhold_ended(
     held.exchange.withheld = Withheld(
         message, {call.id: _ENDED for call in calls}, redacted=redacted
     )
+
+
+MAX_RUN_NAME = 128
+"""The longest value of the run header kept as it is, in characters. A longer one names its run by its digest."""
+
+
+def _named_by(headers: Mapping[str, str], header: str | None) -> str | None:
+    # the name a request's header gives its run, or None if none does
+    name = headers.get(header, "").strip() if header is not None else ""
+    if not name:
+        return None
+    if len(name) > MAX_RUN_NAME:
+        # the caller chose it, and a run is kept under its name
+        return hashlib.sha256(name.encode()).hexdigest()
+    return name
+
+
+def _header_run_key(name: str) -> str:
+    # Apart from the runs an eval names and the runs nothing names: a caller
+    # that sends the header chooses its value, which must never reach an
+    # eval's run, nor a run the endpoint for evals can ask about.
+    return f"header:{name}"
 
 
 def _run_key(named: bool, key: str) -> str:

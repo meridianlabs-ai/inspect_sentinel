@@ -155,6 +155,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="How long a run's state is kept once no request has named it. A day by default.",
     )
     parser.add_argument(
+        "--run-header",
+        default=None,
+        metavar="NAME",
+        help="A request header whose value names the run of a request no Inspect eval names, such as x-claude-code-session-id, which Claude Code sends with its session's id. Conversations that send the same value are one run: a sentinel's tally counts them together, and a sentinel that ends the run ends them all, a subagent's conversation and one compacted to a new opening included. The proxy must pass the header on (--envoy-header, or the LiteLLM guardrail's sidecar_headers). The caller sets the header, so its value is trusted as the caller is. By default such a run is named by how its conversation opens.",
+    )
+    parser.add_argument(
         "--timestamp-window",
         type=float,
         default=TIMESTAMP_WINDOW,
@@ -206,6 +212,7 @@ class ServerSettings(BaseModel):
     run_expiry: float | None = None
     timestamp_window: float | None = None
     review_timeout: float | None = None
+    run_header: str | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -241,6 +248,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "run_expiry",
             "timestamp_window",
             "review_timeout",
+            "run_header",
             "release",
             "keepalive",
         )
@@ -382,6 +390,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         keepalive=arguments.keepalive or None,
         timestamp_window=arguments.timestamp_window,
         review_timeout=arguments.review_timeout,
+        run_header=arguments.run_header,
     )
 
 

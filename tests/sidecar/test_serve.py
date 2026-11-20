@@ -586,6 +586,29 @@ def test_the_handler_keeps_a_client_alive_as_the_arguments_say(
     assert handler.keepalive == keepalive
 
 
+@pytest.mark.parametrize("given", ["option", "stanza"])
+def test_the_handler_names_runs_by_the_header_it_is_given(
+    given: str, tmp_path: Path
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(
+        "sentinel:\n  name: no_tokyo\nserver:\n  run_header: X-Claude-Code-Session-Id\n"
+    )
+    arguments = (
+        _arguments("--sentinel", "no_tokyo", "--run-header", "X-Claude-Code-Session-Id")
+        if given == "option"
+        else parse_arguments(["--sentinel", str(config)])
+    )
+
+    assert handler_from_arguments(arguments).run_header == "x-claude-code-session-id"
+
+
+def test_no_header_names_a_run_by_default() -> None:
+    handler = handler_from_arguments(_arguments("--sentinel", "no_tokyo"))
+
+    assert handler.run_header is None
+
+
 def test_the_handler_checks_timestamps_within_the_window_the_arguments_say() -> None:
     handler = handler_from_arguments(
         _arguments("--sentinel", "no_tokyo", "--timestamp-window", "30")

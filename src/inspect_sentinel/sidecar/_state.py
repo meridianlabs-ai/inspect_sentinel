@@ -283,6 +283,8 @@ class Held:
     conversation: str
     named: bool
     """Whether an eval named the run."""
+    by_header: bool
+    """Whether a request header named the run, as the handler's `run_header` says. A sentinel that ends such a run ends every conversation in it."""
     sample_attempt: str
     """The attempt at the sample an eval names, or `""`."""
     answered: bool

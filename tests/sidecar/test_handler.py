@@ -23,6 +23,7 @@ from inspect_sentinel.sidecar import (
     Record,
     Refuse,
     Replace,
+    Request,
     UnreadableError,
     _handler,
     read_reply,
@@ -1289,6 +1290,163 @@ async def test_every_later_request_of_a_sample_that_ended_is_refused() -> None:
     assert other == Pass()
     # the sentinel was not asked again
     assert not await handler.records("b")
+
+
+_SESSION = "x-agent-session"
+
+
+def _in_session(asked: Request, name: str) -> Request:
+    # as from an agent that sends an id for its session in a header
+    return replace(asked, headers={**asked.headers, _SESSION: name})
+
+
+@pytest.mark.anyio
+async def test_a_header_names_one_run_however_its_conversations_open() -> None:
+    handler = Handler(third_lookup_ends_the_run(), run_header=_SESSION)
+
+    async def lookup(id: str, opening: str, session: str) -> Answer:
+        await handler.request(_in_session(request(id, opening), session))
+        return await handler.reply(reply(message(weather("Oslo")), id=id))
+
+    answers = [
+        await lookup("a", "The agent's conversation", "session-1"),
+        await lookup("b", "A subagent's conversation", "session-1"),
+        await lookup("c", "The agent's conversation", "session-1"),
+    ]
+    # another session, though it opens as the first did, has a tally of its own
+    other = await lookup("d", "The agent's conversation", "session-2")
+
+    assert [isinstance(answer, Refuse) for answer in answers] == [False, False, True]
+    assert not isinstance(other, Refuse)
+
+
+@pytest.mark.anyio
+async def test_every_conversation_of_a_run_a_header_names_ends_with_it() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    again = await handler.request(_in_session(request("b"), "session-1"))
+    subagent = await handler.request(
+        _in_session(request("c", "A subagent's conversation"), "session-1")
+    )
+    other = await handler.request(_in_session(request("d"), "session-2"))
+
+    assert [ended, again, subagent] == [_ENDED] * 3
+    assert other == Pass()
+    # the sentinel was not asked again
+    assert not await handler.records("b")
+
+
+@pytest.mark.anyio
+async def test_a_name_not_seen_before_starts_a_run_whatever_the_request_holds() -> None:
+    # The caller sets the header, so its value is trusted as the caller is. A
+    # session an agent resumes, after the sidecar dropped its run, sends its
+    # name with model turns already behind it, and a name swapped in for an
+    # ended run's looks the same.
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    renamed = await handler.request(
+        _in_session(request("b", then=ran("Oslo", "sunny")), "session-2")
+    )
+
+    assert renamed == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_rejected_turn_is_kept_for_its_conversation_in_a_run_a_header_names() -> (
+    None
+):
+    handler = Handler(weather_rule("reject", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    subagent = await handler.request(
+        _in_session(request("b", "A subagent's conversation"), "session-1")
+    )
+    told = await handler.request(_in_session(request("c"), "session-1"))
+
+    assert subagent == Pass()
+    assert isinstance(told, Replace)
+
+
+@pytest.mark.anyio
+async def test_an_evals_header_names_the_run_whatever_other_header_is_sent() -> None:
+    # as when the agent inside an eval is one that sends its session's id
+    handler = await holding(
+        Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    )
+    await handler.request(_in_session(request("a", sample="sample-1"), "session-1"))
+    ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    same_sample = await handler.request(
+        _in_session(request("b", sample="sample-1"), "session-2")
+    )
+    other_sample = await handler.request(
+        _in_session(request("c", sample="sample-2"), "session-1")
+    )
+    no_eval = await handler.request(_in_session(request("d"), "session-1"))
+
+    assert [ended, same_sample] == [_ENDED] * 2
+    assert [other_sample, no_eval] == [Pass()] * 2
+
+
+@pytest.mark.parametrize(
+    ("run_header", "sent"),
+    [
+        # no header names a run unless the sidecar is told which does
+        (None, {_SESSION: "session-1"}),
+        (_SESSION, {}),
+        (_SESSION, {_SESSION: "  "}),
+        (_SESSION, {"x-another-header": "session-1"}),
+    ],
+    ids=["not configured", "not sent", "sent empty", "another header"],
+)
+@pytest.mark.anyio
+async def test_a_run_no_header_names_is_named_by_how_its_conversation_opens(
+    run_header: str | None, sent: dict[str, str]
+) -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=run_header)
+    await handler.request(replace(request("a"), headers=sent))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    subagent = await handler.request(
+        replace(request("b", "A subagent's conversation"), headers=sent)
+    )
+
+    assert subagent == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_long_name_still_names_its_own_run() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    long = "s" * 1000
+    await handler.request(_in_session(request("a"), long + "1"))
+    ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    same = await handler.request(
+        _in_session(request("b", "A subagent's conversation"), long + "1")
+    )
+    other = await handler.request(_in_session(request("c"), long + "2"))
+
+    assert [ended, same] == [_ENDED] * 2
+    assert other == Pass()
+
+
+@pytest.mark.anyio
+async def test_the_header_that_names_a_run_is_found_whatever_its_case() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header="X-Agent-Session")
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    subagent = await handler.request(
+        _in_session(request("b", "A subagent's conversation"), "session-1")
+    )
+
+    assert handler.run_header == "x-agent-session"
+    assert subagent == _ENDED
 
 
 @pytest.mark.anyio
