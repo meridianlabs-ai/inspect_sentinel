@@ -258,10 +258,10 @@ class Run:
     eval_id: str | None = None
     """For a run an eval names, the eval, the only one the endpoint for evals answers for the run."""
 
-    redacted: dict[str, tuple[Format, Any]] = field(
-        default_factory=dict[str, tuple[Format, Any]]
+    redacted: dict[tuple[str, str], tuple[Format, Any]] = field(
+        default_factory=dict[tuple[str, str], tuple[Format, Any]]
     )
-    """For a run an eval names, the model's own calls that a decision acted on, by call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
+    """For a run an eval names, the model's own calls that a decision acted on, by the conversation each was made in and its call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
 
 
 @dataclass(frozen=True)

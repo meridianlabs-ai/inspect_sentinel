@@ -1481,6 +1481,56 @@ async def test_a_call_a_conversation_made_isnt_taken_for_another_conversations_c
     assert result == Pass()
 
 
+@pytest.mark.parametrize("rejected", ["out of its turn", "with its whole turn"])
+@pytest.mark.anyio
+async def test_a_conversations_own_call_isnt_given_the_arguments_of_anothers_rejected_call(
+    rejected: str,
+) -> None:
+    # a run an eval names: the eval holds a rejected call without its
+    # arguments, and each later request has the model's own call put back
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
+    sample = "sample-1"
+    await handler.request(request("a", "The agent's conversation", sample=sample))
+    turn = [weather("Tokyo", "call_0")]
+    if rejected == "out of its turn":
+        turn.append(weather("Paris", "call_1"))
+    await handler.reply(reply(message(*turn), id="a"))
+    # another conversation's model makes a call of its own with the same id,
+    # which takes no arguments
+    own: dict[str, Any] = {
+        "type": "tool_use",
+        "id": "call_0",
+        "name": "get_weather",
+        "input": {},
+    }
+    await handler.request(request("b", "A subagent's conversation", sample=sample))
+    await handler.reply(reply(message(own), id="b"))
+
+    result = await handler.request(
+        request(
+            "c",
+            "A subagent's conversation",
+            [
+                {"role": "assistant", "content": [own]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_0",
+                            "content": "Sunny.",
+                        }
+                    ],
+                },
+            ],
+            sample=sample,
+        )
+    )
+
+    # the request goes to the provider as the client sent it
+    assert result == Pass()
+
+
 @pytest.mark.anyio
 async def test_the_header_that_names_a_run_is_found_whatever_its_case() -> None:
     handler = Handler(weather_rule("terminate", "Tokyo"), run_header="X-Agent-Session")

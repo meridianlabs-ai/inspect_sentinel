@@ -1899,7 +1899,9 @@ class Handler:
                 request.body,
                 {
                     id: call
-                    for id, (format, call) in run.redacted.items()
+                    for id, (format, call) in _redacted_in(
+                        run, conversation_key
+                    ).items()
                     if format == written
                 },
                 request.format,
@@ -2345,7 +2347,10 @@ class Handler:
         written = await amendments(held.format, message, reasons, modified, noted)
         if held.named:
             for id in reasons:
-                run.redacted[id] = (held.format, written[id].call)
+                run.redacted[(held.conversation, id)] = (
+                    held.format,
+                    written[id].call,
+                )
         body = await edit_reply(
             reply.provider,
             reply.content_type,
@@ -2407,6 +2412,8 @@ class Handler:
             other.id: reasons.get(other.id, _NOT_RUN)
             for other in message.tool_calls or []
         }
+        # the model made the turn's calls in this conversation, though none ran
+        conversation.calls.update(told)
         # the first rejection is the one the client is refused with
         call, _ = rejected[0]
         why = reasons[call.id]
@@ -2423,7 +2430,10 @@ class Handler:
         run.in_a_row[held.sample_attempt] = count
         if written is not None and held.named:
             for id in reasons:
-                run.redacted[id] = (held.format, written[id].call)
+                run.redacted[(held.conversation, id)] = (
+                    held.format,
+                    written[id].call,
+                )
         if written is None:
             return self._end(
                 held,
@@ -3075,6 +3085,30 @@ def _digest(message: ChatMessage) -> str:
     ).hexdigest()
 
 
+def _redacted_in(run: Run, conversation: str) -> dict[str, tuple[Format, Any]]:
+    # The model's own calls that the eval's copy of a conversation holds
+    # without their arguments, by call id. A call is known by its id within
+    # its conversation. So a call the conversation's model made is never
+    # another conversation's, though they have one id, as a subagent's and
+    # the agent's can. A conversation that opens anew, as after a compaction,
+    # holds the calls of the one it continues, which it didn't make itself.
+    kept = run.conversations.get(conversation)
+    made = kept.calls if kept is not None else set[str]()
+    found = {
+        id: call
+        for (owner, id), call in run.redacted.items()
+        if owner != conversation and id not in made
+    }
+    found.update(
+        {
+            id: call
+            for (owner, id), call in run.redacted.items()
+            if owner == conversation
+        }
+    )
+    return found
+
+
 def _edit_lost(
     run: Run,
     conversation: Conversation,
@@ -3165,7 +3199,8 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
         for turn in (conversation.edited if conversation is not None else [])
         for id, call in turn.modified.items()
     }
-    if not any(call.id in changed or call.id in run.redacted for call in calls):
+    hidden = _redacted_in(run, held.conversation)
+    if not any(call.id in changed or call.id in hidden for call in calls):
         return message
     return message.model_copy(
         update={
@@ -3173,7 +3208,7 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
                 _as_it_ran(changed[call.id])
                 if call.id in changed
                 else replace(redacted(call), view=_ARGUMENTS_HIDDEN)
-                if call.id in run.redacted
+                if call.id in hidden
                 else call
                 for call in calls
             ]
