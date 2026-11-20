@@ -1532,6 +1532,52 @@ async def test_a_conversations_own_call_isnt_given_the_arguments_of_anothers_rej
 
 
 @pytest.mark.anyio
+async def test_a_compaction_request_that_keeps_its_conversations_opening_is_amended_as_the_conversation_is() -> (
+    None
+):
+    handler = Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+
+    # As Claude Code asks for a compaction (measured, 2.1.293): the same
+    # system prompt and entries, with the instruction added to the last entry,
+    # beside the result of the call as it ran.
+    call, result = ran("Oslo", "Sunny.", "toolu_1")
+    result["content"].append({"type": "text", "text": "Summarise the conversation."})
+    compaction = await handler.request(
+        _in_session(request("b", then=[call, result]), "session-1")
+    )
+
+    # the model is sent its own call, as in any later request of the conversation
+    assert isinstance(compaction, Replace)
+    assistant = _messages(compaction.body)[1]
+    calls = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [call["input"] for call in calls] == [{"location": "Tokyo"}]
+
+
+@pytest.mark.anyio
+async def test_a_request_that_holds_an_edited_call_under_another_opening_is_unreadable_in_a_run_a_header_names() -> (
+    None
+):
+    handler = Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+
+    # The conversation's history under another system prompt is a
+    # conversation of its own, in the same run. It holds the changed call,
+    # which its own model didn't make, so the call can't be matched with the
+    # change, as for a run an eval names.
+    history = ran("Oslo", "Sunny.", "toolu_1")
+    with pytest.raises(UnreadableError, match="which call ran"):
+        await handler.request(
+            _in_session(
+                request("b", then=history, system="You summarise conversations."),
+                "session-1",
+            )
+        )
+
+
+@pytest.mark.anyio
 async def test_the_header_that_names_a_run_is_found_whatever_its_case() -> None:
     handler = Handler(weather_rule("terminate", "Tokyo"), run_header="X-Agent-Session")
     await handler.request(_in_session(request("a"), "session-1"))
