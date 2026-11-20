@@ -1555,19 +1555,31 @@ async def test_a_compaction_request_that_keeps_its_conversations_opening_is_amen
     assert [call["input"] for call in calls] == [{"location": "Tokyo"}]
 
 
+@pytest.mark.parametrize(
+    "carried",
+    ["the changed call", "a call let through from a turn with one taken out"],
+)
 @pytest.mark.anyio
-async def test_a_request_that_holds_an_edited_call_under_another_opening_is_unreadable_in_a_run_a_header_names() -> (
-    None
-):
-    handler = Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+async def test_a_request_that_holds_a_call_of_an_edited_turn_under_another_opening_is_unreadable_in_a_run_a_header_names(
+    carried: str,
+) -> None:
+    if carried == "the changed call":
+        handler = Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+        turn = [weather("Tokyo", "toolu_1")]
+        # the client ran the call as it was changed
+        history = ran("Oslo", "Sunny.", "toolu_1")
+    else:
+        handler = Handler(weather_rule("reject", "Tokyo"), run_header=_SESSION)
+        turn = [weather("Paris", "toolu_1"), weather("Tokyo", "toolu_2")]
+        # only the call let through, unchanged, and its result
+        history = ran("Paris", "Sunny.", "toolu_1")
     await handler.request(_in_session(request("a"), "session-1"))
-    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+    await handler.reply(reply(message(*turn), id="a"))
 
     # The conversation's history under another system prompt is a
-    # conversation of its own, in the same run. It holds the changed call,
-    # which its own model didn't make, so the call can't be matched with the
-    # change, as for a run an eval names.
-    history = ran("Oslo", "Sunny.", "toolu_1")
+    # conversation of its own, in the same run. It holds a call of the
+    # edited turn, which its own model didn't make, so the call can't be
+    # matched with the edit, as for a run an eval names.
     with pytest.raises(UnreadableError, match="which call ran"):
         await handler.request(
             _in_session(
