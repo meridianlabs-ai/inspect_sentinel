@@ -41,6 +41,8 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    ContentReasoning,
+    ContentText,
     GenerateConfig,
     ModelOutput,
     execute_tools,
@@ -98,6 +100,7 @@ from inspect_sentinel.scout import (
     replay_check_differences,
 )
 from inspect_sentinel.scout._context import Contexts
+from inspect_sentinel.scout._probe import _hash
 from inspect_sentinel.scout._select import selector_from, table_rows
 from inspect_sentinel.scout._steps import transcript_steps
 from tests._fakes import View
@@ -2784,6 +2787,111 @@ def test_replay_check_differences_lists_what_replay_did_not_hand_over(
         ("model_output", "only replayed"),
     }
     assert replay_check_differences(replayed, replayed).empty
+
+
+@solver
+def generates_in_its_own_loop() -> Solver:
+    """Call `generate()` and `execute_tools()` in a loop of its own, outside any agent."""
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        model = get_model()
+        tools = [addition()]
+        while True:
+            state.output = await model.generate(state.messages, tools)
+            state.messages.append(state.output.message)
+            if not state.output.message.tool_calls:
+                return state
+            result = await execute_tools(state.messages, tools)
+            state.messages.extend(result.messages)
+
+    return solve
+
+
+def reasoned_turn(turn: int) -> ModelOutput:
+    """A turn with reasoning, text and two calls to `addition`, with ids `t{turn}c0` and `t{turn}c1`."""
+    return ModelOutput(
+        model="mockllm/model",
+        choices=[
+            ChatCompletionChoice(
+                message=ChatMessageAssistant(
+                    content=[
+                        ContentReasoning(reasoning=f"plan {turn}"),
+                        ContentText(text=f"adding {turn}"),
+                    ],
+                    model="mockllm/model",
+                    tool_calls=[
+                        ToolCall(
+                            id=f"t{turn}c{index}",
+                            function="addition",
+                            arguments={"x": turn, "y": index},
+                        )
+                        for index in range(2)
+                    ],
+                ),
+                stop_reason="tool_calls",
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("approval", ["none", "modify"])
+def test_replay_hands_tool_steps_the_assistant_message_they_had_live(
+    tmp_path: Path, approval: str
+) -> None:
+    [log] = eval(
+        Task(
+            dataset=[Sample(input="add")],
+            solver=generates_in_its_own_loop(),
+            sentinel=observe_only(replay_check()),
+            approval=(
+                [ApprovalPolicy(rewrites_the_call(), "*")]
+                if approval == "modify"
+                else None
+            ),
+        ),
+        model=get_model(
+            "mockllm/model",
+            custom_outputs=[
+                reasoned_turn(1),
+                reasoned_turn(2),
+                ModelOutput.from_content("mockllm/model", "done"),
+            ],
+        ),
+        log_dir=str(tmp_path / "logs"),
+        display="none",
+    )
+    assert log.status == "success", log.error
+    status = scan(
+        scanners={
+            "replayed": as_scanner(replay_check()),
+            "recorded": as_reader("replay_check"),
+        },
+        transcripts=transcripts_from(str(tmp_path / "logs")),
+        scans=str(tmp_path / "scans"),
+        display="none",
+        max_processes=1,
+    )
+    frames: Any = scan_results_df(status.location).scanners
+    replayed, recorded = frames["replayed"], frames["recorded"]
+
+    assert replay_check_differences(replayed, recorded).empty
+    # each turn's four tool steps (two calls, each before and after) digest
+    # one message, not None, and the two turns' messages differ (the digest
+    # leaves out message ids, so they differ by content and calls)
+    digests: dict[str, list[str]] = {}
+    for row in cast(list[Row], recorded.to_dict("records")):
+        if not str(row["metadata.stage"]).startswith("tool"):
+            continue
+        metadata = row["metadata.metadata"]
+        metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+        step = metadata["step"]
+        turn = str(row["metadata.step_id"]).split("c")[0]
+        digests.setdefault(turn, []).append(step["assistant_message"])
+    assert sorted(digests) == ["t1", "t2"]
+    assert all(len(found) == 4 for found in digests.values())
+    [first], [second] = (set(found) for found in digests.values())
+    assert _hash(None) not in (first, second)
+    assert first != second
 
 
 def digested(conversation: str, call: str, turns: str | None) -> Row:
