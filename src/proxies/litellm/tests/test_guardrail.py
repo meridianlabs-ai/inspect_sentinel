@@ -391,13 +391,14 @@ def _sidecar(
     def read_log() -> None:
         # read for as long as the sidecar runs, so its log never fills the pipe
         assert serving.stderr is not None
-        for line in serving.stderr:
-            log.append(line)
-            listening = _LISTENING.search(line)
-            if listening is not None:
-                urls.append(listening.group(1))
-                if len(urls) == listeners:
-                    started.set()
+        with serving.stderr as stream:
+            for line in stream:
+                log.append(line)
+                listening = _LISTENING.search(line)
+                if listening is not None:
+                    urls.append(listening.group(1))
+                    if len(urls) == listeners:
+                        started.set()
         # the sidecar has exited
         started.set()
 
