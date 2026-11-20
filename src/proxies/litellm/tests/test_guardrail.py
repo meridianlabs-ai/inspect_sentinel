@@ -381,7 +381,9 @@ def _sidecar(
         env=os.environ | {"INSPECT_SENTINEL_EVAL_TOKEN": "a-token-for-evals"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        text=True,
+        # an undecodable byte must not end the thread that drains the log
+        encoding="utf-8",
+        errors="replace",
     )
     listeners = 2 if eval_port else 1
     log: list[str] = []
@@ -391,22 +393,23 @@ def _sidecar(
     def read_log() -> None:
         # read for as long as the sidecar runs, so its log never fills the pipe
         assert serving.stderr is not None
-        with serving.stderr as stream:
-            for line in stream:
-                log.append(line)
-                listening = _LISTENING.search(line)
-                if listening is not None:
-                    urls.append(listening.group(1))
-                    if len(urls) == listeners:
-                        started.set()
-        # the sidecar has exited
-        started.set()
+        try:
+            with serving.stderr as stream:
+                for line in stream:
+                    log.append(line)
+                    listening = _LISTENING.search(line)
+                    if listening is not None:
+                        urls.append(listening.group(1))
+                        if len(urls) == listeners:
+                            started.set()
+        finally:
+            started.set()
 
     reader = threading.Thread(target=read_log, daemon=True)
     reader.start()
     try:
         if not started.wait(60) or len(urls) < listeners:
-            raise RuntimeError(f"The sidecar did not start: {''.join(log)}")
+            raise RuntimeError("The sidecar did not start; its log is in stderr.")
         yield urls[0] if listeners == 1 else _proxy_listener(urls)
     finally:
         serving.terminate()
@@ -416,6 +419,9 @@ def _sidecar(
             serving.kill()
             serving.wait()
         reader.join(timeout=30)
+        # pytest shows what a test wrote to stderr only when the test fails,
+        # however it fails
+        sys.stderr.write(f"The sidecar's log:\n{''.join(log)}")
 
 
 _LISTENING = re.compile(r"Uvicorn running on .*?(http://[^\s:]+:\d+)")
@@ -427,8 +433,10 @@ def _proxy_listener(urls: list[str]) -> str:
     # in no set order. The proxy's is the one without the probe.
     for url in urls:
         try:
-            urllib.request.urlopen(f"{url}/sentinel/info", timeout=5)
+            with urllib.request.urlopen(f"{url}/sentinel/info", timeout=5):
+                pass
         except urllib.error.HTTPError as ex:
+            ex.close()
             if ex.code == 404:
                 return url
     raise RuntimeError(f"None of {urls} serves only the endpoint for proxies.")
