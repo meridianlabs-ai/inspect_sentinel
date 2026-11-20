@@ -1423,6 +1423,105 @@ async def test_a_refused_turn_that_the_eval_holds_redacted_goes_back_as_made() -
     assert _calls_sent(answer.body) == [("toolu_1", {"location": "Tokyo"})]
 
 
+@protocol
+def rejects_tokyo_and_changes_lima() -> Protocol:
+    """Reject a lookup of Tokyo, and change a lookup of Lima to one of Oslo."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        city = step.call.arguments.get("location")
+        if city == "Tokyo":
+            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+        if city == "Lima":
+            changed = replace(step.call, arguments={"location": "Oslo"})
+            return Decision(action="modify", modified=changed)
+        return Decision.proceed()
+
+    return decide
+
+
+async def _unwritable(*_: Any, **__: Any) -> Any:
+    # as where the reply holds a call this sidecar can't change, or the
+    # change would alter what the client was already sent
+    raise UnreadableError("The change can't be written into the reply.")
+
+
+_PARIS_TOKYO_LIMA = [
+    weather("Paris", "toolu_1"),
+    weather("Tokyo", "toolu_2"),
+    weather("Lima", "toolu_3"),
+]
+
+
+@pytest.mark.anyio
+async def test_a_changed_call_of_a_turn_refused_whole_is_told_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One call of the turn is rejected and another changed, and the change
+    # can't be written into the reply, so the turn is refused whole.
+    monkeypatch.setattr(_handler, "edit_reply", _unwritable)
+    handler = await holding(Handler(rejects_tokyo_and_changes_lima()))
+    await handler.request(_from_inspect(request("a")))
+
+    refused = await handler.reply(reply(message(*_PARIS_TOKYO_LIMA), id="a"))
+
+    assert isinstance(refused, Refuse)
+    withheld = (await _judged(handler))["withheld"]
+    # the eval is handed neither the rejected call's arguments nor those the
+    # model wrote for the changed call, and a call no decision acted on
+    # keeps its own
+    assert [
+        (call["id"], call["arguments"]) for call in withheld["message"]["tool_calls"]
+    ] == [("toolu_1", {"location": "Paris"}), ("toolu_2", {}), ("toolu_3", {})]
+    assert withheld["redacted"] == ["toolu_2", "toolu_3"]
+
+
+@pytest.mark.anyio
+async def test_a_changed_call_of_a_turn_refused_whole_goes_back_as_made(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_handler, "edit_reply", _unwritable)
+    handler = await holding(Handler(rejects_tokyo_and_changes_lima()))
+    await handler.request(_from_inspect(request("a")))
+    await handler.reply(reply(message(*_PARIS_TOKYO_LIMA), id="a"))
+    told = (await _judged(handler))["withheld"]["results"]
+
+    # the eval puts the turn back as it holds it, each call answered with what
+    # the sidecar said of it, as none ran
+    held = [
+        {
+            "role": "assistant",
+            "content": [
+                weather("Paris", "toolu_1"),
+                _redacted("toolu_2"),
+                _redacted("toolu_3"),
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": told[id],
+                    "is_error": True,
+                }
+                for id in ("toolu_1", "toolu_2", "toolu_3")
+            ],
+        },
+    ]
+    answer = await handler.request(_from_inspect(request("b", then=held)))
+
+    # the model is sent its own turn
+    assert isinstance(answer, Replace)
+    assert _calls_sent(answer.body) == [
+        ("toolu_1", {"location": "Paris"}),
+        ("toolu_2", {"location": "Tokyo"}),
+        ("toolu_3", {"location": "Lima"}),
+    ]
+
+
 @pytest.mark.anyio
 async def test_a_call_no_decision_acted_on_is_never_put_back() -> None:
     # an empty call of the eval's own is left as it is

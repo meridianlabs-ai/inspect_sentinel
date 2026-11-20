@@ -7,7 +7,14 @@ import logging
 import math
 import re
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
@@ -2265,7 +2272,9 @@ class Handler:
                 ) from ex
             # the reply couldn't be edited as the sentinel decided, so the turn
             # is refused whole, as it was before calls could be taken out
-            return await self._reject(held, run, conversation, message, noted, rejected)
+            return await self._reject(
+                held, run, conversation, message, noted, rejected, changed=modified
+            )
 
     def _passed(
         self,
@@ -2371,11 +2380,18 @@ class Handler:
         message: ChatMessageAssistant,
         noted: JsonValue | None,
         rejected: Sequence[tuple[ToolCall, Decision]],
+        changed: Collection[str] = (),
     ) -> Refuse:
+        # `changed` holds the ids of the calls a decision changed, where the
+        # change couldn't be written into the reply and the turn is refused
+        # whole instead. None of them runs.
         # only `message` is for the agent; a decision's explanation is for the log
         reasons = {
             call.id: decision.message or _REJECTED for call, decision in rejected
         }
+        # An eval is never handed the arguments of a call a decision acted
+        # on: a rejected call's, or those the model wrote for a changed one.
+        acted_on = [*reasons, *(id for id in changed if id not in reasons)]
         told = {
             other.id: reasons.get(other.id, _NOT_RUN)
             for other in message.tool_calls or []
@@ -2391,11 +2407,11 @@ class Handler:
         written = (
             None if ends else await amendments(held.format, message, told, (), noted)
         )
-        held.exchange.withheld = Withheld(message, told, redacted=frozenset(reasons))
+        held.exchange.withheld = Withheld(message, told, redacted=frozenset(acted_on))
         held.exchange.message = why
         run.in_a_row[held.sample_attempt] = count
         if written is not None and held.named:
-            for id in reasons:
+            for id in acted_on:
                 run.redacted[id] = (held.format, written[id].call)
         if written is None:
             return self._end(
