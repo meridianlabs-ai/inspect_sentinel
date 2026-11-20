@@ -197,6 +197,9 @@ class Conversation:
     judged: set[str] = field(default_factory=set[str])
     """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
 
+    calls: set[str] = field(default_factory=set[str])
+    """The id of every tool call the model made in the conversation. A call is known by its id within its conversation, so these tell a call of its own from another conversation's with the same id."""
+
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by call id, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 

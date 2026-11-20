@@ -1840,7 +1840,9 @@ class Handler:
         # agent's id for its session. The caller set it, so it is trusted as
         # the caller is: a name not seen before starts a run, whatever the
         # request holds.
-        by_header = None if named else _named_by(request.headers, self._run_header)
+        by_header = (
+            None if named else _header_run_key(request.headers, self._run_header)
+        )
         key = (
             sample.sample_uuid
             if sample is not None
@@ -1857,9 +1859,7 @@ class Handler:
             if named or by_header is not None
             else key
         )
-        run_key = (
-            _header_run_key(key) if by_header is not None else _run_key(named, key)
-        )
+        run_key = by_header if by_header is not None else _run_key(named, key)
         if sample is not None:
             # Whose run it is was checked before the request was read, and
             # another eval may have begun the run while it was. So it is
@@ -1966,7 +1966,7 @@ class Handler:
         # the turn was made, as when a client rewrote earlier entries of its
         # conversation, can't be matched with the edit: its results would be
         # judged as of a call that didn't run.
-        if _edit_lost(run, edited, client):
+        if _edit_lost(run, conversation, edited, client):
             raise UnreadableError(
                 "The request holds a call this sidecar changed or took out, after earlier entries of its conversation changed, so which call ran can't be told."
             )
@@ -2307,6 +2307,7 @@ class Handler:
         if message is not None:
             for call in message.tool_calls or []:
                 assert message.id is not None
+                conversation.calls.add(call.id)
                 conversation.made[call.id] = Made(
                     held.input,
                     held.offered.tools,
@@ -2827,21 +2828,19 @@ MAX_RUN_NAME = 128
 """The longest value of the run header kept as it is, in characters. A longer one names its run by its digest."""
 
 
-def _named_by(headers: Mapping[str, str], header: str | None) -> str | None:
-    # the name a request's header gives its run, or None if none does
+def _header_run_key(headers: Mapping[str, str], header: str | None) -> str | None:
+    # The key of the run a request's header names, or None if none does. It
+    # is apart from the runs an eval names and the runs nothing names: a
+    # caller that sends the header chooses its value, which must never reach
+    # an eval's run, nor a run the endpoint for evals can ask about.
     name = headers.get(header, "").strip() if header is not None else ""
     if not name:
         return None
     if len(name) > MAX_RUN_NAME:
-        # the caller chose it, and a run is kept under its name
-        return hashlib.sha256(name.encode()).hexdigest()
-    return name
-
-
-def _header_run_key(name: str) -> str:
-    # Apart from the runs an eval names and the runs nothing names: a caller
-    # that sends the header chooses its value, which must never reach an
-    # eval's run, nor a run the endpoint for evals can ask about.
+        # The caller chose the name, and a run is kept under it. A digest is
+        # kept apart from the names kept as they are, so no short name is
+        # another's digest.
+        return f"header-digest:{hashlib.sha256(name.encode()).hexdigest()}"
     return f"header:{name}"
 
 
@@ -3077,7 +3076,10 @@ def _digest(message: ChatMessage) -> str:
 
 
 def _edit_lost(
-    run: Run, edited: Sequence[Edited], messages: Sequence[ChatMessage]
+    run: Run,
+    conversation: Conversation,
+    edited: Sequence[Edited],
+    messages: Sequence[ChatMessage],
 ) -> bool:
     # whether the messages hold a call id of an edited turn of the run that
     # isn't among those the request continues from
@@ -3086,10 +3088,17 @@ def _edit_lost(
         for message in messages
         if isinstance(message, ChatMessageTool) and message.tool_call_id is not None
     }
+    # A call the model made in this conversation is its own, whatever id a
+    # turn edited in another conversation of the run holds: a subagent's
+    # model may number its calls as the agent's does. A conversation that
+    # opens anew and still holds an edited call, as after a compaction, made
+    # no such call itself.
+    others = ids - conversation.calls
     return any(
-        turn not in edited and ids.intersection(turn.order)
-        for conversation in run.conversations.values()
-        for turn in conversation.edited
+        turn not in edited
+        and (ids if other is conversation else others).intersection(turn.order)
+        for other in run.conversations.values()
+        for turn in other.edited
     )
 
 

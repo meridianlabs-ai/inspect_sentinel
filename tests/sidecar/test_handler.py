@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from collections.abc import Callable, Sequence
@@ -1433,6 +1434,51 @@ async def test_a_long_name_still_names_its_own_run() -> None:
 
     assert [ended, same] == [_ENDED] * 2
     assert other == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_name_and_another_names_digest_name_runs_of_their_own() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    long = "s" * 1000
+    await handler.request(_in_session(request("a"), long))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    # a short name that is the digest the long one is kept under
+    digest = hashlib.sha256(long.encode()).hexdigest()
+    other = await handler.request(_in_session(request("b"), digest))
+
+    assert other == Pass()
+
+
+@pytest.mark.parametrize("named_by", ["a header", "an eval"])
+@pytest.mark.anyio
+async def test_a_call_a_conversation_made_isnt_taken_for_another_conversations_changed_call(
+    named_by: str,
+) -> None:
+    handler = await holding(
+        Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+    )
+
+    def asked(id: str, opening: str, then: Sequence[dict[str, Any]] = ()) -> Request:
+        if named_by == "an eval":
+            return request(id, opening, then, sample="sample-1")
+        return _in_session(request(id, opening, then), "session-1")
+
+    # one conversation of the run is handed a changed call
+    await handler.request(asked("a", "The agent's conversation"))
+    await handler.reply(reply(message(weather("Tokyo", "call_0")), id="a"))
+    # Another makes a call of its own with the same id, as a local model
+    # that numbers its calls does. A call is known by its id within its
+    # conversation only.
+    await handler.request(asked("b", "A subagent's conversation"))
+    passed = await handler.reply(reply(message(weather("Paris", "call_0")), id="b"))
+
+    result = await handler.request(
+        asked("c", "A subagent's conversation", ran("Paris", "Sunny.", "call_0"))
+    )
+
+    assert passed == Pass()
+    assert result == Pass()
 
 
 @pytest.mark.anyio
