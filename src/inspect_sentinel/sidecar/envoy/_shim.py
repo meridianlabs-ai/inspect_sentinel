@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
-from typing import Any, TypeVar, cast, get_args
+from typing import Any, NamedTuple, TypeVar, cast, get_args
 
 import grpc
 
@@ -684,6 +684,37 @@ def envoy_server(
         max_body_bytes: The largest request or reply the shim holds. gRPC's own limit, 4 MiB, is raised to fit it, since Envoy sends a request's body in one message.
         headers: The request headers, besides Inspect's own, that the sentinel is shown, by lowercase name.
     """
+    return bind_envoy_server(
+        handler, host=host, port=port, max_body_bytes=max_body_bytes, headers=headers
+    ).server
+
+
+class ShimServer(NamedTuple):
+    """The Envoy shim's gRPC server, and where it listens."""
+
+    server: grpc.aio.Server
+    address: str
+    """The host and port, with an IPv6 host in brackets, such as `[::1]:50051`."""
+    port: int
+
+
+def bind_envoy_server(
+    handler: Handler,
+    *,
+    host: str,
+    port: int,
+    max_body_bytes: int,
+    headers: Collection[str] = (),
+) -> ShimServer:
+    """`envoy_server()`'s server, with the port it bound, which is the one the system chose when `port` is 0.
+
+    Args:
+        handler: Judges each request and each reply.
+        host: The address to listen on.
+        port: The port to listen on, or 0 for one the system chooses.
+        max_body_bytes: The largest request or reply the shim holds. gRPC's own limit, 4 MiB, is raised to fit it, since Envoy sends a request's body in one message.
+        headers: The request headers, besides Inspect's own, that the sentinel is shown, by lowercase name.
+    """
     limit = max_body_bytes + _MESSAGE_OVERHEAD
     server = grpc.aio.server(
         options=[
@@ -696,5 +727,5 @@ def envoy_server(
     )
     # gRPC takes an IPv6 address in brackets, where uvicorn takes it bare
     bound = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    server.add_insecure_port(f"{bound}:{port}")
-    return server
+    port = server.add_insecure_port(f"{bound}:{port}")
+    return ShimServer(server, address=f"{bound}:{port}", port=port)

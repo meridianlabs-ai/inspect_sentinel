@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -522,14 +523,9 @@ def lets_all_through():
 )
 def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) -> None:
     (tmp_path / "lets_all_through.py").write_text(_RULE)
-    free: list[int] = []
-    for _ in range(1 if second is None else 2):
-        with socket.socket() as found:
-            found.bind(("127.0.0.1", 0))
-            free.append(found.getsockname()[1])
-    given = ["--port", str(free[0])]
-    if second is not None:
-        given += [second, str(free[1])]
+    # Each port is 0, so the system gives the sidecar ports no other test can
+    # take first, and the sidecar's own log says which they are.
+    given = ["--port", "0", *([second, "0"] if second is not None else [])]
     serving = subprocess.Popen(
         [
             sys.executable,
@@ -545,32 +541,58 @@ def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) ->
         env=os.environ | {TOKEN_VARIABLE: "s3cret"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
     )
+    listeners = 1 if second is None else 2
+    log: list[str] = []
+    ports: dict[str, list[int]] = {"Uvicorn": [], "Envoy shim": []}
+    started = threading.Event()
+
+    def read_log() -> None:
+        assert serving.stderr is not None
+        try:
+            with serving.stderr as stream:
+                for line in stream:
+                    log.append(line)
+                    listening = _LISTENING.search(line)
+                    if listening is not None:
+                        ports[listening[1]].append(int(listening[2]))
+                        if sum(map(len, ports.values())) == listeners:
+                            started.set()
+        finally:
+            started.set()
+
+    reader = threading.Thread(target=read_log, daemon=True)
+    reader.start()
     try:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                httpx.get(f"http://127.0.0.1:{free[0]}/health", timeout=1)
-                break
-            except httpx.HTTPError:
-                assert serving.poll() is None and time.monotonic() < deadline
-                time.sleep(0.1)
+        started.wait(60)
+        assert sum(map(len, ports.values())) == listeners, "".join(log)
+        endpoint = f"http://127.0.0.1:{ports['Uvicorn'][0]}"
+        assert httpx.get(f"{endpoint}/health", timeout=5).is_success
         if second is None:
             # a running sidecar can ask a person through an eval, so its
             # probe reports `review: true`
-            probed = httpx.get(f"http://127.0.0.1:{free[0]}/sentinel/info", timeout=5)
+            probed = httpx.get(f"{endpoint}/sentinel/info", timeout=5)
             assert probed.json()["review"] is True
         if second == "--envoy-port":
-            # the shim listens before the endpoints do
-            socket.create_connection(("127.0.0.1", free[1]), timeout=5).close()
+            socket.create_connection(
+                ("127.0.0.1", ports["Envoy shim"][0]), timeout=5
+            ).close()
         serving.send_signal(signal.SIGINT)
-        _, errors = serving.communicate(timeout=30)
+        serving.wait(timeout=30)
     finally:
         if serving.poll() is None:
             serving.kill()
+            serving.wait()
+        reader.join(timeout=30)
 
     assert serving.returncode == 0
-    assert b"Traceback" not in errors
+    assert "Traceback" not in "".join(log)
+
+
+_LISTENING = re.compile(r"(Uvicorn|Envoy shim) running on \S*:(\d+)")
+"""The sidecar's line saying where a server listens, which gives the port the system chose for port 0: the number after the address's last colon, past an IPv6 host's own."""
 
 
 @pytest.mark.parametrize(
