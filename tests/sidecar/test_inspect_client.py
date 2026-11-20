@@ -1477,6 +1477,61 @@ async def test_a_changed_call_of_a_turn_refused_whole_is_told_redacted(
     assert withheld["redacted"] == ["toolu_2", "toolu_3"]
 
 
+@protocol
+def rejects_tokyo_and_changes_a_patch() -> Protocol:
+    """Reject a lookup of Tokyo, and change what `apply_patch` is given."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        if step.call.arguments.get("location") == "Tokyo":
+            return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+        if step.call.function == "apply_patch":
+            changed = replace(step.call, arguments={"input": "A PATCH OF THE RULE'S"})
+            return Decision(action="modify", modified=changed)
+        return Decision.proceed()
+
+    return decide
+
+
+@pytest.mark.anyio
+async def test_a_changed_custom_tool_call_of_a_turn_refused_whole_is_told_redacted() -> (
+    None
+):
+    # The recorded Responses reply, its last call made a call of a custom
+    # tool. This sidecar changes only a function call's arguments, so the
+    # change can't be written, and with a call rejected beside it the turn is
+    # refused whole.
+    content_type, body = openai_recorded("responses")
+    recorded: dict[str, Any] = json.loads(body)
+    patch = [item for item in recorded["output"] if item["type"] == "function_call"][-1]
+    del patch["arguments"]
+    patch.update(type="custom_tool_call", name="apply_patch", input="THE MODEL'S PATCH")
+    handler = await holding(Handler(rejects_tokyo_and_changes_a_patch()))
+    await handler.request(_openai_from_inspect("responses", "a"))
+
+    refused = await handler.reply(
+        replace(
+            reply(json.dumps(recorded).encode(), id="a", content_type=content_type),
+            provider="openai",
+            model="gpt-test",
+        )
+    )
+
+    assert isinstance(refused, Refuse)
+    field = await _judged(handler)
+    withheld = field["withheld"]
+    [handed] = [
+        call
+        for call in withheld["message"]["tool_calls"]
+        if call["id"] == patch["call_id"]
+    ]
+    assert handed["arguments"] == {}
+    assert patch["call_id"] in withheld["redacted"]
+    # nothing the eval is told holds what the model wrote for the call
+    assert "THE MODEL'S PATCH" not in json.dumps(field)
+
+
 @pytest.mark.anyio
 async def test_a_changed_call_of_a_turn_refused_whole_goes_back_as_made(
     monkeypatch: pytest.MonkeyPatch,
