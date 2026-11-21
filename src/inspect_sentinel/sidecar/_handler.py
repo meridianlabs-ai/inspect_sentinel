@@ -433,6 +433,7 @@ class Handler:
         keepalive: float | None = KEEPALIVE_SECONDS,
         timestamp_window: float = TIMESTAMP_WINDOW,
         review_timeout: float | None = None,
+        run_header: str | None = None,
     ) -> None:
         """Create a handler.
 
@@ -453,6 +454,7 @@ class Handler:
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
             timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
             review_timeout: How long, in seconds, a question waits for a person's answer before it expires, when a sentinel asks a person during a run an Inspect eval names. The eval lists the question with `list_pending_questions` and answers it with `answer_question`. The sidecar answers an expired question with caution: `reject` if that was offered, otherwise `terminate`. The judging then continues. None, the default, means no expiry, because a person may take days. The time a question is open doesn't count against `judging_timeout`.
+            run_header: A request header whose value names the run of a request no eval names, such as an agent's id for its session. Conversations that send the same value are one run, however they open: a tally is kept for the run, and a sentinel that ends it ends them all. The caller sets the header, so the name is trusted as the caller is, and one not seen before starts a run. By default no header does, and such a run is named by how its conversation opens. An eval's `x-inspect-context` names its run whatever else the request carries.
 
         Raises:
             ValueError: If `keepalive`, `timestamp_window` or `review_timeout` isn't a positive number of seconds.
@@ -466,6 +468,7 @@ class Handler:
                 f"The timestamp window is some seconds, not {timestamp_window}."
             )
         self._timestamp_window = timestamp_window
+        self._run_header = run_header.strip().lower() or None if run_header else None
         self._reviews = Reviews(review_timeout)
         self._judgings_in_progress: set[_Judging] = set()
         # The model calls that a sentinel asked a person about, by eval id and x-irid.
@@ -534,6 +537,11 @@ class Handler:
     def timestamp_window(self) -> float:
         """How far, in seconds, an Inspect eval's `timestamp` may be from this process's clock."""
         return self._timestamp_window
+
+    @property
+    def run_header(self) -> str | None:
+        """The request header whose value names the run of a request no eval names, by lowercase name, or None if no header does."""
+        return self._run_header
 
     @property
     def eval_review(self) -> bool:
@@ -1835,13 +1843,30 @@ class Handler:
         )
         # an Inspect eval names the run: its sample, across retries
         named = sample is not None
-        key = sample.sample_uuid if sample is not None else opening
+        # For a request no eval names, a header may name the run, such as an
+        # agent's id for its session. The caller set it, so it is trusted as
+        # the caller is: a name not seen before starts a run, whatever the
+        # request holds.
+        by_header = (
+            None if named else _header_run_key(request.headers, self._run_header)
+        )
+        key = (
+            sample.sample_uuid
+            if sample is not None
+            else by_header
+            if by_header is not None
+            else opening
+        )
         sample_attempt = sample.attempt if sample is not None else ""
         # a conversation is told apart within a named run by the attempt it
         # is part of, since a retry opens as the attempt it replaces did, and
         # then by how it opens
-        conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
-        run_key = _run_key(named, key)
+        conversation_key = (
+            f"{key}/{sample_attempt}/{opening}"
+            if named or by_header is not None
+            else key
+        )
+        run_key = by_header if by_header is not None else _run_key(named, key)
         if sample is not None:
             # Whose run it is was checked before the request was read, and
             # another eval may have begun the run while it was. So it is
@@ -1881,7 +1906,9 @@ class Handler:
                 request.body,
                 {
                     id: call
-                    for id, (format, call) in run.redacted.items()
+                    for id, (format, call) in _redacted_in(
+                        run, conversation_key
+                    ).items()
                     if format == written
                 },
                 request.format,
@@ -1948,7 +1975,7 @@ class Handler:
         # the turn was made, as when a client rewrote earlier entries of its
         # conversation, can't be matched with the edit: its results would be
         # judged as of a call that didn't run.
-        if _edit_lost(run, edited, client):
+        if _edit_lost(run, conversation, edited, client):
             raise UnreadableError(
                 "The request holds a call this sidecar changed or took out, after earlier entries of its conversation changed, so which call ran can't be told."
             )
@@ -1976,7 +2003,7 @@ class Handler:
         # ended at this request remembers it without keeping what it holds
         digests = (
             []
-            if named
+            if named or by_header is not None
             else entry_digests(request.provider, request.body, request.format)
         )
         last = digests[-1] if digests else None
@@ -1984,6 +2011,7 @@ class Handler:
             run=run_key,
             conversation=conversation_key,
             named=named,
+            by_header=by_header is not None,
             sample_attempt=sample_attempt,
             answered=any(mark in run.answered for mark in marks[:-1]),
             model=_step_model(request.provider, request.model, sample),
@@ -1996,7 +2024,7 @@ class Handler:
             store=store,
             attempt=attempt,
             last=last,
-            request=None if named else request,
+            request=None if named or by_header is not None else request,
             binding=binding,
             message_keys=sent_keys(messages, body),
         )
@@ -2290,6 +2318,7 @@ class Handler:
         if message is not None:
             for call in message.tool_calls or []:
                 assert message.id is not None
+                conversation.calls.add(call.id)
                 conversation.made[call.id] = Made(
                     held.input,
                     held.offered.tools,
@@ -2327,7 +2356,10 @@ class Handler:
         written = await amendments(held.format, message, reasons, modified, noted)
         if held.named:
             for id in reasons:
-                run.redacted[id] = (held.format, written[id].call)
+                run.redacted[(held.conversation, id)] = (
+                    held.format,
+                    written[id].call,
+                )
         body = await edit_reply(
             reply.provider,
             reply.content_type,
@@ -2396,6 +2428,8 @@ class Handler:
             other.id: reasons.get(other.id, _NOT_RUN)
             for other in message.tool_calls or []
         }
+        # the model made the turn's calls in this conversation, though none ran
+        conversation.calls.update(told)
         # the first rejection is the one the client is refused with
         call, _ = rejected[0]
         why = reasons[call.id]
@@ -2412,7 +2446,10 @@ class Handler:
         run.in_a_row[held.sample_attempt] = count
         if written is not None and held.named:
             for id in acted_on:
-                run.redacted[id] = (held.format, written[id].call)
+                run.redacted[(held.conversation, id)] = (
+                    held.format,
+                    written[id].call,
+                )
         if written is None:
             return self._end(
                 held,
@@ -2753,6 +2790,14 @@ class Handler:
                 conversation.rejected.clear()
                 conversation.edited.clear()
             return refusal
+        if held.by_header:
+            # a run a header names ends whole too: every conversation of it,
+            # such as a subagent's, or one compacted to a new opening
+            run.refusal = refusal
+            for conversation in run.conversations.values():
+                conversation.rejected.clear()
+                conversation.edited.clear()
+            return refusal
         if held.answered:
             run.ended_at[held.mark] = refusal
             if held.sent > 0 and held.last is not None:
@@ -2803,6 +2848,26 @@ def _withhold_ended(
     held.exchange.withheld = Withheld(
         message, {call.id: _ENDED for call in calls}, redacted=redacted
     )
+
+
+MAX_RUN_NAME = 128
+"""The longest value of the run header kept as it is, in characters. A longer one names its run by its digest."""
+
+
+def _header_run_key(headers: Mapping[str, str], header: str | None) -> str | None:
+    # The key of the run a request's header names, or None if none does. It
+    # is apart from the runs an eval names and the runs nothing names: a
+    # caller that sends the header chooses its value, which must never reach
+    # an eval's run, nor a run the endpoint for evals can ask about.
+    name = headers.get(header, "").strip() if header is not None else ""
+    if not name:
+        return None
+    if len(name) > MAX_RUN_NAME:
+        # The caller chose the name, and a run is kept under it. A digest is
+        # kept apart from the names kept as they are, so no short name is
+        # another's digest.
+        return f"header-digest:{hashlib.sha256(name.encode()).hexdigest()}"
+    return f"header:{name}"
 
 
 def _run_key(named: bool, key: str) -> str:
@@ -3036,8 +3101,35 @@ def _digest(message: ChatMessage) -> str:
     ).hexdigest()
 
 
+def _redacted_in(run: Run, conversation: str) -> dict[str, tuple[Format, Any]]:
+    # The model's own calls that the eval's copy of a conversation holds
+    # without their arguments, by call id. A call is known by its id within
+    # its conversation. So a call the conversation's model made is never
+    # another conversation's, though they have one id, as a subagent's and
+    # the agent's can. A conversation that opens anew, as after a compaction,
+    # holds the calls of the one it continues, which it didn't make itself.
+    kept = run.conversations.get(conversation)
+    made = kept.calls if kept is not None else set[str]()
+    found = {
+        id: call
+        for (owner, id), call in run.redacted.items()
+        if owner != conversation and id not in made
+    }
+    found.update(
+        {
+            id: call
+            for (owner, id), call in run.redacted.items()
+            if owner == conversation
+        }
+    )
+    return found
+
+
 def _edit_lost(
-    run: Run, edited: Sequence[Edited], messages: Sequence[ChatMessage]
+    run: Run,
+    conversation: Conversation,
+    edited: Sequence[Edited],
+    messages: Sequence[ChatMessage],
 ) -> bool:
     # whether the messages hold a call id of an edited turn of the run that
     # isn't among those the request continues from
@@ -3046,10 +3138,17 @@ def _edit_lost(
         for message in messages
         if isinstance(message, ChatMessageTool) and message.tool_call_id is not None
     }
+    # A call the model made in this conversation is its own, whatever id a
+    # turn edited in another conversation of the run holds: a subagent's
+    # model may number its calls as the agent's does. A conversation that
+    # opens anew and still holds an edited call, as after a compaction, made
+    # no such call itself.
+    others = ids - conversation.calls
     return any(
-        turn not in edited and ids.intersection(turn.order)
-        for conversation in run.conversations.values()
-        for turn in conversation.edited
+        turn not in edited
+        and (ids if other is conversation else others).intersection(turn.order)
+        for other in run.conversations.values()
+        for turn in other.edited
     )
 
 
@@ -3116,7 +3215,8 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
         for turn in (conversation.edited if conversation is not None else [])
         for id, call in turn.modified.items()
     }
-    if not any(call.id in changed or call.id in run.redacted for call in calls):
+    hidden = _redacted_in(run, held.conversation)
+    if not any(call.id in changed or call.id in hidden for call in calls):
         return message
     return message.model_copy(
         update={
@@ -3124,7 +3224,7 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
                 _as_it_ran(changed[call.id])
                 if call.id in changed
                 else replace(redacted(call), view=_ARGUMENTS_HIDDEN)
-                if call.id in run.redacted
+                if call.id in hidden
                 else call
                 for call in calls
             ]

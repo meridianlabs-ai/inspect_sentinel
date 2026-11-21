@@ -4,7 +4,7 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -155,6 +155,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="How long a run's state is kept once no request has named it. A day by default.",
     )
     parser.add_argument(
+        "--run-header",
+        default=None,
+        metavar="NAME",
+        help="A request header whose value names the run of a request no Inspect eval names, such as x-claude-code-session-id, which Claude Code sends with its session's id. Conversations that send the same value are one run: a sentinel's tally counts them together, and a sentinel that ends the run ends them all, a subagent's conversation and one compacted to a new opening included. The proxy must pass the header on (--envoy-header, or the LiteLLM guardrail's sidecar_headers). The caller sets the header, so its value is trusted as the caller is. By default such a run is named by how its conversation opens.",
+    )
+    parser.add_argument(
         "--timestamp-window",
         type=float,
         default=TIMESTAMP_WINDOW,
@@ -206,6 +212,7 @@ class ServerSettings(BaseModel):
     run_expiry: float | None = None
     timestamp_window: float | None = None
     review_timeout: float | None = None
+    run_header: str | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -241,6 +248,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "run_expiry",
             "timestamp_window",
             "review_timeout",
+            "run_header",
             "release",
             "keepalive",
         )
@@ -382,6 +390,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         keepalive=arguments.keepalive or None,
         timestamp_window=arguments.timestamp_window,
         review_timeout=arguments.review_timeout,
+        run_header=arguments.run_header,
     )
 
 
@@ -462,23 +471,34 @@ class _GrpcServer(Protocol):
 
 def _envoy_shim(
     handler: Handler, arguments: argparse.Namespace
-) -> Callable[[], _GrpcServer] | None:
-    # the shim's server, made in the event loop it serves in
+) -> Callable[[], Awaitable[_GrpcServer]] | None:
+    # starts the shim's server, in the event loop it serves in
     if arguments.envoy_port is None:
         return None
     try:
-        from .envoy import envoy_server
+        from .envoy._shim import bind_envoy_server
     except ImportError as ex:
         raise ValueError(
             f"--envoy-port needs the `envoy` extra: pip install 'inspect_sentinel[envoy]' ({ex})."
         ) from None
-    return lambda: envoy_server(
-        handler,
-        host=arguments.host,
-        port=arguments.envoy_port,
-        max_body_bytes=arguments.max_body_bytes,
-        headers=arguments.envoy_header,
-    )
+
+    async def start_shim() -> _GrpcServer:
+        shim = bind_envoy_server(
+            handler,
+            host=arguments.host,
+            port=arguments.envoy_port,
+            max_body_bytes=arguments.max_body_bytes,
+            headers=arguments.envoy_header,
+        )
+        await shim.server.start()
+        # beside uvicorn's line for each endpoint, which says where it listens,
+        # and so the port the system chose for port 0
+        logging.getLogger("uvicorn.error").info(
+            "Envoy shim running on %s", shim.address
+        )
+        return shim.server
+
+    return start_shim
 
 
 _SHIM_GRACE = 5.0
@@ -487,7 +507,7 @@ _SHIM_GRACE = 5.0
 
 async def _serve_all(
     servers: list[uvicorn.Server],
-    shim: Callable[[], _GrpcServer] | None = None,
+    shim: Callable[[], Awaitable[_GrpcServer]] | None = None,
     handler: Handler | None = None,
 ) -> None:
     if handler is not None:
@@ -504,9 +524,7 @@ async def _serve_all(
         for other in servers:
             other.should_exit = True
 
-    envoy = shim() if shim is not None else None
-    if envoy is not None:
-        await envoy.start()
+    envoy = await shim() if shim is not None else None
     try:
         async with anyio.create_task_group() as group:
             for server in servers:

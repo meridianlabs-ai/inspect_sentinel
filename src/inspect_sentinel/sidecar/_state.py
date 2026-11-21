@@ -197,6 +197,9 @@ class Conversation:
     judged: set[str] = field(default_factory=set[str])
     """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
 
+    calls: set[str] = field(default_factory=set[str])
+    """The id of every tool call the model made in the conversation. A call is known by its id within its conversation, so these tell a call of its own from another conversation's with the same id."""
+
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by call id, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 
@@ -255,10 +258,10 @@ class Run:
     eval_id: str | None = None
     """For a run an eval names, the eval, the only one the endpoint for evals answers for the run."""
 
-    redacted: dict[str, tuple[Format, Any]] = field(
-        default_factory=dict[str, tuple[Format, Any]]
+    redacted: dict[tuple[str, str], tuple[Format, Any]] = field(
+        default_factory=dict[tuple[str, str], tuple[Format, Any]]
     )
-    """For a run an eval names, the model's own calls that a decision acted on, by call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
+    """For a run an eval names, the model's own calls that a decision acted on, by the conversation each was made in and its call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
 
 
 @dataclass(frozen=True)
@@ -283,6 +286,8 @@ class Held:
     conversation: str
     named: bool
     """Whether an eval named the run."""
+    by_header: bool
+    """Whether a request header named the run, as the handler's `run_header` says. A sentinel that ends such a run ends every conversation in it."""
     sample_attempt: str
     """The attempt at the sample an eval names, or `""`."""
     answered: bool

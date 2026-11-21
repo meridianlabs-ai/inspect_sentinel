@@ -14,7 +14,6 @@ import inspect
 import json
 import os
 import re
-import socket
 import subprocess
 import sys
 import threading
@@ -352,11 +351,8 @@ def _sidecar(
     """Start a real sidecar and yield its address. Its sentinel rejects a weather lookup of `city`, or every lookup when `city` is None. With the `action` `terminate`, it ends the run there instead. The sidecar releases replies as `release` says. With `rule_text`, its sentinel is the `weather_rule` that the text defines. With `keepalive`, the sidecar leaves that many seconds between keepalives. With `eval_port`, its endpoint for evals has a port of its own, so the yielded address serves proxies only."""
     rule = tmp_path / "weather_rule.py"
     rule.write_text(rule_text or _RULE.format(city=city, action=action))
-    with socket.socket() as free, socket.socket() as free_for_evals:
-        free.bind(("127.0.0.1", 0))
-        port = free.getsockname()[1]
-        free_for_evals.bind(("127.0.0.1", 0))
-        port_for_evals = free_for_evals.getsockname()[1]
+    # Each port is 0, so the system gives the sidecar ports no other test can
+    # take first, and the sidecar's own log says which they are.
     serving = subprocess.Popen(
         [
             str(_sidecar_python()),
@@ -369,7 +365,7 @@ def _sidecar(
             "--sentinel",
             "weather_rule",
             "--port",
-            str(port),
+            "0",
             "--release",
             release,
             *(
@@ -378,31 +374,72 @@ def _sidecar(
                 else []
             ),
             *(["--keepalive", str(keepalive)] if keepalive is not None else []),
-            *(["--eval-port", str(port_for_evals)] if eval_port else []),
+            *(["--eval-port", "0"] if eval_port else []),
         ],
         cwd=tmp_path,
         # the token that the endpoint for evals requires when it has its own port
         env=os.environ | {"INSPECT_SENTINEL_EVAL_TOKEN": "a-token-for-evals"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        # an undecodable byte must not end the thread that drains the log
+        encoding="utf-8",
+        errors="replace",
     )
-    url = f"http://127.0.0.1:{port}"
+    listeners = 2 if eval_port else 1
+    log: list[str] = []
+    urls: list[str] = []
+    started = threading.Event()
+
+    def read_log() -> None:
+        # read for as long as the sidecar runs, so its log never fills the pipe
+        assert serving.stderr is not None
+        try:
+            with serving.stderr as stream:
+                for line in stream:
+                    log.append(line)
+                    listening = _LISTENING.search(line)
+                    if listening is not None:
+                        urls.append(listening.group(1))
+                        if len(urls) == listeners:
+                            started.set()
+        finally:
+            started.set()
+
+    reader = threading.Thread(target=read_log, daemon=True)
+    reader.start()
     try:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                with urllib.request.urlopen(f"{url}/health", timeout=1):
-                    break
-            except OSError:
-                if serving.poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError(
-                        f"The sidecar did not start: {serving.stderr.read().decode() if serving.stderr else ''}"
-                    ) from None
-                time.sleep(0.1)
-        yield url
+        if not started.wait(60) or len(urls) < listeners:
+            raise RuntimeError("The sidecar did not start; its log is in stderr.")
+        yield urls[0] if listeners == 1 else _proxy_listener(urls)
     finally:
         serving.terminate()
-        serving.communicate(timeout=30)
+        try:
+            serving.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            serving.kill()
+            serving.wait()
+        reader.join(timeout=30)
+        # pytest shows what a test wrote to stderr only when the test fails,
+        # however it fails
+        sys.stderr.write(f"The sidecar's log:\n{''.join(log)}")
+
+
+_LISTENING = re.compile(r"Uvicorn running on .*?(http://[^\s:]+:\d+)")
+"""Uvicorn's line saying where a server listens, which gives the port the system chose for port 0."""
+
+
+def _proxy_listener(urls: list[str]) -> str:
+    # With the endpoint for evals on a port of its own, the two servers start
+    # in no set order. The proxy's is the one without the probe.
+    for url in urls:
+        try:
+            with urllib.request.urlopen(f"{url}/sentinel/info", timeout=5):
+                pass
+        except urllib.error.HTTPError as ex:
+            ex.close()
+            if ex.code == 404:
+                return url
+    raise RuntimeError(f"None of {urls} serves only the endpoint for proxies.")
 
 
 def _result(result: Any) -> dict[str, Any]:
