@@ -78,7 +78,8 @@ jobs:
 
   # The LiteLLM guardrail is a package of its own, which runs in LiteLLM's
   # process and never beside this one, so it is tested and checked in an
-  # environment of its own for each LiteLLM version it supports.
+  # environment of its own for each LiteLLM version it supports. Raising a
+  # version takes a review by hand: see `LITELLM` in the Makefile.
   litellm-guardrail:
     runs-on: ubuntu-latest
     strategy:
