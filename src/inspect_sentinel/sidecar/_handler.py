@@ -134,6 +134,7 @@ from ._state import (
     Stopped,
 )
 from ._wire import (
+    Amendment,
     Edited,
     Edits,
     Format,
@@ -1912,6 +1913,7 @@ class Handler:
                     if format == written
                 },
                 request.format,
+                refused=_refused_in(run, conversation_key),
             )
             if body is not None:
                 request = replace(request, body=body)
@@ -2356,10 +2358,7 @@ class Handler:
         written = await amendments(held.format, message, reasons, modified, noted)
         if held.named:
             for id in reasons:
-                run.redacted[(held.conversation, id)] = (
-                    held.format,
-                    written[id].call,
-                )
+                run.redacted[(held.conversation, id)] = (held.format, written[id])
         body = await edit_reply(
             reply.provider,
             reply.content_type,
@@ -2446,10 +2445,7 @@ class Handler:
         run.in_a_row[held.sample_attempt] = count
         if written is not None and held.named:
             for id in acted_on:
-                run.redacted[(held.conversation, id)] = (
-                    held.format,
-                    written[id].call,
-                )
+                run.redacted[(held.conversation, id)] = (held.format, written[id])
         if written is None:
             return self._end(
                 held,
@@ -3101,7 +3097,19 @@ def _digest(message: ChatMessage) -> str:
     ).hexdigest()
 
 
-def _redacted_in(run: Run, conversation: str) -> dict[str, tuple[Format, Any]]:
+def _refused_in(run: Run, conversation: str) -> dict[str, Amendment]:
+    # the model's own calls of the turns a conversation's client was refused,
+    # by call id
+    kept = run.conversations.get(conversation)
+    return {
+        id: own
+        for point in (kept.rejected if kept is not None else [])
+        for turn in point.written
+        for id, own in turn.items()
+    }
+
+
+def _redacted_in(run: Run, conversation: str) -> dict[str, tuple[Format, Amendment]]:
     # The model's own calls that the eval's copy of a conversation holds
     # without their arguments, by call id. A call is known by its id within
     # its conversation. So a call the conversation's model made is never

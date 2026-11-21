@@ -6,7 +6,7 @@ import time
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
 import anyio
 from inspect_ai.model import ChatMessage, ChatMessageAssistant, ModelUsage
@@ -258,8 +258,8 @@ class Run:
     eval_id: str | None = None
     """For a run an eval names, the eval, the only one the endpoint for evals answers for the run."""
 
-    redacted: dict[tuple[str, str], tuple[Format, Any]] = field(
-        default_factory=dict[tuple[str, str], tuple[Format, Any]]
+    redacted: dict[tuple[str, str], tuple[Format, Amendment]] = field(
+        default_factory=dict[tuple[str, str], tuple[Format, Amendment]]
     )
     """For a run an eval names, the model's own calls that a decision acted on, by the conversation each was made in and its call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
 
