@@ -3,7 +3,7 @@
 ## [0.4.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.2...0.4.0) (2026-11-21)
 
 
-### ⚠ BREAKING CHANGES
+### Breaking Changes
 
 * **sidecar:** the sidecar's `--time-limit`, the config key `time_limit`, `Handler(time_limit=)`, `TimeLimitError`, and the `not_judged` reason and JSON-RPC error `time_limit` are renamed to `--judging-timeout`, `judging_timeout`, `Handler(judging_timeout=)`, `JudgingTimeoutError` and `judging_timeout`.
 
