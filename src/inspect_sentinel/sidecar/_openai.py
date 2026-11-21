@@ -831,6 +831,16 @@ def responses_results_in(entry: object) -> list[object]:
     return [entry] if responses_result_of(entry)[0] is not None else []
 
 
+def responses_result_as(result: object, call: object) -> object:
+    """The result an eval wrote for its copy of a call, as a result of the model's own `call`."""
+    if responses_call_of(call)[1] != "custom_tool_call" or not _is_output(result):
+        return result
+    item = cast("dict[str, Any]", result)
+    if item.get("type") != "function_call_output":
+        return result
+    return {**item, "type": "custom_tool_call_output"}
+
+
 def responses_pick(rendered: list[Any], id: str) -> tuple[Any, tuple[Any, ...]]:
     call = next(item for item in rendered if _call_id(item) == id)
     told = [item for item in rendered if responses_result_of(item)[0] == id]
