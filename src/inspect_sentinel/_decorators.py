@@ -52,6 +52,9 @@ STEP_TYPES_ATTR = "__sentinel_step_types__"
 # the stages an instance or any instance passed to its factory watches, so the
 # host can skip a stage nothing in the tree watches
 WATCHED_ATTR = "__sentinel_watched__"
+# the registered names declared `portable=False` in an instance's tree: its own,
+# those of instances passed to its factory, and those its factory built
+EVAL_ONLY_ATTR = "__sentinel_eval_only__"
 # set on a composition's function, which only forwards the step to its children
 _FORWARDS_ATTR = "__sentinel_forwards__"
 # set on a function that only answers escalations from earlier links, so it
@@ -294,6 +297,24 @@ def _watched(
     )
 
 
+# the registered names of the `portable=False` monitors and protocols in the
+# trees of `sentinels` (an instance, a group, or a sequence or mapping of them):
+# each instance's own record, which its factory's wrapper made, and its members
+def eval_only_names(sentinels: object) -> frozenset[str]:
+    names: set[str] = set()
+    for found in _given([sentinels]):
+        # a group's functions may each be an instance some factory configured
+        members = found.functions if isinstance(found, Group) else ()
+        for held in (found, *members):
+            names.update(getattr(held, EVAL_ONLY_ATTR, ()))
+    return frozenset(names)
+
+
+# the eval-only names of the instances built while a factory runs, which holds
+# one a factory builds and runs without returning it
+_BUILT: ContextVar[set[str] | None] = ContextVar("sentinel_built", default=None)
+
+
 def _own_stages(function: object, has_children: bool) -> frozenset[type[Any]]:
     # a configured instance returned by another factory keeps what its tree watches
     inherited = getattr(function, WATCHED_ATTR, None)
@@ -359,7 +380,12 @@ def _register(
         # of sentinels is handed on, and recorded, as one
         plain_args = tuple(_plain(arg) for arg in args)
         plain_kwargs = {key: _plain(value) for key, value in kwargs.items()}
-        returned = cast(Callable[..., object], factory)(*plain_args, **plain_kwargs)
+        built: set[str] = set() if portable else {registered_name}
+        building = _BUILT.set(built)
+        try:
+            returned = cast(Callable[..., object], factory)(*plain_args, **plain_kwargs)
+        finally:
+            _BUILT.reset(building)
         instance: object
         if isinstance(returned, Group):
             if not isinstance(returned, group_type):
@@ -384,6 +410,12 @@ def _register(
             accepted = step_types(cast(Sentinel, instance))
         setattr(instance, STEP_TYPES_ATTR, accepted)
         setattr(instance, WATCHED_ATTR, _watched(instance, plain_args, plain_kwargs))
+        # an instance another factory configured keeps its own, carried over
+        eval_only = eval_only_names([instance, plain_args, plain_kwargs]) | built
+        setattr(instance, EVAL_ONLY_ATTR, eval_only)
+        outer = _BUILT.get()
+        if outer is not None:
+            outer.update(eval_only)
         registry_tag(
             factory, instance, info.model_copy(deep=True), *plain_args, **plain_kwargs
         )

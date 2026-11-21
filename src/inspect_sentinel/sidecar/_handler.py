@@ -426,6 +426,7 @@ class Handler:
         keepalive: float | None = KEEPALIVE_SECONDS,
         timestamp_window: float = TIMESTAMP_WINDOW,
         review_timeout: float | None = None,
+        run_header: str | None = None,
     ) -> None:
         """Create a handler.
 
@@ -446,6 +447,7 @@ class Handler:
             keepalive: Under early release, the longest a client is sent nothing while a streamed reply is held, in seconds, after which it is sent a keepalive, an SSE comment that every provider SDK skips. The keepalive sends the status, so a turn refused after it is refused with an error event in the stream. None sends no keepalives.
             timestamp_window: How far, in seconds, the `timestamp` of an Inspect eval's model request or call to the endpoint for evals may be from this process's clock. One further is refused, so a `mac` copied from a log is of no use once the window has passed.
             review_timeout: How long, in seconds, a question waits for a person's answer before it expires, when a sentinel asks a person during a run an Inspect eval names. The eval lists the question with `list_pending_questions` and answers it with `answer_question`. The sidecar answers an expired question with caution: `reject` if that was offered, otherwise `terminate`. The judging then continues. None, the default, means no expiry, because a person may take days. The time a question is open doesn't count against `judging_timeout`.
+            run_header: A request header whose value names the run of a request no eval names, such as an agent's id for its session. Conversations that send the same value are one run, however they open: a tally is kept for the run, and a sentinel that ends it ends them all. The caller sets the header, so the name is trusted as the caller is, and one not seen before starts a run. By default no header does, and such a run is named by how its conversation opens. An eval's `x-inspect-context` names its run whatever else the request carries.
 
         Raises:
             ValueError: If `keepalive`, `timestamp_window` or `review_timeout` isn't a positive number of seconds.
@@ -459,6 +461,7 @@ class Handler:
                 f"The timestamp window is some seconds, not {timestamp_window}."
             )
         self._timestamp_window = timestamp_window
+        self._run_header = run_header.strip().lower() or None if run_header else None
         self._reviews = Reviews(review_timeout)
         self._judgings_in_progress: set[_Judging] = set()
         # The model calls that a sentinel asked a person about, by eval id and x-irid.
@@ -527,6 +530,11 @@ class Handler:
     def timestamp_window(self) -> float:
         """How far, in seconds, an Inspect eval's `timestamp` may be from this process's clock."""
         return self._timestamp_window
+
+    @property
+    def run_header(self) -> str | None:
+        """The request header whose value names the run of a request no eval names, by lowercase name, or None if no header does."""
+        return self._run_header
 
     @property
     def eval_review(self) -> bool:
@@ -1530,18 +1538,30 @@ class Handler:
         )
 
     async def end_sample(
-        self, sample_uuid: str, eval_id: str
+        self, sample_uuid: str, eval_id: str, task: str | None = None
     ) -> Literal["ended", "unknown"]:
         """Drop the state kept for an eval's sample, once the eval has scored it. A later request of the sample is refused, as for a sample a sentinel ended.
+
+        With `task`, the run is no longer one in progress of its sample in the task's registration, and the sample's facts are freed if it was the last (`complete_registration`). The task only finds the registration: the run is ended whatever it names.
 
         Args:
             sample_uuid: The sample's uuid, as the eval names it.
             eval_id: The eval ending it. A sample of another eval is left as it is, and reads as unknown.
+            task: The sample's task, as the eval registered it, or None if the eval named none.
 
         Returns:
-            `ended`, or `unknown` for a sample the handler never saw or that isn't the eval's. Ending a sample again has no effect.
+            `ended`, or `unknown` for a sample that neither made a request nor completed a registration naming it, or that isn't the eval's. Ending a sample again has no effect.
         """
-        ended = await self._state.end_run(_run_key(True, sample_uuid), eval_id)
+        run_key = _run_key(True, sample_uuid)
+        ended = await self._state.end_run(run_key, eval_id)
+        if task is not None and task not in self._tasks:
+            # read without renewing: ending a sample doesn't keep its task
+            kept = await self._state.registration(eval_id, task, renew=False)
+            if kept is not None and kept.end(sample_uuid) and not ended:
+                # The run completed its registration and made no request. It
+                # is remembered as ended, so that a first request arriving
+                # late is refused, and not taken for a run in progress.
+                ended = await self._state.end_unseen_run(run_key, eval_id)
         if ended:
             # No one is left to answer the sample's questions, or to resend an answer to
             # one.
@@ -1632,7 +1652,7 @@ class Handler:
     ) -> float | None:
         """Keep a task an eval registered, so that its runs' sentinels are told which sample each is, once each sample's registration is complete.
 
-        A registration replaces the eval's last one for the task, and keeps the samples whose registration was complete that it still names, so that registering again has no effect. A run that has already found its sample keeps what it found.
+        A registration replaces the eval's last one for the task, and keeps what that one held of the samples it still names: their facts, their runs in progress, and which were freed or are kept until expiry. So registering again has no effect. A run that has already found its sample keeps what it found.
 
         Args:
             eval_id: The eval's id, as its requests name it.
@@ -1667,13 +1687,7 @@ class Handler:
         # kept the task it would have replaced alive.
         before = await self._state.registration(eval_id, registration.task, renew=False)
         if before is not None:
-            kept.keep_samples(
-                {
-                    id: sample
-                    for id, sample in before.samples.items()
-                    if id in kept.sample_ids
-                }
-            )
+            kept.keep_from(before)
         if kept.held > self._max_registration_bytes:
             raise self._full(registration.task, kept.held)
         self._kept(
@@ -1690,9 +1704,11 @@ class Handler:
         return granted
 
     async def complete_registration(
-        self, eval_id: str, task: str, sample: SampleFacts
+        self, eval_id: str, task: str, sample: SampleFacts, run: str | None = None
     ) -> bool:
-        """Keep a sample's facts, before the sample's first epoch, so that its runs' sentinels are told them.
+        """Keep a sample's facts, before a run of the sample makes its first request, so that its runs' sentinels are told them.
+
+        The facts are held while a run of the sample is in progress, and freed when the last one ends, so that a task may have more samples than a registration holds at once. Each epoch and each retry completes the sample's registration again. A run counts from here, or from a request of its own, until `end_sample`. With no `run`, nothing says when the sample's runs end, so its facts are kept until the registration expires.
 
         Completing a sample's registration again replaces its facts, for the runs that start after. A sample the task's registration doesn't name, such as one a task adds while it runs, extends the registration, unless the handler is `registered_only`. A task registered beforehand already holds its samples, so nothing is stored, and the sample is not compared with the file, since the answer would tell a caller whether its guess at the file is right.
 
@@ -1700,6 +1716,7 @@ class Handler:
             eval_id: The eval's id, as its requests name it.
             task: The task's name.
             sample: The sample.
+            run: The sample uuid of the run completing the registration, as its requests name it, or None if the eval named none.
 
         Returns:
             Whether the task was registered beforehand, so nothing was stored.
@@ -1721,15 +1738,21 @@ class Handler:
                 raise RegistrationError(
                     f"This sidecar takes only the samples a task's registration names, and the registration of {task!r} doesn't name the sample {sample.sample_id!r}."
                 )
-        held = kept.holding(sample)
+        if run is not None:
+            ended = await self._state.peek_run(_run_key(True, run))
+            if ended is not None and ended.closed and ended.eval_id == eval_id:
+                # a completion that arrives after its sample ended: counting
+                # the run again would hold the facts until the task expires
+                return False
+        held = kept.holding(sample, run)
         if held > self._max_registration_bytes:
             raise self._full(task, held)
-        kept.complete(sample)
+        kept.complete(sample, run)
         return False
 
     def _full(self, task: str, held: int) -> RegistrationsFullError:
         return RegistrationsFullError(
-            f"The registration of {task!r} would hold {held} bytes, and this sidecar keeps no more than {self._max_registration_bytes} for a task: its registration, and the facts of each sample whose registration is complete."
+            f"The registration of {task!r} would hold {held} bytes, and this sidecar keeps no more than {self._max_registration_bytes} for a task: its registration, and the facts of each sample with a run in progress."
         )
 
     def _view(self, call: ToolCall, run: Run) -> ToolCallView:
@@ -1742,9 +1765,12 @@ class Handler:
             tool = f"inspect_ai/{call.function}"
         return tool_call_view(call, tool)
 
-    async def _eval(self, sample: InspectSample) -> EvalContext | None:
+    async def _eval(
+        self, sample: InspectSample, holds: bool = False
+    ) -> EvalContext | None:
         # the sample a request names, from the task's registration; asking
-        # counts as the task being named, so its registration is kept
+        # counts as the task being named, so its registration is kept.
+        # `holds` is whether the request's run keeps the facts it first found.
         fixed = self._tasks.get(sample.task)
         if fixed is None:
             kept = await self._state.registration(sample.eval_id, sample.task)
@@ -1755,8 +1781,18 @@ class Handler:
                     )
                 return None
             found = kept.eval_context(sample)
+            if found is None and not holds and sample.sample_id in kept.freed:
+                # The facts were held and are gone, so the run is never
+                # judged without them, whatever the strictness. An eval that
+                # completes the registration of each run doesn't come here: a
+                # run whose task was registered again meanwhile can.
+                raise UnregisteredSampleError(
+                    f"This sidecar freed the facts of the sample {sample.sample_id!r} of {sample.task!r} when its last run in progress ended, and this run hasn't completed the sample's registration since."
+                )
             if self._strictness == "registered_only":
-                if found is None:
+                # a run whose sample's facts were freed goes on with those it
+                # found, as it does where the sidecar is less strict
+                if found is None and not (holds and sample.sample_id in kept.freed):
                     raise UnregisteredSampleError(
                         f"This sidecar judges only the samples it holds, and the registration of {sample.task!r} isn't complete for the sample {sample.sample_id!r}."
                     )
@@ -1764,6 +1800,11 @@ class Handler:
                     raise UnregisteredSampleError(
                         f"The registration of {sample.task!r} runs epochs 1 to {kept.registration.epochs}, not epoch {sample.epoch}."
                     )
+            if found is not None:
+                # in progress from here, so the facts aren't freed under it
+                kept.begin(
+                    sample.sample_id, sample.sample_uuid, self._max_registration_bytes
+                )
             return found
         found = fixed.eval_context(sample)
         if found is None:
@@ -1795,13 +1836,30 @@ class Handler:
         )
         # an Inspect eval names the run: its sample, across retries
         named = sample is not None
-        key = sample.sample_uuid if sample is not None else opening
+        # For a request no eval names, a header may name the run, such as an
+        # agent's id for its session. The caller set it, so it is trusted as
+        # the caller is: a name not seen before starts a run, whatever the
+        # request holds.
+        by_header = (
+            None if named else _header_run_key(request.headers, self._run_header)
+        )
+        key = (
+            sample.sample_uuid
+            if sample is not None
+            else by_header
+            if by_header is not None
+            else opening
+        )
         sample_attempt = sample.attempt if sample is not None else ""
         # a conversation is told apart within a named run by the attempt it
         # is part of, since a retry opens as the attempt it replaces did, and
         # then by how it opens
-        conversation_key = f"{key}/{sample_attempt}/{opening}" if named else key
-        run_key = _run_key(named, key)
+        conversation_key = (
+            f"{key}/{sample_attempt}/{opening}"
+            if named or by_header is not None
+            else key
+        )
+        run_key = by_header if by_header is not None else _run_key(named, key)
         if sample is not None:
             # Whose run it is was checked before the request was read, and
             # another eval may have begun the run while it was. So it is
@@ -1841,7 +1899,9 @@ class Handler:
                 request.body,
                 {
                     id: call
-                    for id, (format, call) in run.redacted.items()
+                    for id, (format, call) in _redacted_in(
+                        run, conversation_key
+                    ).items()
                     if format == written
                 },
                 request.format,
@@ -1858,7 +1918,7 @@ class Handler:
         # retry may replace the run's store meanwhile
         store = run.store
         if sample is not None:
-            found = await self._eval(sample)
+            found = await self._eval(sample, run.eval is not None)
             if run.eval is None:
                 # a run keeps the facts it first found
                 run.eval = found
@@ -1908,7 +1968,7 @@ class Handler:
         # the turn was made, as when a client rewrote earlier entries of its
         # conversation, can't be matched with the edit: its results would be
         # judged as of a call that didn't run.
-        if _edit_lost(run, edited, client):
+        if _edit_lost(run, conversation, edited, client):
             raise UnreadableError(
                 "The request holds a call this sidecar changed or took out, after earlier entries of its conversation changed, so which call ran can't be told."
             )
@@ -1936,7 +1996,7 @@ class Handler:
         # ended at this request remembers it without keeping what it holds
         digests = (
             []
-            if named
+            if named or by_header is not None
             else entry_digests(request.provider, request.body, request.format)
         )
         last = digests[-1] if digests else None
@@ -1944,6 +2004,7 @@ class Handler:
             run=run_key,
             conversation=conversation_key,
             named=named,
+            by_header=by_header is not None,
             sample_attempt=sample_attempt,
             answered=any(mark in run.answered for mark in marks[:-1]),
             model=_step_model(request.provider, request.model, sample),
@@ -1956,7 +2017,7 @@ class Handler:
             store=store,
             attempt=attempt,
             last=last,
-            request=None if named else request,
+            request=None if named or by_header is not None else request,
             binding=binding,
             message_keys=sent_keys(messages, body),
         )
@@ -2248,6 +2309,7 @@ class Handler:
         if message is not None:
             for call in message.tool_calls or []:
                 assert message.id is not None
+                conversation.calls.add(call.id)
                 conversation.made[call.id] = Made(
                     held.input,
                     held.offered.tools,
@@ -2285,7 +2347,10 @@ class Handler:
         written = await amendments(held.format, message, reasons, modified, noted)
         if held.named:
             for id in reasons:
-                run.redacted[id] = (held.format, written[id].call)
+                run.redacted[(held.conversation, id)] = (
+                    held.format,
+                    written[id].call,
+                )
         body = await edit_reply(
             reply.provider,
             reply.content_type,
@@ -2347,6 +2412,8 @@ class Handler:
             other.id: reasons.get(other.id, _NOT_RUN)
             for other in message.tool_calls or []
         }
+        # the model made the turn's calls in this conversation, though none ran
+        conversation.calls.update(told)
         # the first rejection is the one the client is refused with
         call, _ = rejected[0]
         why = reasons[call.id]
@@ -2363,7 +2430,10 @@ class Handler:
         run.in_a_row[held.sample_attempt] = count
         if written is not None and held.named:
             for id in reasons:
-                run.redacted[id] = (held.format, written[id].call)
+                run.redacted[(held.conversation, id)] = (
+                    held.format,
+                    written[id].call,
+                )
         if written is None:
             return self._end(
                 held,
@@ -2704,6 +2774,14 @@ class Handler:
                 conversation.rejected.clear()
                 conversation.edited.clear()
             return refusal
+        if held.by_header:
+            # a run a header names ends whole too: every conversation of it,
+            # such as a subagent's, or one compacted to a new opening
+            run.refusal = refusal
+            for conversation in run.conversations.values():
+                conversation.rejected.clear()
+                conversation.edited.clear()
+            return refusal
         if held.answered:
             run.ended_at[held.mark] = refusal
             if held.sent > 0 and held.last is not None:
@@ -2754,6 +2832,26 @@ def _withhold_ended(
     held.exchange.withheld = Withheld(
         message, {call.id: _ENDED for call in calls}, redacted=redacted
     )
+
+
+MAX_RUN_NAME = 128
+"""The longest value of the run header kept as it is, in characters. A longer one names its run by its digest."""
+
+
+def _header_run_key(headers: Mapping[str, str], header: str | None) -> str | None:
+    # The key of the run a request's header names, or None if none does. It
+    # is apart from the runs an eval names and the runs nothing names: a
+    # caller that sends the header chooses its value, which must never reach
+    # an eval's run, nor a run the endpoint for evals can ask about.
+    name = headers.get(header, "").strip() if header is not None else ""
+    if not name:
+        return None
+    if len(name) > MAX_RUN_NAME:
+        # The caller chose the name, and a run is kept under it. A digest is
+        # kept apart from the names kept as they are, so no short name is
+        # another's digest.
+        return f"header-digest:{hashlib.sha256(name.encode()).hexdigest()}"
+    return f"header:{name}"
 
 
 def _run_key(named: bool, key: str) -> str:
@@ -2987,8 +3085,35 @@ def _digest(message: ChatMessage) -> str:
     ).hexdigest()
 
 
+def _redacted_in(run: Run, conversation: str) -> dict[str, tuple[Format, Any]]:
+    # The model's own calls that the eval's copy of a conversation holds
+    # without their arguments, by call id. A call is known by its id within
+    # its conversation. So a call the conversation's model made is never
+    # another conversation's, though they have one id, as a subagent's and
+    # the agent's can. A conversation that opens anew, as after a compaction,
+    # holds the calls of the one it continues, which it didn't make itself.
+    kept = run.conversations.get(conversation)
+    made = kept.calls if kept is not None else set[str]()
+    found = {
+        id: call
+        for (owner, id), call in run.redacted.items()
+        if owner != conversation and id not in made
+    }
+    found.update(
+        {
+            id: call
+            for (owner, id), call in run.redacted.items()
+            if owner == conversation
+        }
+    )
+    return found
+
+
 def _edit_lost(
-    run: Run, edited: Sequence[Edited], messages: Sequence[ChatMessage]
+    run: Run,
+    conversation: Conversation,
+    edited: Sequence[Edited],
+    messages: Sequence[ChatMessage],
 ) -> bool:
     # whether the messages hold a call id of an edited turn of the run that
     # isn't among those the request continues from
@@ -2997,10 +3122,17 @@ def _edit_lost(
         for message in messages
         if isinstance(message, ChatMessageTool) and message.tool_call_id is not None
     }
+    # A call the model made in this conversation is its own, whatever id a
+    # turn edited in another conversation of the run holds: a subagent's
+    # model may number its calls as the agent's does. A conversation that
+    # opens anew and still holds an edited call, as after a compaction, made
+    # no such call itself.
+    others = ids - conversation.calls
     return any(
-        turn not in edited and ids.intersection(turn.order)
-        for conversation in run.conversations.values()
-        for turn in conversation.edited
+        turn not in edited
+        and (ids if other is conversation else others).intersection(turn.order)
+        for other in run.conversations.values()
+        for turn in other.edited
     )
 
 
@@ -3067,7 +3199,8 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
         for turn in (conversation.edited if conversation is not None else [])
         for id, call in turn.modified.items()
     }
-    if not any(call.id in changed or call.id in run.redacted for call in calls):
+    hidden = _redacted_in(run, held.conversation)
+    if not any(call.id in changed or call.id in hidden for call in calls):
         return message
     return message.model_copy(
         update={
@@ -3075,7 +3208,7 @@ def _as_the_eval_holds(message: ChatMessage, run: Run, held: Held) -> ChatMessag
                 _as_it_ran(changed[call.id])
                 if call.id in changed
                 else replace(redacted(call), view=_ARGUMENTS_HIDDEN)
-                if call.id in run.redacted
+                if call.id in hidden
                 else call
                 for call in calls
             ]
