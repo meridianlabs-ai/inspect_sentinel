@@ -243,7 +243,7 @@ Define a selector at module level in a `.py` file (a module, or the script that 
 
 ## Human Decisions in Replay
 
-A replay cannot ask a person, so `human()` is answered in other ways. If a person answered at the same step and instance path when the run was recorded, replay gives that recorded answer again. This lets you replay a protocol like the ones in [Human Decisions](human-decisions.qmd) against the decisions a person actually made.
+A replay cannot ask a person, so `human()` is answered in other ways. This includes a `human()` that asks through [your own review tool](human-decisions.qmd#your-own-review-tool): the tool is never called during a replay. If a person answered at the same step and instance path when the run was recorded, replay gives that recorded answer again. This lets you replay a protocol like the ones in [Human Decisions](human-decisions.qmd) against the decisions a person actually made.
 
 A recorded answer is matched to the `human()` that recorded it by its instance path, exactly, so answers a log recorded under `triage/human` aren't given to a sentinel whose `human()` is at `human`. When that happens at a step (a `human()` asks at a path with no recorded answer, while an answer was recorded at a path where no `human()` asked), the scan logs one warning naming both paths.
 

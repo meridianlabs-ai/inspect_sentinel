@@ -75,6 +75,7 @@ from inspect_sentinel import (
     Decision,
     Escalations,
     HumanAnswer,
+    HumanQuestion,
     HumanStandIn,
     MonitorGroup,
     Observation,
@@ -1750,6 +1751,36 @@ def test_answers_recorded_under_another_human_path_are_unused_with_one_warning(
     assert [
         r.getMessage() for r in caplog.records if r.name.startswith("inspect_sentinel")
     ] == warnings
+
+
+async def desk_rejects(question: HumanQuestion) -> HumanAnswer:
+    """A team's own review tool, whose reviewer rejects every call."""
+    return HumanAnswer("reject", "rejected at the team's desk")
+
+
+async def desk_never_asked(question: HumanQuestion) -> HumanAnswer:
+    raise AssertionError("a replay asked human()'s surface")
+
+
+def test_a_replay_gives_a_surfaces_recorded_answer_without_asking_it(
+    tmp_path: Path,
+) -> None:
+    def escalated(surface: Any) -> Sentinels:
+        return sequential(
+            [
+                threshold(by_argument(), escalate_at=0.5),
+                human(stages=["tool_call"], surface=surface),
+            ]
+        )
+
+    run(tmp_path / "logs", [[call(9)]], escalated(desk_rejects))
+
+    found = scanned(
+        tmp_path / "scans", tmp_path / "logs", s=as_scanner(escalated(desk_never_asked))
+    )
+
+    [row] = found["s"]
+    assert (row["answer"], row["metadata.human"]) == ("reject", "recorded")
 
 
 @solver

@@ -17,7 +17,7 @@ from starlette.applications import Starlette
 from inspect_sentinel import human, preprocess_step, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._host import HumanAnswer
+from inspect_sentinel._host import HumanAnswer, HumanQuestion
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
@@ -3208,6 +3208,27 @@ class _Approves(SidecarHost):
 @pytest.mark.anyio
 async def test_a_host_with_its_own_way_to_ask_a_person_is_still_asked() -> None:
     handler = _reviewed(host=_Approves())
+    async with _serving(handler):
+        await handler.request(_from_eval())
+
+        answer = await handler.reply(reply(message(weather("Oslo"))))
+
+        assert isinstance(answer, Pass)
+        assert await handler.reviews.list_pending("eval_789") == []
+
+
+async def desk_approves(question: HumanQuestion) -> HumanAnswer:
+    """A team's own review tool, which approves every call."""
+    return HumanAnswer(decision="approve", reason="Approved at the team's desk.")
+
+
+@pytest.mark.anyio
+async def test_a_human_with_a_surface_asks_it_instead_of_the_evals_approval_ui() -> (
+    None
+):
+    handler = Handler(
+        sequential([escalates(), human(stages=["tool_call"], surface=desk_approves)])
+    )
     async with _serving(handler):
         await handler.request(_from_eval())
 

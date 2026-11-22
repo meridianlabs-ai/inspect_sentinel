@@ -26,7 +26,9 @@ from inspect_sentinel import (
     Context,
     Decision,
     Escalations,
+    HumanAnswer,
     HumanDecision,
+    HumanQuestion,
     Monitor,
     MonitorGroup,
     Observation,
@@ -565,3 +567,112 @@ def test_a_superseded_copy_of_the_persons_decision_is_not_seen_later(
     assert "first_vote: proceed" in (superseded.explanation or "")
     [last] = [s for s in seen if s.subject == "done"]
     assert last.decisions == ()
+
+
+async def h_desk_approves(question: HumanQuestion) -> HumanAnswer:
+    return HumanAnswer("approve", "approved at the team's desk")
+
+
+async def h_desk_down(question: HumanQuestion) -> HumanAnswer:
+    raise ConnectionError("review service unreachable")
+
+
+def _human_events(log: EvalLog) -> list[tuple[Any, ...]]:
+    assert log.samples
+    return [
+        (
+            e.path,
+            e.function,
+            e.stage,
+            e.kind,
+            e.status,
+            e.action,
+            e.explanation,
+            e.message,
+        )
+        for e in log.samples[0].events
+        if isinstance(e, SentinelEvent) and e.factory == "inspect_sentinel/human"
+    ]
+
+
+def _decisions_seen(seen: list[Seen]) -> list[tuple[Any, ...]]:
+    # the human_decisions each later step held, without the run's own ids
+    return [
+        (
+            s.stage,
+            [
+                (
+                    d.stage,
+                    d.decided.name,
+                    d.decided.report.action,
+                    d.decided.report.explanation,
+                )
+                for d in s.decisions or []
+            ],
+        )
+        for s in seen
+    ]
+
+
+def test_a_surfaces_answer_is_recorded_and_seen_later_as_a_panel_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    panel = Panel("approve", "approved at the team's desk")
+    panel.install(monkeypatch)
+    by_panel: list[Seen] = []
+    by_surface: list[Seen] = []
+
+    panel_log = run(
+        [
+            sequential([h_escalate(), human(stages=["tool_call"])]),
+            observe_only([h_spy(by_panel)]),
+        ]
+    )
+    surface_log = run(
+        [
+            sequential(
+                [h_escalate(), human(stages=["tool_call"], surface=h_desk_approves)]
+            ),
+            observe_only([h_spy(by_surface)]),
+        ]
+    )
+
+    assert panel_log.status == surface_log.status == "success", surface_log.error
+    # only the first run asked through the panel
+    assert len(panel.choices) == 1
+    assert _human_events(surface_log) == _human_events(panel_log)
+    assert _human_events(surface_log) == [
+        (
+            "sequential/human",
+            "tool_call",
+            "tool_call",
+            "decision",
+            "reported",
+            "proceed",
+            "approved at the team's desk",
+            None,
+        )
+    ]
+    assert _decisions_seen(by_surface) == _decisions_seen(by_panel)
+    assert (
+        "tool_result",
+        [("tool_call", "human", "proceed", "approved at the team's desk")],
+    ) in _decisions_seen(by_surface)
+    assert [m.text for m in tool_messages(surface_log)] == ["2"]
+
+
+def test_a_surface_that_raises_fails_the_sample_before_the_call_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    panel = Panel("approve")
+    panel.install(monkeypatch)
+
+    log = run(
+        sequential([h_escalate(), human(stages=["tool_call"], surface=h_desk_down)])
+    )
+
+    assert log.status == "error"
+    assert log.error is not None and "review service unreachable" in log.error.message
+    assert "tests.test_eval_human:h_desk_down raised" in log.error.traceback
+    assert panel.choices == []
+    assert tool_messages(log) == []

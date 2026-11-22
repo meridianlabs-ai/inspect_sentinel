@@ -22,6 +22,7 @@ from inspect_sentinel import (
     Decision,
     Escalations,
     HumanAnswer,
+    HumanQuestion,
     MonitorGroup,
     Observation,
     ReplayStep,
@@ -331,6 +332,36 @@ async def test_human_is_answered_by_the_recorded_answer_else_by_the_fixed_one(
 
     assert report.decision is not None and report.decision.action == action
     assert (report.human, report.human_answer) == (source, given)
+
+
+async def never_asked(question: HumanQuestion) -> HumanAnswer:
+    raise AssertionError("a replay asked human()'s surface")
+
+
+@pytest.mark.parametrize(
+    "answers,action,source",
+    [
+        ({"human": HumanAnswer("approve", "fine")}, "proceed", "recorded"),
+        ({}, "reject", "unanswered"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_replay_answers_in_place_of_humans_surface(
+    answers: dict[str, HumanAnswer], action: str, source: str
+) -> None:
+    sentinel = sequential(
+        [
+            threshold(flag(), escalate_at=0.5),
+            human(stages=["tool_call"], surface=never_asked),
+        ]
+    )
+    step = next(s for s in segmented([1]) if s.stage == "tool_call")
+    answered = ReplayStep(step.id, step.stage, step.step, step.segment, answers)
+
+    [report] = await replay_monitor(sentinel, [answered], human="reject")
+
+    assert report.decision is not None and report.decision.action == action
+    assert report.human == source
 
 
 @pytest.mark.parametrize(

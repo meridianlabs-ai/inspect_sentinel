@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NamedTuple,
+    TypeAlias,
+    TypeVar,
+    cast,
+    runtime_checkable,
+)
 from typing import Protocol as TypingProtocol
 
 from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
@@ -34,6 +43,33 @@ class HumanAnswer:
 
     modified: ToolCall | None = None
     """The replacement call, when the person chose `modify` at a tool stage."""
+
+
+@dataclass(frozen=True)
+class HumanQuestion:
+    """What `human()` hands a `HumanSurface`: the step to decide about, with everything the person needs to decide it."""
+
+    stage: Literal["tool_call", "tool_result", "model_input", "model_output"]
+    """The stage being asked about, as `SentinelEvent.stage` records it: `"tool_call"` (before a tool call), `"tool_result"` (after it), `"model_input"` (before a generate) or `"model_output"` (after a generate)."""
+
+    step: Step
+    """The step itself, by stage: a `BeforeToolCall` with the call, an `AfterToolCall` with the call and its result, a `BeforeGenerate` with the request about to be sent, or an `AfterGenerate` with the whole assistant turn. Its fields are the ones a monitor reads, including the conversation and `human_decisions`."""
+
+    escalations: Escalations
+    """The escalations the asking `human()` was handed, from the links before it in a `sequential()`, in order; empty when nothing escalated. Each is the escalating protocol's full report: its `name` and `path`, and its decision with `explanation`, `references` and `metadata`. A `threshold()` escalation lists every monitor's score and explanation in `metadata["observations"]`."""
+
+    choices: tuple[str, ...]
+    """What the person may pick, from `approve`, `reject` and `terminate`, in the order to present them."""
+
+    eval: EvalContext | None
+    """The task and sample being run, as `Context.eval` holds it, so a surface can say which sample is waiting. None outside an eval, for example beside a proxy with no eval named."""
+
+    proxy: ProxyContext | None
+    """What a proxy says about the model request the step was found in, as `Context.proxy` holds it. None in an eval's own process."""
+
+
+HumanSurface: TypeAlias = Callable[[HumanQuestion], Awaitable[HumanAnswer]]
+"""Where `human(surface=)` asks a person instead of the host: an `async` function that hands the question to a team's own review tool and returns the person's answer. It answers one of the question's `choices`, or `terminate` when it cannot reach anyone."""
 
 
 class HostNative(TypingProtocol):
@@ -255,6 +291,17 @@ class Host(HostNative):
             choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
         """
         return await self._native.ask_human(step, escalations, choices)
+
+
+class AnswersFromRecord:
+    # a host whose `ask_human` gives the answers recorded when the run was
+    # recorded, as a replay does, and never asks a person; human() asks it in
+    # place of a surface of its own
+    pass
+
+
+def answers_from_record(host: Host) -> bool:
+    return isinstance(host._native, AnswersFromRecord)  # pyright: ignore[reportPrivateUsage]
 
 
 @runtime_checkable

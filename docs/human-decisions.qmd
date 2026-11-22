@@ -1,7 +1,7 @@
 ---
 title: "Human Decisions"
 description: "Asking a person to decide about a step with human(), and handling escalations with handle_escalation()."
-llms-description: "human() and its stages (tool_call, tool_result, model_input, model_output) and choices, escalating to a person in a sequential(), whole-turn review, reviewing a model request, what the person sees, a person beside other protocols in concurrent(), step.human_decisions, handle_escalation(), and unhandled escalations."
+llms-description: "human() and its stages (tool_call, tool_result, model_input, model_output) and choices, escalating to a person in a sequential(), whole-turn review, reviewing a model request, what the person sees, asking through your own review tool with human(surface=) and HumanQuestion, a person beside other protocols in concurrent(), step.human_decisions, handle_escalation(), and unhandled escalations."
 ---
 
 ## Overview
@@ -106,7 +106,7 @@ When the agent tries to delete files, the eval pauses and asks you to approve, r
 | `"model_input"` | `approve`, `terminate` |
 | `"model_output"` | `approve`, `terminate` |
 
-`reject` is offered only before a tool call (see [Actions](protocols.qmd#actions)), and rejecting a request or a whole turn is not supported. Offering a choice a stage doesn't allow raises an error when `human()` is created. `"modify"` is accepted before a tool call, but Inspect's approval surfaces cannot edit a tool call, so offering it raises an error when the person is asked.
+`reject` is offered only before a tool call (see [Actions](protocols.qmd#actions)), and rejecting a request or a whole turn is not supported. Offering a choice a stage doesn't allow raises an error when `human()` is created. `"modify"` is accepted before a tool call, but Inspect's approval surfaces cannot edit a tool call, so offering it raises an error when the person is asked. [Your own review tool](#your-own-review-tool) cannot be offered `"modify"` yet either.
 
 The answer maps to a decision: `approve` to `proceed`, `reject` to `reject`, and `terminate` to `terminate`. The reason recorded with the answer becomes the decision's explanation, and on a reject it is also the message the agent receives. The person doesn't enter a reason: the approval panel and console record a fixed text, such as "Human operator rejected the tool call.", and an ACP client (an editor or tool that speaks the [Agent Client Protocol](https://inspect.aisi.org.uk/intervention.html)) records none, so the agent is told "Tool call not approved."
 
@@ -145,6 +145,113 @@ Here `request_triage()` stands for a rule of your own at `BeforeGenerate`: it re
 The person is asked through Inspect's human approval surfaces: an attached ACP client, the approval panel in the full-screen display, or the console otherwise (for example, with `--display plain`). The prompt shows the tool call, the escalations that led to it, and, after a tool call, its result. At `"model_output"` it shows the turn's text, the escalations, and each tool call as a numbered code block. At `"model_input"` it shows the escalations, the tools offered, and each message not sent before as a numbered code block.
 
 Characters that change how text displays, such as terminal escape sequences and zero-width characters, appear in the prompt as a marker of their code point, such as `‹U+001B›`.
+
+## Your Own Review Tool
+
+If your team already has a tool for reviewing agent actions, such as a web app or a chat bot, `human()` can ask through it instead of Inspect's approval surfaces. For example, you might want to:
+
+1.  Keep using the review interface your team already knows.
+2.  Show reviewers every monitor's score, or your own rendering of a turn.
+3.  Let reviewers type the reason the agent is told on a reject.
+
+Pass the tool as `surface`, an `async` function that takes a `HumanQuestion` and returns the person's `HumanAnswer`. Here `review_desk` stands for your team's client for its review tool:
+
+```python
+from inspect_sentinel import HumanAnswer, HumanQuestion, human, sequential
+
+async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
+    ticket = await review_desk.open(
+        stage=question.stage,
+        sample=question.eval.sample_id if question.eval else None,
+        escalations=[
+            (e.name, e.report.explanation, e.report.metadata)
+            for e in question.escalations
+        ],
+        choices=question.choices,
+    )
+    decision, reason = await review_desk.wait(ticket)
+    return HumanAnswer(decision, reason)
+
+Task(
+    ...,
+    sentinel=sequential(
+        [triage(), human(stages=["tool_call"], surface=ask_review_desk)]
+    ),
+)
+```
+
+`human()` works as before at every stage. The only difference is who asks the person.
+
+### The Question
+
+The `HumanQuestion` holds what the person needs to decide:
+
+| Field | Holds |
+|-------------------|--------------------------------------------------|
+| `stage` | `"tool_call"`, `"tool_result"`, `"model_input"` or `"model_output"`. |
+| `step` | The step itself: a `BeforeToolCall` with the tool call, an `AfterToolCall` with the call and its result, a `BeforeGenerate` with the request about to be sent, or an `AfterGenerate` with the whole assistant turn. See [Stages](stages.qmd) for their fields. |
+| `escalations` | Each escalation that led here, with the name of the protocol that escalated and its full report: the explanation, references and metadata. A `threshold()` escalation lists every monitor's score and explanation in `metadata["observations"]`. Empty when nothing escalated. |
+| `choices` | What the person may pick, from `approve`, `reject` and `terminate`. |
+| `eval` | The task and sample being run (e.g. `eval.sample_id`, `eval.epoch`), so your tool can say which sample is waiting. |
+| `proxy` | When the sentinel runs beside a proxy, what the proxy says about the request; otherwise `None`. |
+
+The step and the explanations hold text the agent wrote, so show them as text in your tool, not as markup.
+
+### The Answer
+
+Return a `HumanAnswer` with one of the `choices` and, optionally, the person's reason. The answer becomes a decision as described in [Choices](#choices), so the reason is recorded as the decision's explanation, and on a reject the agent receives it as the message. The answer is recorded in the log and appears in `step.human_decisions` at later steps exactly like an answer given in Inspect's approval panel.
+
+If your tool can't reach anyone, answer `terminate` with a reason that says so. `terminate` is accepted even when it isn't among the choices.
+
+If the function raises an error, returns something other than a `HumanAnswer`, or answers a choice it wasn't offered, the step doesn't proceed. In an eval, the sample fails with an error that names the function.
+
+### Waiting and Cancelling
+
+The eval waits as long as your tool takes. The wait doesn't count toward the sample's working limit, but a time limit still applies. There is no timeout of its own. To stop waiting after a while, answer for the person:
+
+```python
+async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
+    ticket = await review_desk.open(...)
+    with anyio.move_on_after(30 * 60):
+        decision, reason = await review_desk.wait(ticket)
+        return HumanAnswer(decision, reason)
+    return HumanAnswer("terminate", "Nobody answered within 30 minutes.")
+```
+
+The wait is cancelled if the sample is cancelled or reaches its time limit, or if another protocol in the same `concurrent()` ends the sample first. Nothing is decided then. Withdraw the question from your tool when that happens, so nobody answers a question that is no longer waiting. Cleanup that awaits needs a shielded cancel scope:
+
+```python
+async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
+    ticket = await review_desk.open(...)
+    try:
+        decision, reason = await review_desk.wait(ticket)
+    except anyio.get_cancelled_exc_class():
+        with anyio.CancelScope(shield=True):
+            await review_desk.withdraw(ticket)
+        raise
+    return HumanAnswer(decision, reason)
+```
+
+### Naming the Tool in a Configuration File
+
+The function must be defined at module level, not inside another function, because the log records it by name and `eval_retry()` finds it again by that name. In a [configuration file](configuration.qmd), name it as `module:function`, where the module can also be the path of a `.py` file:
+
+```{.yaml filename="human.yaml"}
+sentinel:
+  name: sequential
+  children:
+    - name: triage
+    - name: human
+      params:
+        stages: [tool_call]
+        surface: review_tools:ask_review_desk
+```
+
+### Limits
+
+Your tool is never asked during a [replay](replay.qmd#human-decisions-in-replay). A replay gives the answer recorded when the eval ran, or the fixed answer or stand-in you pass to `as_scanner()`, as it does for any `human()`. The module that defines the function must still be importable where you run the scan, because the replay builds the sentinel from its configuration. Your tool cannot be offered `"modify"` yet.
+
+When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead.
 
 ## A Person Beside Other Protocols
 

@@ -6,7 +6,7 @@ A *monitor* observes a step of an agent's execution and reports a suspicion scor
 from ._context import Context, EvalContext, InspectSample, ProxyContext
 from ._decorators import monitor, protocol
 from ._final import decide_final
-from ._host import Host, HumanAnswer
+from ._host import Host, HumanAnswer, HumanQuestion, HumanSurface
 from ._portable import PortabilityError
 from ._preprocess import (
     AllMessages,
@@ -88,7 +88,9 @@ __all__ = [
     "Host",
     "HumanAnswer",
     "HumanDecision",
+    "HumanQuestion",
     "HumanStandIn",
+    "HumanSurface",
     "InspectSample",
     "Monitor",
     "MonitorFailedError",

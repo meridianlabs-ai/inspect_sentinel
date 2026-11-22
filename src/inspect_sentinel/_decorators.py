@@ -4,6 +4,7 @@ import inspect
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
+from types import FunctionType
 from typing import (
     Any,
     NamedTuple,
@@ -417,7 +418,11 @@ def _register(
         if outer is not None:
             outer.update(eval_only)
         registry_tag(
-            factory, instance, info.model_copy(deep=True), *plain_args, **plain_kwargs
+            factory,
+            instance,
+            info.model_copy(deep=True),
+            *(_recorded(arg) for arg in plain_args),
+            **{key: _recorded(value) for key, value in plain_kwargs.items()},
         )
         return instance
 
@@ -441,6 +446,18 @@ def _plain(value: object) -> object:
         items = list(cast(Sequence[object], container))
         if items and all(map(_configured, items)):
             return items
+    return value
+
+
+def _recorded(value: object) -> object:
+    # a function defined at module level as `module:name`, which a factory
+    # that takes a function or its name, such as human(surface=), finds again
+    # when a configuration rebuilds it; the registry would record its bare
+    # name, which nothing can find. A registered function keeps its registry
+    # name, and any other argument is recorded as given
+    if isinstance(value, FunctionType) and not is_registry_object(value):
+        if "<" not in value.__qualname__:
+            return f"{value.__module__}:{value.__qualname__}"
     return value
 
 
