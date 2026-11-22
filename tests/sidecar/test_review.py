@@ -54,7 +54,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import PATH as PROXY_PATH
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._reply_stream import ERROR_BODY_BYTES
 from inspect_sentinel.sidecar._review import UnknownQuestionError
-from inspect_sentinel.sidecar._state import MemoryState
+from inspect_sentinel.sidecar._state import ListRecorder, MemoryState
 from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     JSON,
@@ -3374,6 +3374,105 @@ async def test_ending_a_proxy_session_withdraws_its_surfaces_question(
     records = await handler.records("a")
     assert records is not None
     assert ("cancelled", "human") in [(r.kind, r.path) for r in records]
+
+
+class _PausingState(MemoryState):
+    """A state whose recorder pauses at one call for one request, as a shared state's might while it reaches its store. The sidecar awaits the recorder while it prepares a request for judging, after checking that its run hasn't ended."""
+
+    def __init__(self, id: str, pause_at: int) -> None:
+        super().__init__()
+        self._id, self._pause_at, self._calls = id, pause_at, 0
+        self.paused = anyio.Event()
+        self.resume = anyio.Event()
+
+    async def recorder(self, id: str) -> ListRecorder:
+        if id == self._id:
+            self._calls += 1
+            if self._calls == self._pause_at:
+                self.paused.set()
+                await self.resume.wait()
+        return await super().recorder(id)
+
+
+@protocol
+def stops_when_told() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        if step.input[-1].text == "stop":
+            return Decision.terminate("Told to stop.")
+        return Decision.escalate("every request is checked by a person")
+
+    return decide
+
+
+def _asks_before_each_request(state: MemoryState, **options: Any) -> Handler:
+    return Handler(
+        sequential(
+            [stops_when_told(), human(stages=["model_input"], surface=desk_waits)]
+        ),
+        state=state,
+        **options,
+    )
+
+
+@pytest.mark.anyio
+async def test_a_proxy_session_ended_while_a_request_is_prepared_asks_no_surface() -> (
+    None
+):
+    # The request passes the check that its session hasn't ended, then waits
+    # on the state while it is prepared; meanwhile another request ends the
+    # session. Its judging then reaches the surface, which isn't asked.
+    state = _PausingState("a", pause_at=1)
+    handler = _asks_before_each_request(state, run_header=_SESSION)
+    desk = _Desk()
+    answers: list[Answer] = []
+    ended: Answer | None = None
+
+    async def first() -> None:
+        _desk.set(desk)
+        answers.append(await handler.request(_in_session(request("a"), "session-1")))
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(first)
+            await state.paused.wait()
+            ended = await handler.request(
+                _in_session(request("b", user_text="stop"), "session-1")
+            )
+            state.resume.set()
+
+    assert isinstance(ended, Refuse)
+    assert answers == [ended]
+    assert not desk.asked.is_set()
+
+
+@pytest.mark.parametrize("eval_results", [True, False])
+@pytest.mark.anyio
+async def test_a_sample_ended_while_a_request_is_prepared_asks_no_surface(
+    eval_results: bool,
+) -> None:
+    # The same for an eval's request, paused at the recorder's second call,
+    # the one made after the check that its run hasn't ended
+    state = _PausingState("x", pause_at=2)
+    handler = _asks_before_each_request(state, eval_results=eval_results)
+    desk = _Desk()
+    answers: list[Answer] = []
+
+    async def first() -> None:
+        _desk.set(desk)
+        answers.append(await handler.request(_from_eval()))
+
+    async with _serving(handler):
+        async with anyio.create_task_group() as group:
+            group.start_soon(first)
+            await state.paused.wait()
+            assert await handler.end_sample("sample_123", "eval_789") == "ended"
+            state.resume.set()
+
+    [answer] = answers
+    assert isinstance(answer, Refuse)
+    assert not desk.asked.is_set()
 
 
 @pytest.mark.anyio

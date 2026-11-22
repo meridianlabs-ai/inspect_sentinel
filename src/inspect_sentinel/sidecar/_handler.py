@@ -18,6 +18,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from typing import Any, Literal
 
 import anyio
@@ -388,11 +389,11 @@ class _RunJudging:
     scope: anyio.CancelScope
     """Cancelled to stop the judging with nothing decided."""
     run: str | None = None
-    """The run the exchange is of, once its judging has found it."""
+    """The run the exchange is of, set when its judging is about to wait on a surface."""
     surfaces_waiting: int = 0
     """How many `human()` surfaces the judging is waiting on now."""
     refusal: Refuse | None = None
-    """What the exchange is refused with once a sentinel has ended its run at another exchange. A surface the judging reaches after that asks nobody."""
+    """What the exchange is refused with when its judging is stopped at a surface because its run ended."""
 
 
 # the judging that the current task belongs to, if no eval follows the request
@@ -1237,15 +1238,14 @@ class Handler:
 
     def _end_run_judgings(self, run: str, refusal: Refuse) -> None:
         # A sentinel ended the run at one of its exchanges. Each other exchange
-        # of the run that no eval follows is refused as it was if it waits on a
-        # `human()` surface, which is cancelled now, or reaches one later, which
-        # asks nobody. One that asks nobody finishes as before.
+        # of the run that no eval follows and waits on a `human()` surface now
+        # is cancelled, and refused as the run was. One that reaches a surface
+        # later finds the run ended there (`_surface_waiting`), and one that
+        # asks nobody finishes as before.
         current = _RUN_JUDGING.get()
         for in_run in list(self._run_judgings):
-            if in_run.run != run or in_run is current:
-                continue
-            in_run.refusal = refusal
-            if in_run.surfaces_waiting:
+            if in_run.run == run and in_run is not current and in_run.surfaces_waiting:
+                in_run.refusal = refusal
                 in_run.scope.cancel()
 
     def _abandoned(self, judging: _Judging) -> None:
@@ -2535,15 +2535,12 @@ class Handler:
         # each judge call's billed usage goes to the attempt as soon as the
         # call is done, so an eval asking while the step is judged sees it
         judging = _JUDGING.get()
-        in_run = _RUN_JUDGING.get()
-        if in_run is not None:
-            in_run.run = held.run
         with noting_models(
             held.attempt.judging_usage if held.attempt is not None else None
         ) as models:
             started = time.monotonic()
             try:
-                with watching_surfaces(_surface_waiting):
+                with watching_surfaces(partial(_surface_waiting, held, run)):
                     decision = await run_sentinel(
                         self._protocol,
                         HostContext(
@@ -2937,13 +2934,31 @@ def _run_key(named: bool, key: str) -> str:
 
 
 @asynccontextmanager
-async def _surface_waiting() -> AsyncGenerator[None]:
-    # `human()` waits on its own surface, a team's review tool. The judging is
-    # waiting on a person, so `_stop` cancels it when the eval ends the sample or
-    # a sentinel ends the run. A try that nothing waits for any more asks nobody.
+async def _surface_waiting(held: Held, run: Run) -> AsyncGenerator[None]:
+    # `human()` is about to wait on its own surface, a team's review tool: the
+    # judging waits on a person. One check, made here with nothing awaited
+    # before the wait is counted, decides whether the surface is asked: not if
+    # the exchange's run has ended (`run.refusal`, which `_end` and the state's
+    # `end_run` set on the run every judging of it holds), its attempt at an
+    # eval's sample was replaced, or its eval attempt was stopped. A wait that
+    # is counted here is one every later end finds: `_stop` by the eval
+    # attempt's judging, `_end_run_judgings` by the run's key. So whatever
+    # order an end and the judging's own awaits come in, no surface is asked,
+    # or left waiting, once its run, sample or attempt has ended.
     judging = _JUDGING.get()
+    in_run = _RUN_JUDGING.get()
+    ended = _run_over(held, run)
     if judging is not None:
-        if judging.attempt.stop_cause is not None:
+        attempt = judging.attempt
+        if ended and attempt.stop_cause is None:
+            attempt.stop_cause = (
+                "replaced_attempt"
+                if held.sample_attempt != run.attempt
+                else "sample_ended"
+                if run.closed
+                else "run_ended"
+            )
+        if attempt.stop_cause is not None:
             judging.scope.cancel()
             await anyio.lowlevel.checkpoint()
         judging.surfaces_waiting += 1
@@ -2952,13 +2967,12 @@ async def _surface_waiting() -> AsyncGenerator[None]:
         finally:
             judging.surfaces_waiting -= 1
         return
-    # an exchange no eval follows: `_end_run_judgings` cancels the wait when a
-    # sentinel ends the run at another exchange
-    in_run = _RUN_JUDGING.get()
     if in_run is None:
         yield
         return
-    if in_run.refusal is not None:
+    in_run.run = held.run
+    if ended:
+        in_run.refusal = run.refusal or _RUN_OVER
         in_run.scope.cancel()
         await anyio.lowlevel.checkpoint()
     in_run.surfaces_waiting += 1
@@ -2966,6 +2980,14 @@ async def _surface_waiting() -> AsyncGenerator[None]:
         yield
     finally:
         in_run.surfaces_waiting -= 1
+
+
+def _run_over(held: Held, run: Run) -> bool:
+    # whether nothing waits for the exchange any more: a sentinel ended its
+    # run, the eval ended its sample, or a later attempt at the sample began
+    return run.refusal is not None or (
+        held.named and held.sample_attempt != run.attempt
+    )
 
 
 def _stopped_answer(attempt: Attempt) -> Refuse:
