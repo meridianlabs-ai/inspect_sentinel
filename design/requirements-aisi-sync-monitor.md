@@ -107,15 +107,15 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R5 | escalate or terminate on scores, without reject | not met |
 | R6 | a root escalate does not proceed | decided 2026-10-10 (terminates); not built |
 | R7 | replay over existing logs | not met; planned to build 2026-10-19, in progress as R7 PRs 1–3 and 5–7 (PR 4 dropped 2026-10-26); every R7 decision taken by Charles by 2026-10-26 ([sentinel-development.md](sentinel-development.md), "Replay over logs (R7)"); the step types replay needs built 2026-10-20 (R7 PR 2: `ReplayStep`, read-only step sequences, `AfterToolCall.output` optional); the runner, replay host and the Scout adapter (`as_scanner()`, `as_reader()`, `replay_check()`) built 2026-10-20 (R7 PR 5), with replay's public API Scout's alone since 2026-10-26 on inspect_ai's log driver (R7 PR 3); logs without recorded origins replay with turns inferred from their timeline (R7 PR 6, 2026-10-26), and transcripts imported from another source or without model events from their messages (imports decided by Charles 2026-10-27) |
-| R8 | monitor-safe message rendering | partly met, in Scout; the move to inspect_ai is not started |
-| 8.1 | agent text cannot forge structure | partly met |
+| R8 | monitor-safe message rendering | mostly met, in Scout's renderer and sentinel's step rendering (checked against code 2026-11-22); the move to inspect_ai is not started |
+| 8.1 | agent text cannot forge structure | met with a nonce: Scout #709 and #726 (2026-10-15, 2026-10-20), on by default in `Host.score` (#105) |
 | 8.2 | actions-only view | not met |
-| 8.3 | compaction summaries | not met |
-| 8.4 | tool result status | not met |
-| 8.5 | referring to earlier calls | partly met |
+| 8.3 | compaction summaries | partly met: Inspect's own summaries render as text; a provider's compaction renders as `<data />` |
+| 8.4 | tool result status | partly met: errors carry the nonce; truncation is on the step (`AfterToolCall.truncated`) but not rendered |
+| 8.5 | referring to earlier calls | partly met: messages are numbered and `human_decision_for()` finds a call's decision; call ids and decisions are not rendered |
 | 8.6 | per-message output for caching | met in Scout; the plan keeps it |
 | 8.7 | content it cannot show | partly met |
-| 8.8 | tool definitions | not met |
+| 8.8 | tool definitions | met by sentinel's step rendering (`TOOLS` block) |
 | 8.9 | withheld messages | partly met |
 | R9 | `human()` routed to a team's review tool | not met |
 | R10 | the history as sent to the model, per agent instance | met live by `step.history` (built 2026-10-14 as `sent`, renamed for 0.2.0), with `step.agent_messages` for the outermost running agent's own list (inspect_ai #5986); replay: from the recorded agent turns (R7 PR 3), or from turns inferred from the timeline in a log without recorded origins (R7 PR 6); `agent_messages` is `None` in replay (decided by Charles 2026-10-21) |
@@ -145,17 +145,17 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 
 *Superseded history.* The first assessment (2026-10-13) found replay designed only in part: no `ApprovalEvent`s for pre-Sentinel logs, no step subsets, and compaction segments run concurrently with a per-segment store. The plan of 2026-10-19 and 2026-10-20 recorded agent turns and `conversation` on events before R7-D4 reduced them to `origin`, ran a transcript's compaction segments concurrently with optional further splits, and rebuilt `agent_messages` in replay; all three were replaced by the decisions above.
 
-**R8.** The shared renderer is planned, not started ([pr-series.md](pr-series.md), Deferred, "Shared message rendering, then the prompt helpers"): Scout's `messages_as_str`, `message_as_str` and `MessageFormatOptions` move into inspect_ai with output exactly Scout's. What Scout does today (`inspect_scout/_scanner/extract.py`):
+**R8.** Checked against Scout `main` (fdc17b34) and sentinel `main` (dc2d26e) on 2026-11-22. Sentinel renders a step with `render_step()` (`_preprocess.py`, used by `step_as_str()` and `Host.score`), which renders messages through Scout's `message_numbering()` (`inspect_scout/_scanner/extract.py`). The shared renderer, which moves Scout's `messages_as_str`, `message_as_str` and `MessageFormatOptions` into inspect_ai with output exactly Scout's, is still planned, not started ([pr-series.md](pr-series.md), Deferred, "Shared message rendering, then the prompt helpers").
 
-- **8.1.** `format="json"` delimits messages. Inside a message, text format writes tool calls as `Tool Call: name` / `Arguments:` lines with raw values, errors as `Error in tool call '…'`, and reasoning as `<thinking>…</thinking>` around raw text, all of which agent text can imitate. Sentinel #48's lessons (a fixed marker for unparsed arguments, quoted non-identifier argument names) are recorded in that Deferred entry, not built.
-- **8.2.** `exclude_tool_usage` removes tool calls and results; there is no option that keeps only them.
-- **8.3.** Data content renders as `<data />`; the `compaction_summary(step)` helper waits on inspect_ai documenting the `"summary"` metadata key (Deferred, Later).
-- **8.4.** Errors are text as above; truncation is not shown. [sentinel.md](sentinel.md), "The helpers", plans `result_as_str(result, truncated=)`.
-- **8.5.** `message_numbering()` labels messages `[M1]`; tool call ids are not rendered.
-- **8.6.** `format="list"` gives one string per message. The plan requires the moved renderer's output to match Scout's.
-- **8.7.** Images, audio, video, data and documents render as `<image />`-style placeholders, with no signal a monitor can test; a content type the renderer does not know is dropped.
-- **8.8.** No `ToolInfo` renderer.
-- **8.9.** `MessagesPreprocessor.transform` is a free-form escape hatch, which the plan keeps in Scout; there is no marker that something was withheld.
+- **8.1.** Met with a nonce. Scout's renderer takes `nonce=` (Scout #709) and writes it on every marker: message headers, `Tool Call`/`Tool Use` lines, tool error lines, `<thinking>`, `<thinking_summary>` and `<prefill>` tags, and `[BEGIN 'key']`/`[END 'key']` lines around an argument that spans lines (Scout #726). Sentinel's `[BEGIN ...]`/`[END ...]` block lines and `[TOOL CHOICE]` line carry it too. `Host.score` generates one per sample and its prompt tells the model that a marker without it is content (sentinel #105). `step_as_str()` adds it only when passed one (see "`step_as_str` nonce by default" in [pr-series.md](pr-series.md)). Without a nonce, agent text can still imitate every marker.
+- **8.2.** Not met. Scout's `exclude_tool_usage` and sentinel's `omit_tool_usage` remove tool use; neither keeps only it. A `StepPreprocessor.transform` can build such a view by hand.
+- **8.3.** Partly met. Inspect's summary compaction writes the summary as a user message of text (`metadata={"summary": True}`), so it renders readably, as a `USER` message, not marked as a summary. A provider's own compaction is data content and renders as `<data />`; there is no option to leave it out. The `compaction_summary(step)` helper waits on inspect_ai documenting the `"summary"` metadata key (Deferred, Later).
+- **8.4.** Partly met. A tool error renders on an `Error in tool call` line that carries the nonce, so the agent cannot fake it. Truncation is on the step as `AfterToolCall.truncated`, built from `ToolEvent.truncated`, so it is the same live and in replay; nothing renders it, so a monitor sees it only by reading the field. [sentinel.md](sentinel.md), "The helpers", plans `result_as_str(result, truncated=)`.
+- **8.5.** Partly met. `message_numbering()` labels messages `[M1]`; tool call ids are not rendered. `step.human_decisions` and `human_decision_for()` give the decisions, but the renderer does not annotate the calls they cover.
+- **8.6.** Met in Scout: `format="list"` gives one string per message. The plan requires the moved renderer's output to match Scout's.
+- **8.7.** Partly met. Images, audio, video, data and documents render as `<image />`-style placeholders, without the nonce, so agent text can imitate them and a monitor has nothing to test; a content type the renderer does not know is dropped.
+- **8.8.** Met by sentinel: `render_step()` renders the request's tools as JSON in a `TOOLS` block while `input` is known. Scout has no `ToolInfo` renderer.
+- **8.9.** Partly met. `StepPreprocessor.transform` (sentinel) and `MessagesPreprocessor.transform` (Scout) are free-form escape hatches; nothing marks that something was withheld. The sidecar's `Withheld` is a different thing: a turn held back from the eval, not from the monitor.
 
 **R9.** `Host.ask_human` in inspect_ai always calls `human_approver` (`_dispatch.py`), so the approval panel, ACP or the console. Nothing routes `human()` to another surface. Workstream 13 decided remote surfaces go through a message queue that other tools consume ([workstreams.md](workstreams.md)); [proxy-host.md](proxy-host.md) maps `ask_human` to an audit queue.
 
