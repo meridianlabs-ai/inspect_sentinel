@@ -1521,41 +1521,60 @@ def _responses_call(item: dict[str, Any]) -> tuple[str, str, str, Any]:
     return item["type"], item["call_id"], item["name"], arguments
 
 
-async def _refused_turn_as_inspect_writes_it(withheld: dict[str, Any]) -> list[Any]:
-    # The turn an eval was refused, as it puts it back in a Responses request:
-    # written by inspect_ai from the message the eval was handed, each call
-    # answered with what the sidecar said of it. Inspect has no item of the
-    # provider's for a call it was never handed.
-    message = ChatMessageAssistant.model_validate(withheld["message"])
+async def _turn_as_inspect_writes_it(turn: dict[str, Any]) -> list[Any]:
+    # A turn as an eval puts it back in a Responses request: written by
+    # inspect_ai from the message the eval holds, each call that didn't run
+    # answered with what the sidecar said of it, and each that ran with a
+    # result. Inspect has no item of the provider's for a call it was never
+    # handed.
+    message = ChatMessageAssistant.model_validate(turn["message"])
     results = [
         ChatMessageTool(
             content="",
             tool_call_id=call.id,
             function=call.function,
-            error=ToolCallError("approval", withheld["results"][call.id]),
+            error=ToolCallError("approval", turn["results"][call.id]),
+        )
+        if call.id in turn["results"]
+        else ChatMessageTool(
+            content="Sunny.", tool_call_id=call.id, function=call.function
         )
         for call in message.tool_calls or []
     ]
     return list(await messages_to_openai_responses([message, *results]))
 
 
-async def _refused_a_turn_with_custom_calls(
+async def _judged_a_turn_with_custom_calls(
     rule: Callable[[], Protocol], names: dict[int, str]
 ) -> tuple[Handler, dict[str, Any], dict[str, Any]]:
-    # a handler that refused the recorded reply whole, the reply, and what
-    # the eval is told of the turn
+    # a handler that judged the recorded reply, the reply, and what the eval
+    # is told of it
     content_type, recorded = _recorded_with_custom_calls(names)
     handler = await holding(Handler(rule()))
     await handler.request(_openai_from_inspect("responses", "a"))
-    refused = await handler.reply(
+    await handler.reply(
         replace(
             reply(json.dumps(recorded).encode(), id="a", content_type=content_type),
             provider="openai",
             model="gpt-test",
         )
     )
-    assert isinstance(refused, Refuse)
-    return handler, recorded, (await _judged(handler))["withheld"]
+    return handler, recorded, await _judged(handler)
+
+
+@protocol
+def rejects_what_is_not_a_lookup() -> Protocol:
+    """Reject each call that isn't a weather lookup, and let the lookups go on."""
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        if "location" in step.call.arguments:
+            return Decision.proceed()
+        tool = step.call.function
+        return Decision.reject(tool, message=f"{tool} is not allowed.")
+
+    return decide
 
 
 @pytest.mark.anyio
@@ -1566,12 +1585,11 @@ async def test_a_changed_custom_tool_call_of_a_turn_refused_whole_is_told_redact
     # tool. This sidecar changes only a function call's arguments, so the
     # change can't be written, and with a call rejected beside it the turn is
     # refused whole.
-    handler, recorded, _ = await _refused_a_turn_with_custom_calls(
+    _, recorded, field = await _judged_a_turn_with_custom_calls(
         rejects_tokyo_and_changes_a_patch, {2: "apply_patch"}
     )
     patch = recorded["output"][-1]
 
-    field = await _judged(handler)
     withheld = field["withheld"]
     [handed] = [
         call
@@ -1586,29 +1604,50 @@ async def test_a_changed_custom_tool_call_of_a_turn_refused_whole_is_told_redact
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("rule", "names"),
+    ("rule", "names", "told_in"),
     [
-        pytest.param(every_call_rule, {2: "apply_patch"}, id="rejected"),
+        # the turn is refused whole
+        pytest.param(every_call_rule, {2: "apply_patch"}, "withheld", id="rejected"),
         pytest.param(
-            rejects_tokyo_and_changes_a_patch, {2: "apply_patch"}, id="changed"
+            rejects_tokyo_and_changes_a_patch,
+            {2: "apply_patch"},
+            "withheld",
+            id="changed",
         ),
         pytest.param(
             rejects_tokyo_and_changes_a_patch,
             {0: "echo", 2: "apply_patch"},
+            "withheld",
             id="changed, beside one no decision acted on",
         ),
         # Inspect writes a call of a tool named `python` as one of `python_exec`
         pytest.param(
-            every_call_rule, {2: "python"}, id="rejected, written under another name"
+            every_call_rule,
+            {2: "python"},
+            "withheld",
+            id="rejected, written under another name",
+        ),
+        # the turn goes on, with the rejected call taken out of it
+        pytest.param(
+            rejects_what_is_not_a_lookup,
+            {2: "apply_patch"},
+            "proposed",
+            id="rejected, beside calls that go on",
+        ),
+        pytest.param(
+            rejects_what_is_not_a_lookup,
+            {2: "python"},
+            "proposed",
+            id="rejected, beside calls that go on, written under another name",
         ),
     ],
 )
-async def test_a_custom_tool_call_of_a_turn_refused_whole_goes_back_as_made(
-    rule: Callable[[], Protocol], names: dict[int, str]
+async def test_a_custom_tool_call_the_eval_was_never_handed_goes_back_as_made(
+    rule: Callable[[], Protocol], names: dict[int, str], told_in: str
 ) -> None:
-    handler, recorded, withheld = await _refused_a_turn_with_custom_calls(rule, names)
+    handler, recorded, field = await _judged_a_turn_with_custom_calls(rule, names)
 
-    held = await _refused_turn_as_inspect_writes_it(withheld)
+    held = await _turn_as_inspect_writes_it(field[told_in])
     answer = await handler.request(_openai_from_inspect("responses", "b", held))
 
     # the model is sent its own turn: each call once, as it made it, and each
@@ -1632,10 +1671,10 @@ async def test_a_custom_tool_call_of_a_turn_refused_whole_goes_back_as_made(
 async def test_a_custom_tool_call_held_other_than_as_inspect_writes_it_is_not_put_back() -> (
     None
 ):
-    handler, recorded, withheld = await _refused_a_turn_with_custom_calls(
+    handler, recorded, field = await _judged_a_turn_with_custom_calls(
         rejects_tokyo_and_changes_a_patch, {2: "apply_patch"}
     )
-    held = await _refused_turn_as_inspect_writes_it(withheld)
+    held = await _turn_as_inspect_writes_it(field["withheld"])
     patch = recorded["output"][-1]["call_id"]
     [copy] = [item for item in held if item.get("call_id") == patch and "name" in item]
     # Inspect writes the redacted call with `{}`, and nothing else stands for it
@@ -1643,6 +1682,48 @@ async def test_a_custom_tool_call_held_other_than_as_inspect_writes_it_is_not_pu
 
     with pytest.raises(UnreadableError):
         await handler.request(_openai_from_inspect("responses", "b", held))
+
+
+@pytest.mark.anyio
+async def test_a_computer_call_of_a_turn_refused_whole_is_left_as_the_eval_holds_it() -> (
+    None
+):
+    # The recorded Responses reply, with a computer call for its calls.
+    # Inspect writes its copy of the call as a function call too, but a
+    # computer call's result holds a screenshot, which the eval's doesn't.
+    content_type, body = openai_recorded("responses")
+    recorded: dict[str, Any] = json.loads(body)
+    calls = [item for item in recorded["output"] if item["type"] == "function_call"]
+    computer = {
+        "type": "computer_call",
+        "id": "cu_1",
+        "call_id": "call_c",
+        "actions": [{"type": "click", "x": 1, "y": 2, "button": "left"}],
+        "pending_safety_checks": [],
+        "status": "completed",
+    }
+    recorded["output"] = [item for item in recorded["output"] if item not in calls] + [
+        computer
+    ]
+    handler = await holding(Handler(every_call_rule()))
+    await handler.request(_openai_from_inspect("responses", "a"))
+    await handler.reply(
+        replace(
+            reply(json.dumps(recorded).encode(), id="a", content_type=content_type),
+            provider="openai",
+            model="gpt-test",
+        )
+    )
+
+    held = await _turn_as_inspect_writes_it((await _judged(handler))["withheld"])
+    answer = await handler.request(_openai_from_inspect("responses", "b", held))
+
+    # the eval's copy isn't made a computer call beside a function call's result
+    assert isinstance(answer, Replace)
+    assert [
+        (item.get("type"), item.get("call_id"))
+        for item in json.loads(answer.body)["input"][-2:]
+    ] == [("function_call", "call_c"), ("function_call_output", "call_c")]
 
 
 @pytest.mark.anyio

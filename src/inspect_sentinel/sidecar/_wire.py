@@ -487,14 +487,26 @@ def _held_redacted(
             arguments == "" and isinstance(proposed, str)
         )
     # written from the eval's message alone, and only as inspect_ai writes it
-    return (kind, name) == api.call_of(originals[id].plain)[1:3] and arguments == {}
+    return (
+        _put_back_from_plain(api, originals[id])
+        and (kind, name) == api.call_of(originals[id].plain)[1:3]
+        and arguments == {}
+    )
 
 
 def _held_plain(api: _Api, element: object, own: Amendment) -> bool:
     # a call the eval holds with its arguments, written from its message
     # alone as a call of another kind or name than the model's own
     held = api.call_of(element)
-    return held != api.call_of(own.call) and held == api.call_of(own.plain)
+    return (
+        _put_back_from_plain(api, own)
+        and held != api.call_of(own.call)
+        and held == api.call_of(own.plain)
+    )
+
+
+def _put_back_from_plain(api: _Api, own: Amendment) -> bool:
+    return api.put_back_from_plain is not None and api.put_back_from_plain(own.call)
 
 
 @dataclass(frozen=True)
@@ -1178,9 +1190,11 @@ class _Api:
     # the results an entry of the conversation holds
     results_in: Callable[[object], list[object]]
     pick: Callable[[list[Any], str], tuple[Any, tuple[Any, ...]]]
-    # For an API whose writer can write an eval's copy of a call as a call of
-    # another kind than the model's own: the result the eval wrote for its
-    # copy, as a result of the model's call.
+    # For an API where inspect_ai writes an eval's copy of some calls, from
+    # its message alone, as calls of another kind or name than the model's
+    # own: whether a call of the model's is put back in place of such a copy,
+    # and the result the eval wrote for the copy as a result of the model's.
+    put_back_from_plain: Callable[[object], bool] | None = None
     result_as: Callable[[object, object], object] | None = None
 
 
@@ -1239,6 +1253,7 @@ def _api_of(format: Format) -> _Api:
                 _openai.responses_result_of,
                 _openai.responses_results_in,
                 _openai.responses_pick,
+                _openai.responses_put_back_from_plain,
                 _openai.responses_result_as,
             )
 

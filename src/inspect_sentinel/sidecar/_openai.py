@@ -831,6 +831,14 @@ def responses_results_in(entry: object) -> list[object]:
     return [entry] if responses_result_of(entry)[0] is not None else []
 
 
+def responses_put_back_from_plain(call: object) -> bool:
+    """Whether a call of the model's is put back in place of an eval's copy that inspect_ai wrote from its message alone.
+
+    Only a custom tool's call is. A computer call's result can't be written from the eval's, which holds no screenshot.
+    """
+    return responses_call_of(call)[1] == "custom_tool_call"
+
+
 def responses_result_as(result: object, call: object) -> object:
     """The result an eval wrote for its copy of a call, as a result of the model's own `call`."""
     if responses_call_of(call)[1] != "custom_tool_call" or not _is_output(result):
