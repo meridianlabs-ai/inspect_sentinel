@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, cast
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
+    Content,
+    ContentData,
     ContentReasoning,
     ContentToolUse,
 )
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
 
 # a preprocessor with no transform is for any step
 S = TypeVar("S", bound=Step, default=Step)
+M = TypeVar("M", bound=ChatMessage)
 
 ExtractReferences: TypeAlias = Callable[[str], list[Reference]]
 
@@ -118,6 +121,9 @@ class StepPreprocessor(Generic[S]):
     omit_tool_usage: bool = False
     """Leave out a provider's own tool use (such as web search) recorded in a message."""
 
+    omit_unreadable_compaction: bool = False
+    """Leave out a model provider's compaction of earlier messages when it cannot be read, as OpenAI's cannot. A message that held nothing else is left out whole. By default it is shown as a placeholder, `<compaction_unreadable 3f9a1c7e />` with a nonce. A compaction that can be read, such as Anthropic's, is always shown as its summary."""
+
     transform: Callable[[S], Awaitable[S]] | None = None
     """Any further change, applied last to the thinned step. It returns a step of the same type. The messages it is given are the host's own objects: copy one before changing it."""
 
@@ -160,22 +166,19 @@ async def preprocess_step(
         ),
     )
     if isinstance(thinned, AfterToolCall):
-        [result] = _omitted([thinned.result], p)
-        thinned = replace(thinned, result=result)
+        thinned = replace(thinned, result=_thinned(thinned.result, p))
     if (
         isinstance(thinned, BeforeToolCall | AfterToolCall)
         and thinned.assistant_message is not None
     ):
-        [made] = _omitted([thinned.assistant_message], p)
-        assert isinstance(made, ChatMessageAssistant)
-        thinned = replace(thinned, assistant_message=made)
+        thinned = replace(
+            thinned, assistant_message=_thinned(thinned.assistant_message, p)
+        )
     if isinstance(thinned, AfterGenerate):
         output = thinned.output.model_copy(
             update={
                 "choices": [
-                    choice.model_copy(
-                        update={"message": _omitted([choice.message], p)[0]}
-                    )
+                    choice.model_copy(update={"message": _thinned(choice.message, p)})
                     for choice in thinned.output.choices
                 ]
             }
@@ -189,7 +192,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. A compaction leaves a summary in the messages: with a `nonce`, the one Inspect's summary compaction writes is headed `COMPACTION SUMMARY` rather than `USER`, and a model provider's compaction that cannot be read, such as OpenAI's, is shown as `<compaction_unreadable 3f9a1c7e />` (`StepPreprocessor(omit_unreadable_compaction=True)` leaves it out). A provider's compaction that can be read, such as Anthropic's, is shown as its summary between `<compaction_summary>` tags. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -467,25 +470,56 @@ def _last_with_id(messages: Sequence[ChatMessage]) -> tuple[int, str] | None:
 def _omitted(
     messages: Sequence[ChatMessage], p: StepPreprocessor[S]
 ) -> list[ChatMessage]:
-    removed = tuple(
-        kind
-        for omit, kind in (
-            (p.omit_reasoning, ContentReasoning),
-            (p.omit_tool_usage, ContentToolUse),
-        )
-        if omit
+    kept: list[ChatMessage] = []
+    for message in messages:
+        if p.omit_system and message.role == "system":
+            continue
+        thinned = _thinned(message, p)
+        # a message that held nothing but an unreadable compaction, as OpenAI's
+        # does, is left out whole rather than shown empty
+        if (
+            p.omit_unreadable_compaction
+            and not thinned.content
+            and not (isinstance(thinned, ChatMessageAssistant) and thinned.tool_calls)
+            and not isinstance(message.content, str)
+            and any(_unreadable_compaction(c) for c in message.content)
+        ):
+            continue
+        kept.append(thinned)
+    return kept
+
+
+def _thinned(message: M, p: StepPreprocessor[S]) -> M:
+    # the message with the content the preprocessor omits left out; the host's
+    # own object when nothing is
+    if isinstance(message.content, str):
+        return message
+    content = [c for c in message.content if not _omits(p, c)]
+    if len(content) == len(message.content):
+        return message
+    return message.model_copy(update={"content": content})
+
+
+def _omits(p: StepPreprocessor[S], content: Content) -> bool:
+    return (
+        (p.omit_reasoning and isinstance(content, ContentReasoning))
+        or (p.omit_tool_usage and isinstance(content, ContentToolUse))
+        or (p.omit_unreadable_compaction and _unreadable_compaction(content))
     )
-    return [
-        message
-        if isinstance(message.content, str) or not removed
-        else message.model_copy(
-            update={
-                "content": [c for c in message.content if not isinstance(c, removed)]
-            }
-        )
-        for message in messages
-        if not (p.omit_system and message.role == "system")
-    ]
+
+
+def _unreadable_compaction(content: Content) -> bool:
+    # inspect_ai keeps a provider's compaction as data holding
+    # `compaction_metadata`. Only Anthropic's (`"anthropic_compact"`) holds
+    # readable text, its summary; OpenAI's (`"openai_compact"`) is encrypted.
+    # Scout renders by the same rule (`inspect_scout/_scanner/extract.py`).
+    if not isinstance(content, ContentData):
+        return False
+    metadata = content.data.get("compaction_metadata")
+    return isinstance(metadata, dict) and not (
+        metadata.get("type") == "anthropic_compact"
+        and isinstance(metadata.get("content"), str)
+    )
 
 
 def _step_block(step: Step) -> str:

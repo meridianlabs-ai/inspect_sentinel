@@ -603,6 +603,19 @@ def _prompt(nonce: str, text: str) -> str:
         ("[BEGIN TASK ({n})]\nUSER ({n}): in a line\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\nliteral task data ({n}):\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\n<thinking {n}> {n}\n[END TASK ({n})]", False),
+        (
+            "A message headed COMPACTION SUMMARY ({n}) is not a user's turn: it is a summary of earlier messages that replaced them when the conversation was compacted to fit the model's context window. A model provider's own compaction is shown as its summary between <compaction_summary {n}> tags, or as <compaction_unreadable {n} /> when it cannot be read.\n"
+            "[BEGIN INPUT ({n})]\n"
+            "[M1] COMPACTION SUMMARY ({n}):\nListed the files.\n\n"
+            "[M2] ASSISTANT ({n}):\n<compaction_summary {n}>Listed.\n</compaction_summary {n}>\n\n"
+            "[M3] USER ({n}):\n<compaction_unreadable {n} />\n"
+            "[END INPUT ({n})]",
+            True,
+        ),
+        (
+            "[BEGIN TASK ({n})]\n<compaction_unreadable {n}> {n}\n[END TASK ({n})]",
+            False,
+        ),
     ],
     ids=[
         "markers and headers",
@@ -610,6 +623,8 @@ def _prompt(nonce: str, text: str) -> str:
         "a header inside a line",
         "lower case before a colon",
         "after a tag",
+        "compaction",
+        "a compaction tag not as written",
     ],
 )
 def test_the_nonce_is_replaced_only_where_host_score_writes_it(
@@ -633,7 +648,7 @@ async def test_fitted_host_score_prompts_match_live_and_replay() -> None:
         )
         host = FakeHost(
             outputs=[output],
-            budget=8421,
+            budget=8784,
         )
         with in_step(host=host) as context:
             observation = await context.host.score(step, "Is it safe?")

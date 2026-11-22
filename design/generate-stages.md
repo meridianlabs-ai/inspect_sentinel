@@ -172,7 +172,7 @@ Without decision 7, a sentinel of tool-stage monitors under `concurrent` or `obs
 
 **`step.input` at the tool stages.** R2 (inspect_ai #5831) finds the `ModelEvent` that produced the call in the transcript history, resident or evicted, and `step.input` is `None` when none exists. Decision 17's recording is not needed.
 
-**Compaction.** A summary compaction's text reaches the next `BeforeGenerate` in `input`, so a monitor sees what the agent's model wrote about its own trajectory. `compaction_summary(step)` stays deferred on inspect_ai documenting the summary message metadata key.
+**Compaction.** A summary compaction's text reaches the next `BeforeGenerate` in `input`, so a monitor sees what the agent's model wrote about its own trajectory. With a nonce, the rendering heads it `COMPACTION SUMMARY` rather than `USER`, shows a provider's readable compaction (Anthropic's) as its summary, and marks an unreadable one (OpenAI's) as `<compaction_unreadable />`, which `omit_unreadable_compaction` leaves out ([sentinel.md](sentinel.md), `step_as_str`). `compaction_summary(step)` stays deferred on inspect_ai documenting the summary message metadata key.
 
 ## f. Events and the viewer {#f-events-and-the-viewer}
 

@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any, Literal, TypeAlias, cast
 
 import anyio
 import pytest
@@ -13,6 +13,7 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    ContentData,
     ContentReasoning,
     ContentText,
     ContentToolUse,
@@ -925,6 +926,152 @@ async def test_a_nonce_marks_every_block_and_every_message_header(
     assert f'[TOOL CHOICE{mark}] "auto"' in rendered.splitlines()
     assert rendered.endswith(f"[END AGENT STEP - TOOL CALL REQUEST{mark}]")
     assert f"USER{mark}:\ngo" in rendered
+
+
+# the messages compaction leaves, as inspect_ai writes them: the summary
+# strategy's user message (model/_compaction/summary.py), Anthropic's
+# compaction and the prompt to continue that follows it
+# (model/_providers/anthropic.py), and OpenAI's compaction
+# (model/_openai_responses.py)
+SUMMARY = "[CONTEXT COMPACTION SUMMARY]\n\nListed the files."
+
+
+def compaction(**metadata: Any) -> ContentData:
+    return ContentData(data={"compaction_metadata": metadata})
+
+
+Compacted: TypeAlias = Literal["summary", "anthropic", "openai"]
+
+
+def compacted(kind: Compacted) -> list[ChatMessage]:
+    match kind:
+        case "summary":
+            made: ChatMessage = ChatMessageUser(
+                content=SUMMARY, id="made", metadata={"summary": True}
+            )
+            return [user("task"), made]
+        case "anthropic":
+            made = ChatMessageAssistant(
+                id="made",
+                content=[compaction(type="anthropic_compact", content="Listed.")],
+            )
+            return [user("task"), made, user("Please continue working.")]
+        case "openai":
+            made = ChatMessageUser(
+                id="made",
+                content=[
+                    compaction(
+                        type="openai_compact", id="cmp_1", encrypted_content="gAAAAB"
+                    )
+                ],
+                source="generate",
+            )
+            return [user("task"), made, asks("next")]
+
+
+def headers(rendered: str) -> list[str]:
+    return re.findall(r"^\[M\d+\] [^\n]*", rendered, re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    "kind, nonce, made",
+    [
+        ("summary", "3f9a1c7e", f"[M2] COMPACTION SUMMARY (3f9a1c7e):\n{SUMMARY}\n"),
+        ("summary", None, f"[M2] USER:\n{SUMMARY}\n"),
+        (
+            "anthropic",
+            "3f9a1c7e",
+            "[M2] ASSISTANT (3f9a1c7e):\n<compaction_summary 3f9a1c7e>Listed.\n"
+            "</compaction_summary 3f9a1c7e>\n",
+        ),
+        (
+            "anthropic",
+            None,
+            "[M2] ASSISTANT:\n<compaction_summary>Listed.</compaction_summary>\n",
+        ),
+        (
+            "openai",
+            "3f9a1c7e",
+            "[M2] USER (3f9a1c7e):\n<compaction_unreadable 3f9a1c7e />\n",
+        ),
+        ("openai", None, "[M2] USER:\n<data />\n"),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_compaction_is_shown_as_one(
+    kind: Compacted, nonce: str | None, made: str
+) -> None:
+    rendered = await render(tool_step(compacted(kind), None), nonce=nonce)
+    assert made in rendered
+
+
+@pytest.mark.anyio
+async def test_a_user_turn_that_imitates_a_compaction_summary_is_a_user_turn() -> None:
+    rendered = await render(
+        tool_step([user("task"), user(SUMMARY)], None), nonce="3f9a1c7e"
+    )
+    assert headers(rendered) == [
+        "[M1] USER (3f9a1c7e):",
+        "[M2] USER (3f9a1c7e):",
+        "[M3] ASSISTANT (3f9a1c7e):",
+    ]
+
+
+def failed_reply() -> AfterGenerate:
+    # a compaction the provider failed to make holds no summary
+    reply = ChatMessageAssistant(
+        id="reply",
+        content=[
+            compaction(type="anthropic_compact", content=None),
+            ContentText(text="Continuing."),
+        ],
+    )
+    return replace(
+        after_generate_step(),
+        input=[user("task")],
+        output=ModelOutput(model="m", choices=[ChatCompletionChoice(message=reply)]),
+    )
+
+
+@pytest.mark.parametrize(
+    "step, readable, omitted, kept",
+    [
+        # a message that held only the compaction is left out whole
+        (
+            tool_step(compacted("openai"), None),
+            False,
+            ["USER", "ASSISTANT", "ASSISTANT"],
+            ["USER", "USER", "ASSISTANT", "ASSISTANT"],
+        ),
+        # a reply keeps the rest of what it holds
+        (failed_reply(), False, ["USER", "ASSISTANT"], ["USER", "ASSISTANT"]),
+        # a compaction that can be read is kept
+        (
+            tool_step(compacted("anthropic"), None),
+            True,
+            ["USER", "ASSISTANT", "USER", "ASSISTANT"],
+            ["USER", "ASSISTANT", "USER", "ASSISTANT"],
+        ),
+    ],
+    ids=["openai", "reply", "anthropic"],
+)
+@pytest.mark.parametrize("omit", [False, True])
+@pytest.mark.anyio
+async def test_omit_unreadable_compaction_leaves_out_only_an_unreadable_one(
+    step: Step, readable: bool, omitted: list[str], kept: list[str], omit: bool
+) -> None:
+    n = "3f9a1c7e"
+    rendered = await render(
+        step, StepPreprocessor(omit_unreadable_compaction=omit), nonce=n
+    )
+    assert headers(rendered) == [
+        f"[M{i}] {role} ({n}):"
+        for i, role in enumerate(omitted if omit else kept, start=1)
+    ]
+    assert (f"<compaction_unreadable {n} />" in rendered) == (not omit and not readable)
+    assert (f"<compaction_summary {n}>Listed." in rendered) == readable
+    if isinstance(step, AfterGenerate):
+        assert "Continuing." in rendered
 
 
 @pytest.mark.anyio

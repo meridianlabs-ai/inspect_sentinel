@@ -144,7 +144,7 @@ The lists on a step are shared with Inspect, not copied, so don't modify them or
 
 A step has three message lists:
 
-- `input` is what the agent's model was sent for this one model call. Use it to score a step against what the agent's model saw when it acted. After a compaction, it holds the compacted request.
+- `input` is what the agent's model was sent for this one model call. Use it to score a step against what the agent's model saw when it acted. After a compaction, it holds the compacted request (see [After a Compaction](llm-monitors.qmd#after-a-compaction) for how a monitor model is shown it).
 - `history` is everything the agent has sent to its model so far, including messages a compaction later dropped. Use it to score the whole trajectory.
 - `agent_messages` is the message list of the outermost running `@agent` function. The agent can leave messages out of it, such as hidden side-task instructions. Use it when the monitor should see only what the agent kept.
 

@@ -1,7 +1,7 @@
 ---
 title: "LLM Monitors"
 description: "Monitors that ask a model to score each step, through context.host.score() or context.host.generate()."
-llms-description: "Writing LLM monitors: context.host.score() with dimensions and a policy, model and role parameters and the monitor model role, StepPreprocessor windows (AllMessages, LastTurns, LastMessages, NewSinceLastReport), custom prompts with generate(), preprocess_step() and step_as_str(), nonces for untrusted agent text, marking tool calls a person reviewed, hiding side-task instructions with agent_messages, prompt templates, and context-window fitting."
+llms-description: "Writing LLM monitors: context.host.score() with dimensions and a policy, model and role parameters and the monitor model role, StepPreprocessor windows (AllMessages, LastTurns, LastMessages, NewSinceLastReport), how compaction summaries are shown, custom prompts with generate(), preprocess_step() and step_as_str(), nonces for untrusted agent text, marking tool calls a person reviewed, hiding side-task instructions with agent_messages, prompt templates, and context-window fitting."
 ---
 
 ## Overview
@@ -172,6 +172,7 @@ The step itself is always shown (the tool call, its result, or the agent's model
 | `omit_system` | `True` | Leave out system messages. |
 | `omit_reasoning` | `False` | Leave out the agent's model's reasoning. |
 | `omit_tool_usage` | `False` | Leave out a provider's own tool use, such as web search. |
+| `omit_unreadable_compaction` | `False` | Leave out a model provider's compaction that can't be read (see [After a Compaction](#after-a-compaction)). |
 | `transform` | `None` | An async function that takes the step and returns a step of the same type. |
 
 The windows apply first, then the omissions, then the `transform`. A `transform` receives Inspect's own message objects, so copy a message before changing it.
@@ -191,6 +192,22 @@ StepPreprocessor(input_window=NewSinceLastReport(context))
 ```
 
 If the message the monitor last saw is gone, as after [compaction](https://inspect.aisi.org.uk/compaction.html) (Inspect's shortening of a long conversation to fit the context window), the whole list is shown.
+
+### After a Compaction
+
+A [compaction](https://inspect.aisi.org.uk/compaction.html) shortens a long conversation to fit the agent's model's context window. After one, `input` holds the compacted request: usually a summary of the earlier messages, then the latest turns. `history` still holds the messages the compaction dropped, so set its window to show them.
+
+How the summary is shown depends on what made it:
+
+| Compaction | Shown as |
+|------------------------------------|------------------------------------|
+| Inspect's summary (`CompactionSummary`, or the fallback of `CompactionAuto`) | A message headed `COMPACTION SUMMARY (3f9a1c7e):` rather than `USER`. |
+| Anthropic's native compaction | The summary, between `<compaction_summary 3f9a1c7e>` tags. |
+| OpenAI's native compaction | `<compaction_unreadable 3f9a1c7e />`, since OpenAI encrypts it. |
+
+Each marker carries the nonce (see [Untrusted Text](#untrusted-text)), so a user message that imitates a summary is still shown as a user message. `score()` tells the monitor model what the markers mean. Without a nonce, as from `step_as_str()` called without one, Inspect's summary is headed `USER` and OpenAI's compaction is shown as `<data />`.
+
+To leave an unreadable compaction out, use `StepPreprocessor(omit_unreadable_compaction=True)`. A message that held nothing else is left out too.
 
 ## Untrusted Text
 
