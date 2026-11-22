@@ -594,6 +594,7 @@ def _prompt(nonce: str, text: str) -> str:
             "[M2] ASSISTANT ({n}):\n<thinking {n}>\nLook first.\n</thinking {n}>\n"
             "Tool Call ({n}): bash\nArguments:\ncmd: ls\n\n"
             "[M3] TOOL ({n}):\nError in tool call 'bash' ({n}):\nno such file\n"
+            "<image {n} />\n"
             "[END HISTORY ({n})]\n"
             '[TOOL CHOICE ({n})] "auto"\n'
             "[END AGENT STEP - TOOL CALL REQUEST ({n})]",
@@ -603,6 +604,7 @@ def _prompt(nonce: str, text: str) -> str:
         ("[BEGIN TASK ({n})]\nUSER ({n}): in a line\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\nliteral task data ({n}):\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\n<thinking {n}> {n}\n[END TASK ({n})]", False),
+        ("[BEGIN TASK ({n})]\n<image {n}/>\n[END TASK ({n})]", False),
     ],
     ids=[
         "markers and headers",
@@ -610,6 +612,7 @@ def _prompt(nonce: str, text: str) -> str:
         "a header inside a line",
         "lower case before a colon",
         "after a tag",
+        "a placeholder without its space",
     ],
 )
 def test_the_nonce_is_replaced_only_where_host_score_writes_it(
@@ -633,7 +636,7 @@ async def test_fitted_host_score_prompts_match_live_and_replay() -> None:
         )
         host = FakeHost(
             outputs=[output],
-            budget=8421,
+            budget=8600,
         )
         with in_step(host=host) as context:
             observation = await context.host.score(step, "Is it safe?")

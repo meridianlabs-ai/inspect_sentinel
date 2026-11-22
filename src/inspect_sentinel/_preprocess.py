@@ -40,6 +40,10 @@ ExtractReferences: TypeAlias = Callable[[str], list[Reference]]
 # a list a window cuts, which keys the marks `NewSinceLastReport` keeps
 _Source: TypeAlias = Literal["input", "history", "agent_messages"]
 
+# a part of a step that can hold content `step_as_str()` renders as a
+# placeholder
+_Part: TypeAlias = Literal["history", "agent_messages", "input", "reply", "result"]
+
 
 @dataclass(frozen=True)
 class AllMessages:
@@ -189,13 +193,77 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Content that is not text, such as an image, renders as a placeholder naming its type, which carries the nonce too, as `<image 3f9a1c7e />`; `unrenderable()` lists that content. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
-        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
+        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker, message header and placeholder; none by default. Scout needs at least 8 characters.
     """
     return await render_step(step, nonce=nonce, cut={})
+
+
+@dataclass(frozen=True)
+class Unrenderable:
+    """Content in a step that `step_as_str()` cannot show as text, so it renders a placeholder naming the content's type in its place, such as `<image 3f9a1c7e />`."""
+
+    where: Literal["history", "agent_messages", "input", "reply", "result"]
+    """The part of the step that holds it: one of its message lists, the reply after a generate, or the result after a tool call."""
+
+    index: int
+    """The position of the message that holds it in that list; 0 for `reply` and `result`."""
+
+    message_id: str | None
+    """The id of the message that holds it."""
+
+    content_type: str
+    """The content's type: `"image"`, `"audio"`, `"video"`, `"document"` or `"data"`, or a type the renderer does not know."""
+
+
+def unrenderable(step: Step) -> list[Unrenderable]:
+    """The content in `step` that `step_as_str()` would render as a placeholder rather than as text, in the order it is rendered.
+
+    Images, audio, video, documents and provider data are rendered as a placeholder naming their type, such as `<image 3f9a1c7e />`, and so is a content type the renderer does not know. The monitor model sees that the content was there, but not what it holds. A monitor that must not judge a step it cannot fully show can test for this content, and fail closed when it finds some (`Host.score` does this with `on_unrenderable=`).
+
+    Count what the model is shown: pass the step as `preprocess_step()` returns it, so that content the windows, omissions or `transform` leave out is not counted. Reasoning the provider redacted is not counted: it renders as a `<thinking_redacted>` tag, or as its summary.
+
+    Args:
+        step: The step to check, usually from `preprocess_step()`.
+    """
+    found: list[Unrenderable] = []
+    lists: list[tuple[_Source, Sequence[ChatMessage] | None]] = [
+        ("history", step.history),
+        ("agent_messages", step.agent_messages),
+        ("input", step.input),
+    ]
+    # in the order `render_step` renders them; a tool stage's CALL block shows
+    # only the call's text and arguments
+    for where, messages in lists:
+        for index, message in enumerate(messages or []):
+            found.extend(_unrenderable_in(where, index, message))
+    if isinstance(step, AfterGenerate):
+        [reply] = _reply(step)
+        found.extend(_unrenderable_in("reply", 0, reply))
+    elif isinstance(step, AfterToolCall):
+        found.extend(_unrenderable_in("result", 0, step.result))
+    return found
+
+
+# what Scout renders as text; anything else is a placeholder
+_TEXT_CONTENT = ("text", "reasoning", "tool_use")
+
+
+def _unrenderable_in(
+    where: _Part,
+    index: int,
+    message: ChatMessage,
+) -> list[Unrenderable]:
+    if isinstance(message.content, str):
+        return []
+    return [
+        Unrenderable(where, index, message.id, content.type)
+        for content in message.content
+        if content.type not in _TEXT_CONTENT
+    ]
 
 
 HeadCut: TypeAlias = Mapping[_Source, int]

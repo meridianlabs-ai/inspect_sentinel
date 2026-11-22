@@ -2,10 +2,11 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import anyio
 import pytest
+from inspect_ai._util.content import ContentBase
 from inspect_ai.model import (
     ChatCompletionChoice,
     ChatMessage,
@@ -13,9 +14,15 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    Content,
+    ContentAudio,
+    ContentData,
+    ContentDocument,
+    ContentImage,
     ContentReasoning,
     ContentText,
     ContentToolUse,
+    ContentVideo,
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall, ToolFunction, ToolInfo
@@ -32,11 +39,13 @@ from inspect_sentinel import (
     NewSinceLastReport,
     Step,
     StepPreprocessor,
+    Unrenderable,
     Window,
     concurrent,
     decide_final,
     preprocess_step,
     step_as_str,
+    unrenderable,
 )
 from inspect_sentinel._decorators import monitor, protocol
 from inspect_sentinel._report import Decision, Escalations, Observation
@@ -962,3 +971,123 @@ async def test_a_cite_of_the_call_resolves_to_the_message_that_made_it(
         replace(step, input=[], agent_messages=[], message_id="msg_A7")
     )
     assert [r.id for r in extract_refs("[M1]")] == ["msg_A7"]
+
+
+IMAGE = ContentImage(image="data:image/png;base64,abc")
+
+
+def shows(text: str, *content: Content, id: str | None = None) -> ChatMessage:
+    return ChatMessageUser(content=[ContentText(text=text), *content], id=id or text)
+
+
+@pytest.mark.anyio
+async def test_unrenderable_finds_what_renders_as_a_placeholder_in_render_order() -> (
+    None
+):
+    step = replace(
+        after_tool_call("bash", cmd="screenshot"),
+        history=[shows("h", ContentAudio(audio="a.mp3", format="mp3"))],
+        agent_messages=[user("plain"), shows("a", ContentData(data={"k": "v"}))],
+        input=[shows("i", IMAGE, ContentDocument(document="d.pdf"))],
+        result=ChatMessageTool(
+            content=[ContentText(text="taken"), IMAGE], id="r", function="bash"
+        ),
+    )
+    shown = await preprocess_step(step, ALL)
+    assert unrenderable(shown) == [
+        Unrenderable("history", 0, "h", "audio"),
+        Unrenderable("agent_messages", 1, "a", "data"),
+        Unrenderable("input", 0, "i", "image"),
+        Unrenderable("input", 0, "i", "document"),
+        Unrenderable("result", 0, "r", "image"),
+    ]
+    # each renders as a placeholder carrying the nonce
+    rendered, _ = await step_as_str(shown, nonce="3f9a1c7e")
+    for content_type in ("audio", "data", "image", "document"):
+        assert f"<{content_type} 3f9a1c7e />" in rendered
+
+
+@pytest.mark.anyio
+async def test_unrenderable_finds_a_placeholder_in_a_reply() -> None:
+    step = after_generate_step()
+    reply = ChatMessageAssistant(
+        content=[ContentText(text="here"), ContentVideo(video="v.mp4", format="mp4")],
+        id="reply",
+    )
+    step = replace(
+        step,
+        output=step.output.model_copy(
+            update={"choices": [ChatCompletionChoice(message=reply)]}
+        ),
+    )
+    assert unrenderable(await preprocess_step(step)) == [
+        Unrenderable("reply", 0, "reply", "video")
+    ]
+
+
+@pytest.mark.anyio
+async def test_unrenderable_counts_only_what_the_preprocessor_shows() -> None:
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        history=[shows("in history", IMAGE)],
+        input=[shows("old", IMAGE), asks("reply 1"), user("mid"), asks("reply 2")],
+    )
+    # the default leaves history out, so only INPUT's image counts
+    assert unrenderable(await preprocess_step(step)) == [
+        Unrenderable("input", 0, "old", "image")
+    ]
+    # a window that leaves out the message holding the image finds nothing
+    assert (
+        unrenderable(
+            await preprocess_step(step, StepPreprocessor(input_window=LastTurns(1)))
+        )
+        == []
+    )
+
+    async def drop_images(s: BeforeToolCall) -> BeforeToolCall:
+        return replace(s, input=[user("redacted")])
+
+    assert (
+        unrenderable(
+            await preprocess_step(step, StepPreprocessor(transform=drop_images))
+        )
+        == []
+    )
+
+
+@pytest.mark.anyio
+async def test_text_reasoning_and_tool_use_are_not_unrenderable() -> None:
+    reasoning = ChatMessageAssistant(
+        content=[
+            ContentReasoning(reasoning="plan"),
+            ContentReasoning(reasoning="", redacted=True),
+            ContentToolUse(
+                tool_type="web_search", id="s", name="search", arguments="q", result="r"
+            ),
+            ContentText(text="<image /> written by the agent"),
+        ],
+        id="reasoning",
+    )
+    step = replace(before_tool_call("bash", cmd="ls"), input=[reasoning])
+    shown = await preprocess_step(step)
+    assert unrenderable(shown) == []
+    # the agent's own placeholder text lacks the nonce
+    rendered, _ = await step_as_str(shown, nonce="3f9a1c7e")
+    assert "<image /> written by the agent" in rendered
+    assert "<image 3f9a1c7e />" not in rendered
+
+
+class ContentHologram(ContentBase):
+    type: Literal["hologram"] = "hologram"
+
+
+@pytest.mark.anyio
+async def test_an_unknown_content_type_is_unrenderable_and_rendered_by_name() -> None:
+    message = ChatMessageUser.model_construct(
+        content=[ContentText(text="look"), ContentHologram()], id="holo"
+    )
+    step = replace(before_tool_call("bash", cmd="ls"), input=[message])
+    shown = await preprocess_step(step)
+    assert unrenderable(shown) == [Unrenderable("input", 0, "holo", "hologram")]
+    rendered, _ = await step_as_str(shown, nonce="3f9a1c7e")
+    assert "<hologram 3f9a1c7e />" in rendered

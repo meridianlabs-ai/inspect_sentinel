@@ -91,7 +91,7 @@ Running a sentinel over steps rebuilt from stored transcripts is done through In
 
 ## Preprocessing
 
-What a monitor shows a model about a step: a `StepPreprocessor` says how much of its conversations to show and what to leave out, `preprocess_step()` applies it, and `step_as_str()` renders the result.
+What a monitor shows a model about a step: a `StepPreprocessor` says how much of its conversations to show and what to leave out, `preprocess_step()` applies it, `step_as_str()` renders the result, and `unrenderable()` lists the content it can show only as a placeholder, such as an image.
 
 ### StepPreprocessor
 ### Window
@@ -101,3 +101,5 @@ What a monitor shows a model about a step: a `StepPreprocessor` says how much of
 ### NewSinceLastReport
 ### preprocess_step
 ### step_as_str
+### unrenderable
+### Unrenderable

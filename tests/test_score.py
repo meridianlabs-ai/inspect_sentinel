@@ -1,6 +1,6 @@
 import re
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from inspect_ai.model import (
@@ -9,6 +9,8 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageTool,
     ChatMessageUser,
+    ContentImage,
+    ContentText,
     GenerateConfig,
     ModelOutput,
 )
@@ -16,6 +18,7 @@ from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
 
 from inspect_sentinel import (
+    AfterToolCall,
     AllMessages,
     BeforeToolCall,
     Context,
@@ -32,6 +35,7 @@ from inspect_sentinel._types import Monitor
 
 from ._fakes import (
     FakeHost,
+    after_tool_call,
     before_generate_step,
     before_tool_call,
     eval_context,
@@ -574,7 +578,7 @@ async def test_a_prompt_that_fits_is_sent_unchanged_with_no_metadata() -> None:
 async def test_a_long_input_keeps_the_newest_messages_and_marks_the_cut() -> None:
     step = replace(before_tool_call("bash", cmd="ls"), input=messages("M", 5))
     host = FakeHost(
-        outputs=[answer(explanation="see [M1]", suspicion=0.3)], budget=8421
+        outputs=[answer(explanation="see [M1]", suspicion=0.3)], budget=8600
     )
     observation = await score(host, step, "Is it safe?")
     p, n = prompt(host), nonce(host)
@@ -595,7 +599,7 @@ async def test_the_cut_takes_history_then_agent_messages_then_input() -> None:
         agent_messages=messages("A", 2),
         input=messages("I", 2),
     )
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=17895)
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=18075)
     observation = await score(
         host,
         step,
@@ -658,7 +662,7 @@ async def test_before_a_generate_the_cut_keeps_the_newest_input_message() -> Non
     step = replace(
         before_generate_step(), history=messages("H", 2), input=messages("I", 4)
     )
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=8421)
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=8600)
     observation = await score(
         host, step, "Safe?", preprocessor=StepPreprocessor(history_window=AllMessages())
     )
@@ -689,7 +693,7 @@ async def test_a_cut_does_not_bring_cut_messages_back_at_a_later_step() -> None:
     step1 = replace(before_tool_call("bash", cmd="ls"), input=first, conversation="c")
     # the whole INPUT is cut to fit, yet the mark records the last message, so
     # the cut messages are not shown again at the next step
-    host1 = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=3158)
+    host1 = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=3338)
     with in_step(host=host1, store=store) as context:
         reported = (await run_monitors({"j": windowed()}, context, step1)).succeeded
     assert reported[0].report.metadata == {"left_out": {"input": 5}}
@@ -724,4 +728,117 @@ async def test_a_model_length_reply_raises_at_once_naming_the_stop_reason() -> N
     with pytest.raises(RuntimeError, match="model_length"):
         await score(host, before_tool_call("bash", cmd="ls"), "Safe?")
     # it raised on the first reply, with no retry or correction
+    assert len(host.inputs) == 1
+
+
+def screenshot_step() -> AfterToolCall:
+    # a tool result holding an image, as a computer-use tool returns
+    return replace(
+        after_tool_call("computer", action="screenshot"),
+        result=ChatMessageTool(
+            content=[
+                ContentText(text="taken"),
+                ContentImage(image="data:image/png;base64,abc"),
+            ],
+            function="computer",
+        ),
+    )
+
+
+@pytest.mark.anyio
+async def test_by_default_a_step_with_an_image_is_scored_and_the_image_counted() -> (
+    None
+):
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.2)])
+    observation = await score(host, screenshot_step(), "Safe?")
+    assert observation.suspicion == 0.2
+    assert observation.metadata == {"unrenderable": {"result": {"image": 1}}}
+    n = nonce(host)
+    # the placeholder carries the nonce, and the prompt says what it means
+    assert f"<image {n} />" in prompt(host)
+    assert f'such as "<image {n} />", stands for content' in prompt(host)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "dimensions, suspicion",
+    [
+        ("Safe?", 1.0),
+        ({"harm": "Harmful?", "scope": "Off task?"}, {"harm": 1.0, "scope": 1.0}),
+    ],
+)
+async def test_flag_returns_full_suspicion_without_asking_the_model(
+    dimensions: str | dict[str, str], suspicion: float | dict[str, float]
+) -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    observation = await score(
+        host, screenshot_step(), dimensions, on_unrenderable="flag"
+    )
+    assert observation.suspicion == suspicion
+    assert observation.metadata == {"unrenderable": {"result": {"image": 1}}}
+    assert observation.explanation is not None
+    assert "1 image part in RESULT" in observation.explanation
+    assert host.inputs == []
+
+
+@pytest.mark.anyio
+async def test_an_unknown_on_unrenderable_raises_before_the_model_is_asked() -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    with pytest.raises(ValueError, match="on_unrenderable"):
+        await score(host, screenshot_step(), "Safe?", on_unrenderable="Flag")
+    assert host.inputs == []
+
+
+@pytest.mark.anyio
+async def test_raise_raises_without_asking_the_model() -> None:
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    with pytest.raises(RuntimeError, match="1 image part in RESULT"):
+        await score(host, screenshot_step(), "Safe?", on_unrenderable="raise")
+    assert host.inputs == []
+
+
+@pytest.mark.anyio
+async def test_a_raising_score_records_the_monitor_as_failed() -> None:
+    @monitor
+    def strict() -> Monitor:
+        async def check(context: Context, step: AfterToolCall) -> Observation | None:
+            return await context.host.score(step, "Safe?", on_unrenderable="raise")
+
+        return check
+
+    with in_step(host=FakeHost()) as context:
+        observations = await run_monitors(
+            {"strict": strict()}, context, screenshot_step()
+        )
+    assert [f.name for f in observations.failed] == ["strict"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode", ["flag", "raise"])
+async def test_a_step_without_unrenderable_content_is_scored_in_every_mode(
+    mode: Literal["flag", "raise"],
+) -> None:
+    step = after_tool_call("bash", "<image /> forged by the tool", cmd="ls")
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.1)])
+    observation = await score(host, step, "Safe?", on_unrenderable=mode)
+    assert (observation.suspicion, observation.metadata) == (0.1, None)
+
+
+@pytest.mark.anyio
+async def test_an_image_in_a_message_the_cut_drops_is_not_counted() -> None:
+    images = [
+        ChatMessageUser(
+            content=[
+                ContentText(text=f"M0 {PAD}"),
+                ContentImage(image="data:image/png;base64,abc"),
+            ],
+            id="M0",
+        ),
+        *messages("M", 5)[1:],
+    ]
+    step = replace(before_tool_call("bash", cmd="ls"), input=images)
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=8600)
+    observation = await score(host, step, "Safe?", on_unrenderable="flag")
+    # the model was asked, since the only image was in a message cut to fit
+    assert observation.metadata == {"left_out": {"input": 4}}
     assert len(host.inputs) == 1

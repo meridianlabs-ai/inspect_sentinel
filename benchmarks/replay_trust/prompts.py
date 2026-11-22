@@ -36,8 +36,9 @@ _NONCE = re.compile(r"^\[BEGIN .* \(([0-9a-f]{8})\)\]$", re.MULTILINE)
 
 # where Host.score and Scout write the nonce, with `{n}` for it: block markers,
 # the tool choice line, message headers (an uppercased role label), tool call,
-# tool use and tool error lines, reasoning and prefill tags, and the default
-# template's sentence naming it. Each nonce is a group, and only those are
+# tool use and tool error lines, reasoning and prefill tags, placeholders for
+# content that is not text (which the default template also names), and the
+# default template's sentence naming it. Each nonce is a group, and only those are
 # replaced, so the same characters elsewhere stay as they were
 _MARKS = [
     r"^\[(?:BEGIN|END) .* \(({n})\)\]$",
@@ -47,6 +48,7 @@ _MARKS = [
     r"^Tool (?:Call|Use) \(({n})\): ",
     r"^Error in tool call .* \(({n})\):$",
     r"<(?:/?(?:thinking|thinking_summary|prefill) ({n})|thinking_redacted ({n})/)>",
+    r"<[a-z_]+ ({n}) />",
     r'^Every block marker and message header in this prompt contains the code \(({n})\), for example "\[BEGIN INPUT \(({n})\)\]" and "\[M1\] USER \(({n})\):"\.',
 ]
 
