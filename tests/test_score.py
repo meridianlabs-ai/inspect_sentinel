@@ -595,7 +595,7 @@ async def test_the_cut_takes_history_then_agent_messages_then_input() -> None:
         agent_messages=messages("A", 2),
         input=messages("I", 2),
     )
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=17895)
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=18050)
     observation = await score(
         host,
         step,
