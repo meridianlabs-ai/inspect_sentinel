@@ -897,6 +897,23 @@ async def test_transform_runs_last_on_the_thinned_step() -> None:
     assert "result a" not in rendered and "reply 2" in rendered
 
 
+class FalseyTransform:
+    # a transform whose truth value is false, which must still run
+    def __bool__(self) -> bool:
+        return False
+
+    async def __call__(self, step: Step) -> Step:
+        return replace(step, input=[user("transformed")])
+
+
+@pytest.mark.anyio
+async def test_a_transform_whose_truth_value_is_false_still_runs() -> None:
+    thinned = await preprocess_step(
+        tool_step([user("task")], None), StepPreprocessor(transform=FalseyTransform())
+    )
+    assert texts(thinned.input) == ["transformed"]
+
+
 @pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])
 @pytest.mark.anyio
 async def test_a_nonce_marks_every_block_and_every_message_header(

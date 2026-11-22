@@ -231,7 +231,7 @@ async def preprocess_step(
             }
         )
         thinned = replace(thinned, output=output)
-    return await p.transform(thinned) if p.transform else thinned
+    return await p.transform(thinned) if p.transform is not None else thinned
 
 
 async def step_as_str(
