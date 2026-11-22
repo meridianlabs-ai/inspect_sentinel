@@ -253,7 +253,7 @@ sentinel:
 
 Your tool is never asked during a [replay](replay.qmd#human-decisions-in-replay). A replay gives the answer recorded when the eval ran, or the fixed answer or stand-in you pass to `as_scanner()`, as it does for any `human()`. The module that defines the function must still be importable where you run the scan, because the replay builds the sentinel from its configuration. Your tool cannot be offered `"modify"` yet.
 
-When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead. If your tool raises an error in the sidecar, the call isn't judged, and the proxy's own setting decides whether it goes ahead, as for any error in the sentinel.
+When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead. The wait is cancelled when the eval ends the sample, or when a sentinel ends the agent's run (for example its session, when the sidecar names runs by a header). If your tool raises an error in the sidecar, the call isn't judged, and the proxy's own setting decides whether it goes ahead, as for any error in the sentinel.
 
 ## A Person Beside Other Protocols
 

@@ -15,7 +15,7 @@ from inspect_ai.tool import ToolCallContent
 from inspect_ai.tool._tool_call import substitute_tool_call_content
 from starlette.applications import Starlette
 
-from inspect_sentinel import human, preprocess_step, sequential
+from inspect_sentinel import Sentinel, human, preprocess_step, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
 from inspect_sentinel._host import HumanAnswer, HumanQuestion
@@ -23,6 +23,7 @@ from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import (
+    Answer,
     Handler,
     Pass,
     Refuse,
@@ -3241,10 +3242,11 @@ async def test_a_human_with_a_surface_asks_it_instead_of_the_evals_approval_ui()
 
 
 class _Desk:
-    """A team's review tool that never answers: whether it was asked, and whether its question was withdrawn."""
+    """A team's review tool that answers only once released: whether it was asked, and whether its question was withdrawn."""
 
     def __init__(self) -> None:
         self.asked = anyio.Event()
+        self.release = anyio.Event()
         self.withdrawn = False
 
 
@@ -3255,10 +3257,13 @@ async def desk_waits(question: HumanQuestion) -> HumanAnswer:
     desk = _desk.get()
     desk.asked.set()
     try:
-        await anyio.sleep_forever()
+        await desk.release.wait()
+        return HumanAnswer("approve", "Approved at the team's desk.")
     finally:
-        desk.withdrawn = True
-    raise AssertionError("unreachable")
+        # withdrawing the question from the team's tool awaits, as it would
+        with anyio.CancelScope(shield=True):
+            await anyio.lowlevel.checkpoint()
+            desk.withdrawn = True
 
 
 def _waits_at_desk(**options: Any) -> tuple[Handler, _Desk]:
@@ -3303,6 +3308,72 @@ async def test_ending_the_sample_withdraws_a_surfaces_question(
         ("cancelled", "human"),
         ("cancelled", ""),
     ]
+
+
+_SESSION = "x-agent-session"
+
+
+def _in_session(asked: Request, session: str) -> Request:
+    # as from an agent that sends an id for its session in a header
+    return replace(asked, headers={**asked.headers, _SESSION: session})
+
+
+@pytest.mark.parametrize("late", [False, True], ids=["waiting", "not_yet_asked"])
+@pytest.mark.anyio
+async def test_ending_a_proxy_session_withdraws_its_surfaces_question(
+    late: bool,
+) -> None:
+    # An ordinary proxy client, whose run a header names: the session ends at
+    # its Bergen lookup while its Oslo lookup waits for a person, or before the
+    # Oslo lookup's judging reaches the surface. Another session goes on.
+    reached, go = anyio.Event(), anyio.Event()
+    links: list[Sentinel] = [ends_at_bergen()]
+    if late:
+        links.append(waits_at("toolu_1", reached, go))
+    links.append(human(stages=["tool_call"], surface=desk_waits))
+    handler = Handler(sequential(links), run_header=_SESSION)
+    first, other = _Desk(), _Desk()
+    answers: dict[str, Answer] = {}
+    ended: Answer | None = None
+
+    async def judge(id: str, desk: _Desk) -> None:
+        _desk.set(desk)
+        answers[id] = await handler.reply(reply(message(weather("Oslo")), id=id))
+
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.request(_in_session(request("o"), "session-2"))
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(judge, "a", first)
+            group.start_soon(judge, "o", other)
+            if late:
+                # both lookups wait in the link before the surface
+                await reached.wait()
+            else:
+                await first.asked.wait()
+                await other.asked.wait()
+
+            await handler.request(_in_session(request("b"), "session-1"))
+            ended = await handler.reply(
+                reply(message(weather("Bergen", "toolu_9")), id="b")
+            )
+            go.set()
+            # the other session's question is still open, and answered
+            await anyio.wait_all_tasks_blocked()
+            assert not other.withdrawn
+            other.release.set()
+
+    assert isinstance(ended, Refuse)
+    assert first.asked.is_set() is not late
+    assert first.withdrawn is not late
+    assert answers["a"] == ended
+    assert isinstance(answers["o"], Pass)
+    assert other.withdrawn
+    later = await handler.request(_in_session(request("c"), "session-1"))
+    assert isinstance(later, Refuse)
+    records = await handler.records("a")
+    assert records is not None
+    assert ("cancelled", "human") in [(r.kind, r.path) for r in records]
 
 
 @pytest.mark.anyio
