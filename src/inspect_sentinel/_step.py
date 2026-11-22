@@ -42,6 +42,48 @@ class HumanDecision:
 
 
 @dataclass(frozen=True)
+class HiddenRun:
+    """Messages that `StepPreprocessor.hide_messages` hid from one of a thinned step's message lists, in a run with no shown message between them. `step_as_str()` renders a run as one marker line where the messages stood, such as `[2 messages hidden (3f9a1c7e)]`."""
+
+    position: int
+    """Where the run stood in the shown list: before the message at this index, or after the last message when it equals the list's length."""
+
+    ids: tuple[str | None, ...]
+    """The ids of the hidden messages, in order: `None` for a message without one."""
+
+
+@dataclass(frozen=True)
+class HiddenMessages:
+    """What `StepPreprocessor.hide_messages` hid from a thinned step, as `preprocess_step()` records it in the step's `hidden`.
+
+    A hidden message is left out of the list it was in, and a `HiddenRun` records where it stood, so `step_as_str()` renders a marker line in its place. A hidden part of the step itself (`call`, `result` or `reply`) stays in the step's own fields, and `step_as_str()` renders the marker in its place too. `Host.score` raises for a step whose own part is hidden (`subject`), since it has nothing to judge.
+    """
+
+    input: tuple[HiddenRun, ...] = ()
+    """The runs hidden from `input`, in order."""
+
+    history: tuple[HiddenRun, ...] = ()
+    """The runs hidden from `history`, in order."""
+
+    agent_messages: tuple[HiddenRun, ...] = ()
+    """The runs hidden from `agent_messages`, in order."""
+
+    call: bool = False
+    """At a tool stage, whether the assistant message that made the call is hidden, and with it the call and, after the call, its result. The message tested is `assistant_message`, or, when that is `None`, the message `step_as_str()` renders for the call, which has the call's `message_id` and no metadata."""
+
+    result: bool = False
+    """After a tool call, whether its result is hidden: because `hide_messages` matched the result, or because the call is hidden."""
+
+    reply: bool = False
+    """After a generate, whether the reply (the first choice's message) is hidden."""
+
+    @property
+    def subject(self) -> bool:
+        """Whether the step's own part is hidden: the call, its result or the reply. `Host.score` raises for such a step."""
+        return self.call or self.result or self.reply
+
+
+@dataclass(frozen=True)
 class BeforeGenerate:
     """A generate by the agent's model, before the request is sent and before the cache lookup.
 
@@ -80,6 +122,9 @@ class BeforeGenerate:
     config: GenerateConfig
     """The generation configuration the model is sent, with the task's and the model's settings merged in. In-process this is the host's own object; monitors must not mutate it. Behind a proxy it is read from the request, so it holds what the model was sent, the provider's defaults included, and settings that govern only Inspect's own client, such as `max_retries`, `timeout` and `max_connections`, are None."""
 
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns. `None` when nothing was hidden, and always on a step a host gives a monitor."""
+
 
 @dataclass(frozen=True)
 class AfterGenerate:
@@ -117,6 +162,9 @@ class AfterGenerate:
 
     output: ModelOutput
     """What the model returned; the first choice's message is what the agent receives. Some providers return an output with no choices, so check `output.choices` before reading `output.message`. In-process this is the host's own output, which the agent receives; monitors must not mutate it."""
+
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns. `None` when nothing was hidden, and always on a step a host gives a monitor."""
 
 
 @dataclass(frozen=True)
@@ -181,6 +229,9 @@ class BeforeToolCall:
     tool_choice: ToolChoice | None = None
     """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` when that model call is not available (see `BeforeToolCall`)."""
 
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns. `None` when nothing was hidden, and always on a step a host gives a monitor."""
+
 
 @dataclass(frozen=True)
 class AfterToolCall:
@@ -241,6 +292,9 @@ class AfterToolCall:
 
     truncated: Truncation | Literal[False] | None = None
     """Whether the host cut the tool's output before the model saw it in `result`. A `Truncation` when it did; `False` when it did not, which is always so for structured content; `None` when this host cannot tell (a proxy, a replay from messages alone, or a log older than the record of cuts). `if step.truncated:` is true only for a cut. It is built from the value the transcript's `ToolEvent.truncated` records (`Truncation(*event.truncated)` when that is set), so a monitor reads the same answer live and from a log. A cut made before the host's limit applies, by a sandbox output limit or a timeout, is not reported here: `result.error` reports it, with type `"limit"` or `"timeout"`. Use this field, not the "output was too long" notice in `result`, to tell whether the host cut the result: that notice is text a tool's output can contain, so it can be forged."""
+
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns. `None` when nothing was hidden, and always on a step a host gives a monitor."""
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall

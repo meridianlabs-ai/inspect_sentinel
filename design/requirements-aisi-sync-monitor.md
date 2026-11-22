@@ -116,7 +116,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | 8.6 | per-message output for caching | met in Scout; the plan keeps it |
 | 8.7 | content it cannot show | partly met |
 | 8.8 | tool definitions | met by sentinel's step rendering (`TOOLS` block) |
-| 8.9 | withheld messages | partly met |
+| 8.9 | withheld messages | met for `Host.score` and `step_as_str` (`StepPreprocessor.hide_messages`); Scout's `MessagesPreprocessor` has no equivalent |
 | R9 | `human()` routed to a team's review tool | not met |
 | R10 | the history as sent to the model, per agent instance | met live by `step.history` (built 2026-10-14 as `sent`, renamed for 0.2.0), with `step.agent_messages` for the outermost running agent's own list (inspect_ai #5986); replay: from the recorded agent turns (R7 PR 3), or from turns inferred from the timeline in a log without recorded origins (R7 PR 6); `agent_messages` is `None` in replay (decided by Charles 2026-10-21) |
 
@@ -155,7 +155,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 - **8.6.** Met in Scout: `format="list"` gives one string per message. The plan requires the moved renderer's output to match Scout's.
 - **8.7.** Partly met. Images, audio, video, data and documents render as `<image />`-style placeholders, without the nonce, so agent text can imitate them and a monitor has nothing to test; a content type the renderer does not know is dropped.
 - **8.8.** Met by sentinel: `render_step()` renders the request's tools as JSON in a `TOOLS` block while `input` is known. Scout has no `ToolInfo` renderer.
-- **8.9.** Partly met. `StepPreprocessor.transform` (sentinel) and `MessagesPreprocessor.transform` (Scout) are free-form escape hatches; nothing marks that something was withheld. The sidecar's `Withheld` is a different thing: a turn held back from the eval, not from the monitor.
+- **8.9.** Met for sentinel monitors (2026-11-22). `StepPreprocessor(hide_messages=...)` takes a predicate over `ChatMessage` and hides the messages it matches from every list the step shows, the step's own call, result and reply, and `Host.score`'s TASK block, always leaving a nonce-marked `[N messages hidden (nonce)]` line in their place, so the monitor can tell something was hidden and the agent cannot forge the marker or trigger the hiding. The marker can't be turned off and never holds message text. What was hidden is recorded on the thinned step (`hidden`). `Host.score` raises for a step whose own call, result or reply is hidden. In-process the eval matches on message metadata; through the agent bridge neither metadata nor ids reliably survive, so the docs say to match on text. A compaction summary that restates a hidden message is left to the filter (inspect_ai records no compacted span). Scout's `MessagesPreprocessor.transform` remains free-form, with no marker. It is named "hide" because the sidecar's `Withheld` is a different thing: a turn held back from the eval, not from the monitor.
 
 **R9.** `Host.ask_human` in inspect_ai always calls `human_approver` (`_dispatch.py`), so the approval panel, ACP or the console. Nothing routes `human()` to another surface. Workstream 13 decided remote surfaces go through a message queue that other tools consume ([workstreams.md](workstreams.md)); [proxy-host.md](proxy-host.md) maps `ask_human` to an audit queue.
 
