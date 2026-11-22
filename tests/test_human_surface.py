@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -305,7 +307,7 @@ async def test_a_question_is_withdrawn_when_the_step_is_cancelled_meanwhile() ->
 SURFACES_NOT_FOUND_AGAIN: list[tuple[Any, type[Exception], str]] = [
     ("no_colon", ValueError, "'module:function'"),
     ("tests.test_human_surface:missing", ValueError, "does not define 'missing'"),
-    ("missing/review.py:ask", ValueError, "no file 'missing/review.py'"),
+    ("missing/review.py:ask", ValueError, "the file does not exist"),
     (desk_for("#reviews"), TypeError, "defined at module level"),
     (not_async, TypeError, "not_async is not async"),
     (Desk(), TypeError, "defined at module level"),
@@ -347,14 +349,33 @@ async def test_a_surface_is_recorded_by_name_and_rebuilt_from_it() -> None:
     assert len(asked.questions) == 1
 
 
+SURFACE_FILE = """\
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from inspect_sentinel import HumanAnswer
+
+# each time the file runs
+with open(Path(__file__).with_suffix(".runs"), "a") as runs:
+    runs.write("ran\\n")
+
+
+@dataclass
+class Settings:
+    channel: str = "reviews"
+
+
+async def ask(question):
+    return HumanAnswer("terminate", reason=f"asked in {Settings().channel} at {question.stage}")
+"""
+
+
 @pytest.mark.anyio
 async def test_a_configuration_names_a_surface_in_a_python_file(tmp_path: Path) -> None:
-    file = tmp_path / "review.py"
-    file.write_text(
-        "from inspect_sentinel import HumanAnswer\n\n"
-        "async def ask(question):\n"
-        "    return HumanAnswer('terminate', reason=f'asked at {question.stage}')\n"
-    )
+    file = (tmp_path / "review.py").resolve()
+    file.write_text(SURFACE_FILE)
     raw: Any = {
         "name": "human",
         "params": {"stages": ["tool_call"], "surface": f"{file}:ask"},
@@ -362,6 +383,55 @@ async def test_a_configuration_names_a_surface_in_a_python_file(tmp_path: Path) 
 
     configured = sentinel_from_config(raw)
     decision, _, _ = await _run(configured)
+    again = sentinel_from_config(raw)
 
-    assert decision == Decision.terminate("asked at tool_call")
+    assert decision == Decision.terminate("asked in reviews at tool_call")
     assert sentinel_config(configured) == SentinelConfig.model_validate(raw)
+    # the function the file defines is recorded by the file, as it was named
+    assert sentinel_config(again) == SentinelConfig.model_validate(raw)
+    assert file.with_suffix(".runs").read_text() == "ran\n"
+
+
+SCRIPT = """\
+from inspect_sentinel import HumanAnswer, human
+from inspect_sentinel.config import sentinel_config
+
+
+async def ask(question):
+    return HumanAnswer("approve", "approved by the script's surface")
+
+
+if __name__ == "__main__":
+    print(sentinel_config(human(["tool_call"], surface=ask)).model_dump_json())
+"""
+
+
+@pytest.mark.anyio
+async def test_a_scripts_surface_is_rebuilt_in_another_process(tmp_path: Path) -> None:
+    script = (tmp_path / "run_eval.py").resolve()
+    script.write_text(SCRIPT)
+
+    recorded = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, check=True
+    ).stdout
+    config = SentinelConfig.model_validate_json(recorded)
+    decision, _, _ = await _run(sentinel_from_config(config))
+
+    assert (
+        config.root
+        == SentinelConfig.model_validate(
+            {
+                "name": "human",
+                "params": {"stages": ["tool_call"], "surface": f"{script}:ask"},
+            }
+        ).root
+    )
+    assert decision == Decision.proceed("approved by the script's surface")
+
+
+def test_a_surface_typed_into_a_repl_is_refused() -> None:
+    namespace: dict[str, Any] = {"__name__": "__main__"}
+    exec(compile("async def ask(question):\n    pass\n", "<stdin>", "exec"), namespace)
+
+    with pytest.raises(TypeError, match="REPL, notebook or `python -c`"):
+        human(["tool_call"], surface=namespace["ask"])

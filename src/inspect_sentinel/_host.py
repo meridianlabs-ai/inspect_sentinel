@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Generator,
+    Mapping,
+    Sequence,
+)
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -302,6 +309,36 @@ class AnswersFromRecord:
 
 def answers_from_record(host: Host) -> bool:
     return isinstance(host._native, AnswersFromRecord)  # pyright: ignore[reportPrivateUsage]
+
+
+# What a host that must know while human() waits on a surface sets around
+# run_sentinel: the sidecar, which cancels such a wait when the eval ends the
+# sample or a sentinel ends the run, as it cancels its own questions to a
+# person. human() enters it around each call to a surface.
+SurfaceWait: TypeAlias = Callable[[], AbstractAsyncContextManager[None]]
+
+_surface_wait: ContextVar[SurfaceWait | None] = ContextVar(
+    "inspect_sentinel_surface_wait", default=None
+)
+
+
+@contextmanager
+def watching_surfaces(wait: SurfaceWait) -> Generator[None]:
+    token = _surface_wait.set(wait)
+    try:
+        yield
+    finally:
+        _surface_wait.reset(token)
+
+
+@asynccontextmanager
+async def surface_wait() -> AsyncGenerator[None]:
+    wait = _surface_wait.get()
+    if wait is None:
+        yield
+        return
+    async with wait():
+        yield
 
 
 @runtime_checkable

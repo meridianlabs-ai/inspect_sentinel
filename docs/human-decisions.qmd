@@ -203,7 +203,7 @@ Return a `HumanAnswer` with one of the `choices` and, optionally, the person's r
 
 If your tool can't reach anyone, answer `terminate` with a reason that says so. `terminate` is accepted even when it isn't among the choices.
 
-If the function raises an error, returns something other than a `HumanAnswer`, or answers a choice it wasn't offered, the step doesn't proceed. In an eval, the sample fails with an error that names the function.
+If the function raises an error, returns something other than a `HumanAnswer`, or answers a choice it wasn't offered, the sample fails with an error that names the function, before the step proceeds. (In a sentinel sidecar, the proxy's own setting decides instead; see [Limits](#limits).)
 
 ### Waiting and Cancelling
 
@@ -234,7 +234,9 @@ async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
 
 ### Naming the Tool in a Configuration File
 
-The function must be defined at module level, not inside another function, because the log records it by name and `eval_retry()` finds it again by that name. In a [configuration file](configuration.qmd), name it as `module:function`, where the module can also be the path of a `.py` file:
+The function must be defined at module level in a module or a `.py` file, because the log records it by name and `eval_retry()` and replays find it again by that name. A function defined inside another function, or typed into a REPL, a notebook or `python -c`, raises an error when `human()` is created. A function in a script you run with `python` is recorded by the script's path, and a retry or a replay in another process runs the script's top-level code again to find it, so keep the code that runs the eval under `if __name__ == "__main__":`.
+
+In a [configuration file](configuration.qmd), name the function as `module:function`, where the module can also be the path of a `.py` file:
 
 ```{.yaml filename="human.yaml"}
 sentinel:
@@ -251,7 +253,7 @@ sentinel:
 
 Your tool is never asked during a [replay](replay.qmd#human-decisions-in-replay). A replay gives the answer recorded when the eval ran, or the fixed answer or stand-in you pass to `as_scanner()`, as it does for any `human()`. The module that defines the function must still be importable where you run the scan, because the replay builds the sentinel from its configuration. Your tool cannot be offered `"modify"` yet.
 
-When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead.
+When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead. If your tool raises an error in the sidecar, the call isn't judged, and the proxy's own setting decides whether it goes ahead, as for any error in the sentinel.
 
 ## A Person Beside Other Protocols
 

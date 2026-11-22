@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import inspect
 from collections.abc import Sequence
 from typing import Literal, cast
 
 from .._context import Context
-from .._decorators import protocol
-from .._host import HumanAnswer, HumanQuestion, HumanSurface, answers_from_record
+from .._decorators import protocol, recorded_as
+from .._host import (
+    HumanAnswer,
+    HumanQuestion,
+    HumanSurface,
+    answers_from_record,
+    surface_wait,
+)
 from .._report import Decision, Escalations
+from .._sources import file_reference, import_source, importable_by_name
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
@@ -36,7 +42,14 @@ _NOT_LEGAL = {
 }
 
 
+def _recorded_surface(surface: object) -> object:
+    # a surface as the configuration records it: a name given as is, and a
+    # function by the name `human()` finds it by again, in another process too
+    return _surface_name(surface) if inspect.isfunction(surface) else surface
+
+
 @protocol
+@recorded_as(surface=_recorded_surface)
 def human(
     stages: Sequence[str],
     choices: Sequence[str] | None = None,
@@ -46,14 +59,14 @@ def human(
 
     The person is asked through `Host.ask_human`, which is handed the step and the escalations this protocol was handed and shows them together, so at the end of a `sequential()` the person sees who escalated and why. On its own, `human(stages=["tool_call"])` asks about every call. After a generate, the person sees the whole assistant turn, its text and every tool call it makes, before any of the calls run. Before a generate, the person sees the request the model is about to be sent. The answer maps to a decision: `approve` to `proceed` explained by the person's reason, so the log records why the step went ahead, `reject` to `reject` with the person's reason as both the `message` the agent reads and the `explanation`, `terminate` to `terminate` explained by the reason, and `modify` to a `modify` with the person's replacement call.
 
-    With a `surface`, the person is asked through a team's own review tool instead of the host. `human()` hands the surface a `HumanQuestion` holding the stage, the step, each escalation's full report and the choices, and maps the `HumanAnswer` it returns exactly as it maps the host's, so the answer is recorded and seen at later steps as any other. A surface that raises, or answers a choice it was not offered other than `terminate`, fails the step rather than letting it proceed. In a replay nobody can be asked, so the replay answers in place of the surface, from the answer recorded at the step or from its fallback.
+    With a `surface`, the person is asked through a team's own review tool instead of the host. `human()` hands the surface a `HumanQuestion` holding the stage, the step, each escalation's full report and the choices, and maps the `HumanAnswer` it returns exactly as it maps the host's, so the answer is recorded and seen at later steps as any other. A surface that raises, or answers a choice it was not offered other than `terminate`, raises from `human()`, so in an eval the sample fails before the step proceeds (beside a proxy, the proxy's own setting for a failed sentinel decides). In a replay nobody can be asked, so the replay answers in place of the surface, from the answer recorded at the step or from its fallback.
 
     The answer is an ordinary decision: it ends a `sequential()` as any link's decision does, and beside other protocols in a `concurrent()` it is one vote, so another protocol's `reject` outranks the person's `approve`.
 
     Args:
         stages: The stages to ask at, as `SentinelEvent.stage` records them: `"tool_call"` (before a tool call), `"tool_result"` (after it, with the result the model is about to receive), `"model_input"` (before a generate by the agent's model, with the request about to be sent) and `"model_output"` (after a generate by the agent's model, before its output reaches the agent).
         choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`. Defaults to `approve`, `reject` and `terminate` before a call, and `approve` and `terminate` after a call and at the generate stages, where `reject` and `modify` are not legal. A surface cannot be offered `modify` yet.
-        surface: Where to ask the person instead of the host: an `async` function defined at module level that takes a `HumanQuestion` and returns a `HumanAnswer`, or its name as `"module:function"` (the module may be a `.py` file's path, e.g. `"tasks/review.py:ask_reviewers"`), so a configuration file can name it. The log records it by that name, so a retry finds it again. None, the default, asks through `Host.ask_human`.
+        surface: Where to ask the person instead of the host: an `async` function defined at module level that takes a `HumanQuestion` and returns a `HumanAnswer`, or its name as `"module:function"` (the module may be a `.py` file's path, e.g. `"tasks/review.py:ask_reviewers"`), so a configuration file can name it. The log records a function by the name that finds it in another process, its module's where that imports and otherwise its file's, as for a script, so a retry or a replay finds it again. A function defined inside another function, or in a REPL, notebook or `python -c`, cannot be found again and is a `TypeError`. None, the default, asks through `Host.ask_human`.
     """
     valid = ", ".join(repr(stage) for stage in _LEGAL)
     if isinstance(stages, str) or not stages:
@@ -91,7 +104,8 @@ def human(
         )
         source = f"The surface {_name(ask_surface)}"
         try:
-            answer = await ask_surface(question)
+            async with surface_wait():
+                answer = await ask_surface(question)
         except Exception as ex:
             ex.add_note(
                 f"{source} raised while asking about a {stage} step, so the step does not proceed."
@@ -162,19 +176,42 @@ def _choices(stage: str, choices: Sequence[str] | None) -> tuple[str, ...]:
 
 
 def _surface(surface: object) -> HumanSurface:
-    # the surface a function or its `module:function` name gives; a function
-    # must be defined at module level, since the log records it by that name
-    # and a retry rebuilds human() from it
+    # the surface a function or its name gives; a function must be one that
+    # can be found again by name, since the log records it by that name and
+    # a retry or a replay rebuilds human() from it
     found = _named(surface) if isinstance(surface, str) else surface
-    if not inspect.isfunction(found) or "<" in found.__qualname__:
+    if not inspect.isfunction(found):
         raise TypeError(
-            f"human takes a surface defined at module level, or its 'module:function' name, so the log can record it and a retry can find it again; got {found!r}."
+            f"human takes a surface that is a function defined at module level, or its 'module:function' name, so the log can record it and a retry can find it again; got {found!r}."
         )
+    _surface_name(found)
     if not inspect.iscoroutinefunction(found):
         raise TypeError(
             f"human takes an async surface, since the step waits for the person's answer; {_name(found)} is not async."
         )
     return cast(HumanSurface, found)
+
+
+def _surface_name(surface: object) -> str:
+    # the name that finds a function again in another process: its module's
+    # name where that imports, else its file, as for a script run as
+    # `__main__`, a task file inspect_ai loaded, or a file named in a
+    # configuration
+    module = getattr(surface, "__module__", "")
+    qualname = getattr(surface, "__qualname__", "")
+    if "<" in qualname:
+        raise TypeError(
+            f"human takes a surface defined at module level, not inside a function, so the log can record it and a retry can find it again; got {qualname!r}."
+        )
+    if importable_by_name(module):
+        return f"{module}:{qualname}"
+    code = getattr(surface, "__code__", None)
+    file = file_reference(code.co_filename) if code is not None else None
+    if file is None:
+        raise TypeError(
+            f"human cannot record the surface {qualname!r}: it was defined in a REPL, notebook or `python -c`, which another process cannot load, so a retry or a replay could not find it. Define it in a module or a .py file."
+        )
+    return f"{file}:{qualname}"
 
 
 def _named(name: str) -> object:
@@ -183,21 +220,14 @@ def _named(name: str) -> object:
         raise ValueError(
             f"A surface given by name is 'module:function', where the module may be a .py file's path; got {name!r}."
         )
-    if module.endswith(".py"):
-        # loaded under its path, the name inspect_ai gives a task file, so a
-        # surface defined in a task file is recorded again by the same name
-        spec = importlib.util.spec_from_file_location(module, module)
-        if spec is None or spec.loader is None:
-            raise ValueError(f"Cannot load the surface {name!r} from {module!r}.")
-        loaded = importlib.util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(loaded)
-        except FileNotFoundError as ex:
-            raise ValueError(
-                f"Cannot load the surface {name!r}: there is no file {module!r}."
-            ) from ex
-    else:
-        loaded = importlib.import_module(module)
+    # a file is loaded once, registered under a name of its own before it
+    # runs, as an import is; a script that is this process's `__main__` is
+    # not loaded again
+    loaded = (
+        import_source("__main__", module)
+        if module.endswith(".py")
+        else importlib.import_module(module)
+    )
     found: object = loaded
     for part in qualname.split("."):
         found = getattr(found, part, None)

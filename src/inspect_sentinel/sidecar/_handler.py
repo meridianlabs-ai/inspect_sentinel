@@ -34,7 +34,7 @@ from inspect_ai.util import Store
 from pydantic import JsonValue
 
 from .._context import EvalContext, InspectSample, ProxyContext
-from .._host import HostNative, HumanAnswer
+from .._host import HostNative, HumanAnswer, watching_surfaces
 from .._integration import HostContext, resolve_sentinel, run_sentinel
 from .._report import Decision, Escalations
 from .._step import (
@@ -359,6 +359,8 @@ class _Judging:
     """The cancel scope of the judging timeout. The time a question is open for a person doesn't count against the limit."""
     questions_waiting: int = 0
     """How many questions the judging is waiting on now."""
+    surfaces_waiting: int = 0
+    """How many `human()` surfaces, a team's own review tools, the judging is waiting on now. Like a question, such a wait is for a person, so ending the sample or the run cancels it."""
     time_left: float | None = None
     """How much of the judging timeout was left when the judging began to wait on a person."""
     answered_pending: bool = False
@@ -1116,7 +1118,11 @@ class Handler:
             current = _JUDGING.set(judging)
             self._judgings_in_progress.add(judging)
             try:
-                return await judge()
+                with judging.scope:
+                    return await judge()
+                # stopped while it waited on a surface, with nothing decided
+                _settle_stopped(attempt)
+                return _stopped_answer(attempt)
             finally:
                 self._judgings_in_progress.discard(judging)
                 _JUDGING.reset(current)
@@ -1623,7 +1629,7 @@ class Handler:
                 continue
             if attempt.stop_cause is None:
                 attempt.stop_cause = cause
-            if self._operation_of(attempt) is not None:
+            if self._operation_of(attempt) is not None or judging.surfaces_waiting:
                 judging.scope.cancel()
         for operation in list(self._operations.values()):
             attempt = operation.attempt
@@ -2484,16 +2490,17 @@ class Handler:
         ) as models:
             started = time.monotonic()
             try:
-                decision = await run_sentinel(
-                    self._protocol,
-                    HostContext(
-                        host=RunHost(self._host, run.eval, self._asker(held, run)),
-                        recorder=held.recorder,
-                        store=held.store,
-                        proxy=held.proxy,
-                    ),
-                    step,
-                )
+                with watching_surfaces(_surface_waiting):
+                    decision = await run_sentinel(
+                        self._protocol,
+                        HostContext(
+                            host=RunHost(self._host, run.eval, self._asker(held, run)),
+                            recorder=held.recorder,
+                            store=held.store,
+                            proxy=held.proxy,
+                        ),
+                        step,
+                    )
             finally:
                 # The client waited on its model call while the step was judged, whether
                 # or not the judging failed, until the call was answered "pending
@@ -2872,6 +2879,25 @@ def _run_key(named: bool, key: str) -> str:
     # opening can work out, so the eval endpoint, which takes a sample's uuid,
     # must never reach one.
     return f"{'sample' if named else 'opening'}:{key}"
+
+
+@asynccontextmanager
+async def _surface_waiting() -> AsyncGenerator[None]:
+    # `human()` waits on its own surface, a team's review tool. The judging is
+    # waiting on a person, so `_stop` cancels it when the eval ends the sample or
+    # a sentinel ends the run. A try that nothing waits for any more asks nobody.
+    judging = _JUDGING.get()
+    if judging is None:
+        yield
+        return
+    if judging.attempt.stop_cause is not None:
+        judging.scope.cancel()
+        await anyio.lowlevel.checkpoint()
+    judging.surfaces_waiting += 1
+    try:
+        yield
+    finally:
+        judging.surfaces_waiting -= 1
 
 
 def _stopped_answer(attempt: Attempt) -> Refuse:

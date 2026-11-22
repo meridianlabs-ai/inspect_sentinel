@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
 
@@ -33,6 +34,7 @@ from inspect_sentinel.sidecar import (
     _handler,
     _state,
 )
+from inspect_sentinel.sidecar._errors import JudgingTimeoutError
 from inspect_sentinel.sidecar._eval_endpoint import (
     JUDGED_REPLY_PATH,
     PATH,
@@ -3236,6 +3238,82 @@ async def test_a_human_with_a_surface_asks_it_instead_of_the_evals_approval_ui()
 
         assert isinstance(answer, Pass)
         assert await handler.reviews.list_pending("eval_789") == []
+
+
+class _Desk:
+    """A team's review tool that never answers: whether it was asked, and whether its question was withdrawn."""
+
+    def __init__(self) -> None:
+        self.asked = anyio.Event()
+        self.withdrawn = False
+
+
+_desk: ContextVar[_Desk] = ContextVar("desk")
+
+
+async def desk_waits(question: HumanQuestion) -> HumanAnswer:
+    desk = _desk.get()
+    desk.asked.set()
+    try:
+        await anyio.sleep_forever()
+    finally:
+        desk.withdrawn = True
+    raise AssertionError("unreachable")
+
+
+def _waits_at_desk(**options: Any) -> tuple[Handler, _Desk]:
+    desk = _Desk()
+    _desk.set(desk)
+    handler = Handler(
+        sequential([escalates(), human(stages=["tool_call"], surface=desk_waits)]),
+        **options,
+    )
+    return handler, desk
+
+
+@pytest.mark.parametrize("eval_results", [True, False])
+@pytest.mark.anyio
+async def test_ending_the_sample_withdraws_a_surfaces_question(
+    eval_results: bool,
+) -> None:
+    # with eval results the judging runs in the handler's own task; without,
+    # in the exchange
+    handler, desk = _waits_at_desk(eval_results=eval_results)
+    answers: list[Any] = []
+    async with _serving(handler):
+        await handler.request(_from_eval())
+
+        async def judge() -> None:
+            answers.append(await handler.reply(reply(message(weather("Oslo")))))
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(judge)
+            await desk.asked.wait()
+            assert await handler.end_sample("sample_123", "eval_789") == "ended"
+
+        records = await handler.records("x")
+
+    assert desk.withdrawn
+    [answer] = answers
+    assert isinstance(answer, Refuse)
+    assert answer.message == "This run ended while the request waited for a person."
+    assert records is not None
+    assert [(r.kind, r.path) for r in records] == [
+        ("record", "escalates"),
+        ("cancelled", "human"),
+        ("cancelled", ""),
+    ]
+
+
+@pytest.mark.anyio
+async def test_the_judging_timeout_withdraws_a_surfaces_question() -> None:
+    handler, desk = _waits_at_desk(judging_timeout=0.05)
+    await handler.request(request())
+
+    with pytest.raises(JudgingTimeoutError):
+        await handler.reply(reply(message(weather("Oslo"))))
+
+    assert desk.withdrawn
 
 
 # --- what the sidecar keeps of a question ---
