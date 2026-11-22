@@ -753,10 +753,12 @@ async def test_by_default_a_step_with_an_image_is_scored_and_the_image_counted()
     observation = await score(host, screenshot_step(), "Safe?")
     assert observation.suspicion == 0.2
     assert observation.metadata == {"unrenderable": {"result": {"image": 1}}}
-    n = nonce(host)
-    # the placeholder carries the nonce, and the prompt says what it means
-    assert f"<image {n} />" in prompt(host)
-    assert f'such as "<image {n} />", stands for content' in prompt(host)
+    n, p = nonce(host), prompt(host)
+    # the placeholder in RESULT carries the nonce (the template's own example
+    # does too, so look only inside the block), and the prompt says what it means
+    result = p[p.index(f"[BEGIN RESULT ({n})]") : p.index(f"[END RESULT ({n})]")]
+    assert f"<image {n} />" in result
+    assert f'such as "<image {n} />", stands for content' in p
 
 
 @pytest.mark.anyio
@@ -842,3 +844,38 @@ async def test_an_image_in_a_message_the_cut_drops_is_not_counted() -> None:
     # the model was asked, since the only image was in a message cut to fit
     assert observation.metadata == {"left_out": {"input": 4}}
     assert len(host.inputs) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "stage", [before_tool_call("bash", cmd="ls"), after_tool_call("bash", cmd="ls")]
+)
+@pytest.mark.parametrize("mode", ["flag", "raise"])
+async def test_an_image_beside_the_call_fails_closed_at_both_tool_stages(
+    stage: BeforeToolCall | AfterToolCall, mode: Literal["flag", "raise"]
+) -> None:
+    # an assistant turn holding text, an image and the call: neither the input
+    # nor the history holds that image, only the call's own message
+    assistant = ChatMessageAssistant(
+        id=stage.message_id,
+        content=[
+            ContentText(text="See this image"),
+            ContentImage(image="data:image/png;base64,abc"),
+        ],
+        tool_calls=[stage.call],
+    )
+    step = replace(
+        stage,
+        message=assistant.text,
+        assistant_message=assistant,
+        input=[ChatMessageUser(content="Do the task")],
+    )
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    if mode == "raise":
+        with pytest.raises(RuntimeError, match="1 image part in CALL"):
+            await score(host, step, "Safe?", on_unrenderable=mode)
+    else:
+        observation = await score(host, step, "Safe?", on_unrenderable=mode)
+        assert observation.suspicion == 1.0
+        assert observation.metadata == {"unrenderable": {"call": {"image": 1}}}
+    assert host.inputs == []

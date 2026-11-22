@@ -246,7 +246,7 @@ async def score_step(
     hidden = [
         u
         for u in unrenderable(pstep)
-        if u.where in ("reply", "result") or u.index >= left_out.get(u.where, 0)
+        if u.where in ("call", "reply", "result") or u.index >= left_out.get(u.where, 0)
     ]
     metadata: dict[str, Any] = {
         **({"left_out": dict(left_out)} if left_out else {}),
@@ -477,6 +477,7 @@ _WHERE = {
     "history": "HISTORY",
     "agent_messages": "AGENT MESSAGES",
     "input": "INPUT",
+    "call": "CALL",
     "reply": "REPLY",
     "result": "RESULT",
 }

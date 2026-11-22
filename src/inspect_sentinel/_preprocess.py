@@ -19,7 +19,9 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, cast
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
+    Content,
     ContentReasoning,
+    ContentText,
     ContentToolUse,
 )
 from inspect_ai.scorer import Reference
@@ -42,7 +44,9 @@ _Source: TypeAlias = Literal["input", "history", "agent_messages"]
 
 # a part of a step that can hold content `step_as_str()` renders as a
 # placeholder
-_Part: TypeAlias = Literal["history", "agent_messages", "input", "reply", "result"]
+_Part: TypeAlias = Literal[
+    "history", "agent_messages", "input", "call", "reply", "result"
+]
 
 
 @dataclass(frozen=True)
@@ -193,7 +197,7 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Content that is not text, such as an image, renders as a placeholder naming its type, which carries the nonce too, as `<image 3f9a1c7e />`; `unrenderable()` lists that content. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call, with a placeholder for any content of the assistant message that is not text, such as an image) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, and the `[TOOL CHOICE]` line, carries it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Content that is not text, such as an image, renders as a placeholder naming its type, which carries the nonce too, as `<image 3f9a1c7e />`; `unrenderable()` lists that content. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
@@ -206,11 +210,11 @@ async def step_as_str(
 class Unrenderable:
     """Content in a step that `step_as_str()` cannot show as text, so it renders a placeholder naming the content's type in its place, such as `<image 3f9a1c7e />`."""
 
-    where: Literal["history", "agent_messages", "input", "reply", "result"]
-    """The part of the step that holds it: one of its message lists, the reply after a generate, or the result after a tool call."""
+    where: Literal["history", "agent_messages", "input", "call", "reply", "result"]
+    """The part of the step that holds it: one of its message lists, the assistant message that made the call at a tool stage, the reply after a generate, or the result after a tool call."""
 
     index: int
-    """The position of the message that holds it in that list; 0 for `reply` and `result`."""
+    """The position of the message that holds it in that list; 0 for `call`, `reply` and `result`."""
 
     message_id: str | None
     """The id of the message that holds it."""
@@ -235,16 +239,17 @@ def unrenderable(step: Step) -> list[Unrenderable]:
         ("agent_messages", step.agent_messages),
         ("input", step.input),
     ]
-    # in the order `render_step` renders them; a tool stage's CALL block shows
-    # only the call's text and arguments
+    # in the order `render_step` renders them
     for where, messages in lists:
         for index, message in enumerate(messages or []):
             found.extend(_unrenderable_in(where, index, message))
     if isinstance(step, AfterGenerate):
         [reply] = _reply(step)
         found.extend(_unrenderable_in("reply", 0, reply))
-    elif isinstance(step, AfterToolCall):
-        found.extend(_unrenderable_in("result", 0, step.result))
+    elif isinstance(step, BeforeToolCall | AfterToolCall):
+        found.extend(_unrenderable_in("call", 0, _call(step)))
+        if isinstance(step, AfterToolCall):
+            found.extend(_unrenderable_in("result", 0, step.result))
     return found
 
 
@@ -257,12 +262,9 @@ def _unrenderable_in(
     index: int,
     message: ChatMessage,
 ) -> list[Unrenderable]:
-    if isinstance(message.content, str):
-        return []
     return [
         Unrenderable(where, index, message.id, content.type)
-        for content in message.content
-        if content.type not in _TEXT_CONTENT
+        for content in _placeholder_content(message)
     ]
 
 
@@ -582,10 +584,27 @@ def _tool_choice(choice: ToolChoice) -> str:
 
 def _call(step: BeforeToolCall | AfterToolCall) -> ChatMessage:
     # the message holds only this call, under the id of the one that made it,
-    # so a cite of it resolves to that message
+    # so a cite of it resolves to that message. Content in the assistant
+    # message that is not text, such as an image beside the call, follows the
+    # text, so it renders as a placeholder rather than being lost; a message of
+    # text alone renders as the text
+    media = _placeholder_content(step.assistant_message)
     return ChatMessageAssistant(
-        id=step.message_id, content=step.message, tool_calls=[step.call]
+        id=step.message_id,
+        content=[
+            *([ContentText(text=step.message)] if step.message else []),
+            *media,
+        ]
+        if media
+        else step.message,
+        tool_calls=[step.call],
     )
+
+
+def _placeholder_content(message: ChatMessage | None) -> list[Content]:
+    if message is None or isinstance(message.content, str):
+        return []
+    return [c for c in message.content if c.type not in _TEXT_CONTENT]
 
 
 def _reply(step: AfterGenerate) -> list[ChatMessage]:

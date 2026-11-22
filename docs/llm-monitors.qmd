@@ -273,7 +273,7 @@ Note that structured output depends on provider support. If the answer doesn't p
 
 ## Images and Other Content
 
-The prompt is text, so the monitor model can't see an image, audio, video, a document or a provider's own data in the step. Each of these is shown as a placeholder that names its type and carries the nonce, such as `<image 3f9a1c7e />`, so the model knows something was there but not what it holds. A content type the renderer doesn't know is shown the same way.
+The prompt is text, so the monitor model can't see an image, audio, video, a document or a provider's own data in the step, whether in a conversation, beside the tool call, or in the tool's result. Each of these is shown as a placeholder that names its type and carries the nonce, such as `<image 3f9a1c7e />`, so the model knows something was there but not what it holds. A content type the renderer doesn't know is shown the same way.
 
 What to do about this depends on the eval. In a computer-use eval, most tool results are screenshots, and a monitor that refused to score them would be of little use. In other evals, an image may be the only place harmful content appears, and a monitor should not pass a step it couldn't read. The `on_unrenderable` option of `score()` chooses:
 

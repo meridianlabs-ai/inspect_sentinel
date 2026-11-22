@@ -1091,3 +1091,50 @@ async def test_an_unknown_content_type_is_unrenderable_and_rendered_by_name() ->
     assert unrenderable(shown) == [Unrenderable("input", 0, "holo", "hologram")]
     rendered, _ = await step_as_str(shown, nonce="3f9a1c7e")
     assert "<hologram 3f9a1c7e />" in rendered
+
+
+def with_assistant(
+    step: BeforeToolCall | AfterToolCall, *content: Content
+) -> BeforeToolCall | AfterToolCall:
+    # the assistant message that made the call, holding `content` beside it
+    assistant = ChatMessageAssistant(
+        id=step.message_id,
+        content=[ContentText(text="See this image"), *content],
+        tool_calls=[step.call],
+    )
+    return replace(
+        step,
+        message=assistant.text,
+        assistant_message=assistant,
+        input=[user("Do the task")],
+    )
+
+
+TOOL_STAGES = [before_tool_call("bash", cmd="ls"), after_tool_call("bash", cmd="ls")]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stage", TOOL_STAGES)
+async def test_an_image_beside_the_call_renders_in_call_and_is_unrenderable(
+    stage: BeforeToolCall | AfterToolCall,
+) -> None:
+    shown = await preprocess_step(with_assistant(stage, IMAGE))
+    assert unrenderable(shown) == [Unrenderable("call", 0, "msg_1", "image")]
+    rendered, extract_refs = await step_as_str(shown, nonce="3f9a1c7e")
+    call = rendered[rendered.index("[BEGIN CALL") : rendered.index("[END CALL")]
+    assert "See this image\n<image 3f9a1c7e />" in call
+    # the call's message keeps its id, so a cite of it still resolves
+    assert [r.id for r in extract_refs("[M2]")] == ["msg_1"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("stage", TOOL_STAGES)
+async def test_a_text_only_assistant_message_renders_the_call_as_before(
+    stage: BeforeToolCall | AfterToolCall,
+) -> None:
+    without = replace(stage, message="See this image", input=[user("Do the task")])
+    rendered = await step_as_str(
+        await preprocess_step(with_assistant(stage)), nonce="3f9a1c7e"
+    )
+    assert rendered[0] == (await step_as_str(without, nonce="3f9a1c7e"))[0]
+    assert unrenderable(await preprocess_step(with_assistant(stage))) == []
