@@ -25,6 +25,7 @@ from inspect_sentinel import (
     Observation,
     Step,
     StepPreprocessor,
+    preprocess_step,
 )
 from inspect_sentinel._decorators import monitor
 from inspect_sentinel._runner import run_monitors
@@ -758,37 +759,32 @@ async def test_a_hidden_message_is_marked_in_the_step_and_the_task() -> None:
 
 
 @pytest.mark.parametrize(
-    "step, part",
+    "step",
     [
-        (
-            replace(
-                before_tool_call("bash", cmd="ls"),
-                assistant_message=ChatMessageAssistant(
-                    content="", id="msg_1", metadata={"red_team": True}
-                ),
+        replace(
+            before_tool_call("bash", cmd="ls"),
+            assistant_message=ChatMessageAssistant(
+                content="", id="msg_1", metadata={"red_team": True}
             ),
-            "tool call",
         ),
-        (
-            replace(
-                after_tool_call("bash", "out", cmd="ls"),
-                result=ChatMessageTool(
-                    content="out",
-                    tool_call_id="call_1",
-                    function="bash",
-                    metadata={"red_team": True},
-                ),
+        replace(
+            after_tool_call("bash", "out", cmd="ls"),
+            result=ChatMessageTool(
+                content="out",
+                tool_call_id="call_1",
+                function="bash",
+                metadata={"red_team": True},
             ),
-            "tool result",
         ),
     ],
+    ids=["call", "result"],
 )
 @pytest.mark.anyio
 async def test_a_step_whose_own_part_is_hidden_raises_before_the_model_is_asked(
-    step: Step, part: str
+    step: Step,
 ) -> None:
     host = FakeHost(outputs=[])
-    with pytest.raises(RuntimeError, match=f"whose own {part} is hidden"):
+    with pytest.raises(RuntimeError, match="whose own tool call, tool result or reply"):
         await score(
             host, step, "Safe?", preprocessor=StepPreprocessor(hide_messages=red_team)
         )
@@ -813,3 +809,59 @@ async def test_a_head_cut_takes_a_hidden_run_among_the_cut_messages() -> None:
     assert f"[4 earlier messages left out to fit the context window ({n})]" in p
     assert "hidden" not in p
     assert observation.metadata == {"left_out": {"input": 4}}
+
+
+SECRET = "PRIVATE_RED_TEAM_INSTRUCTION"
+
+
+def mentions_secret(message: ChatMessage) -> bool:
+    return SECRET in message.text
+
+
+@pytest.mark.anyio
+async def test_a_string_sample_input_is_hidden_from_the_task() -> None:
+    step = replace(
+        before_tool_call("bash", cmd="ls"), input=[ChatMessageUser(content=SECRET)]
+    )
+    host = FakeHost(
+        eval=replace(EVAL, sample_input=SECRET),
+        outputs=[answer(explanation="fine", suspicion=0.0)],
+    )
+    await score(
+        host,
+        step,
+        "Safe?",
+        preprocessor=StepPreprocessor(hide_messages=mentions_secret),
+    )
+    p, n = prompt(host), nonce(host)
+    assert SECRET not in p
+    assert f"[BEGIN TASK ({n})]\n[1 message hidden ({n})]\n[END TASK ({n})]" in p
+
+
+@pytest.mark.parametrize(
+    "child",
+    [None, StepPreprocessor(hide_messages=lambda m: "other" in m.text)],
+    ids=["no filter", "another filter"],
+)
+@pytest.mark.anyio
+async def test_a_step_a_protocol_hid_keeps_its_task_hidden(
+    child: StepPreprocessor | None,
+) -> None:
+    sample_input: list[ChatMessage] = [
+        ChatMessageUser(content="main task", id="main"),
+        ChatMessageUser(content=SECRET, id="secret"),
+    ]
+    step = replace(before_tool_call("bash", cmd="ls"), input=sample_input)
+    # the protocol shows its children no input, so nothing is left in the
+    # step's lists to say what was hidden: the task must still hide it
+    hidden = await preprocess_step(
+        step, StepPreprocessor(input_window=None, hide_messages=mentions_secret)
+    )
+    host = FakeHost(
+        eval=replace(EVAL, sample_input=sample_input),
+        outputs=[answer(explanation="fine", suspicion=0.0)],
+    )
+    await score(host, hidden, "Safe?", preprocessor=child)
+    p, n = prompt(host), nonce(host)
+    assert SECRET not in p
+    assert f"main task\n[1 message hidden ({n})]" in p

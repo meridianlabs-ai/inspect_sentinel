@@ -75,7 +75,6 @@ from inspect_sentinel import (
     Decision,
     Escalations,
     HiddenMessages,
-    HiddenRun,
     HumanAnswer,
     HumanStandIn,
     Monitor,
@@ -3220,7 +3219,7 @@ def test_hide_messages_hides_the_same_messages_live_and_in_replay(
     def red_team(message: ChatMessage) -> bool:
         return (message.metadata or {}).get("red_team") is True
 
-    seen: list[tuple[list[str | None], HiddenMessages | None]] = []
+    seen: list[tuple[list[str], HiddenMessages | None]] = []
 
     @monitor
     def hiding() -> Monitor:
@@ -3228,7 +3227,7 @@ def test_hide_messages_hides_the_same_messages_live_and_in_replay(
             shown = await preprocess_step(
                 step, StepPreprocessor(hide_messages=red_team)
             )
-            seen.append(([m.id for m in shown.input or []], shown.hidden))
+            seen.append(([m.text for m in shown.input or []], shown.hidden))
             return Observation.score(0.0)
 
         return before
@@ -3247,7 +3246,9 @@ def test_hide_messages_hides_the_same_messages_live_and_in_replay(
     log = run(tmp_path / "logs", [[call(2)]], observe_only(hiding()), [sample])
     assert log.samples is not None
     live = list(seen)
-    assert live == [(["task"], HiddenMessages(input=(HiddenRun(1, ("secret",)),)))]
+    assert live == [
+        (["add, task 0", "[1 message hidden]"], HiddenMessages(ids=("secret",)))
+    ]
 
     seen.clear()
     replayed = log.samples[0]

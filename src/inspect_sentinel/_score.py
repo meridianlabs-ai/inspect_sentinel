@@ -27,7 +27,7 @@ from ._preprocess import (
     keeps_newest_input,
     preprocess_step,
     render_step,
-    text_with_hidden,
+    task_text,
 )
 from ._report import Observation
 from ._step import AfterGenerate, AfterToolCall, BeforeToolCall, Step
@@ -191,26 +191,15 @@ async def score_step(
     pstep = await preprocess_step(step, p)
     # a step whose own part is hidden leaves the model nothing to judge
     if pstep.hidden is not None and pstep.hidden.subject:
-        part = (
-            "tool call"
-            if pstep.hidden.call
-            else "tool result"
-            if pstep.hidden.result
-            else "reply"
-        )
         raise RuntimeError(
-            f"score() cannot score a step whose own {part} is hidden: the preprocessor's hide_messages matched it. A monitor that should abstain instead can call preprocess_step() first and return None when the step's `hidden.subject` is true."
+            "score() cannot score a step whose own tool call, tool result or reply is hidden: the preprocessor's hide_messages matched it. A monitor that should abstain instead can call preprocess_step() first and return None when the step's `hidden.subject` is true."
         )
     eval = host.eval
     # the task is the sample's input, which can hold the messages hidden from
-    # the step, so they are hidden from it too
-    task = (
-        ""
-        if eval is None
-        else eval.sample_input_text
-        if p.hide_messages is None or isinstance(eval.sample_input, str)
-        else text_with_hidden(eval.sample_input, p.hide_messages, nonce)
-    )
+    # the step, so what any preprocessing of it hid is hidden from the task
+    # too, including a protocol's before this monitor's
+    filters = pstep.hidden.filters if pstep.hidden else ()
+    task = task_text(eval.sample_input, filters, nonce) if eval else ""
     values = {
         "instructions": (instructions or DEFAULT_INSTRUCTIONS).strip(),
         "policy": f"[BEGIN POLICY ({nonce})]\n{policy.strip()}\n[END POLICY ({nonce})]"
