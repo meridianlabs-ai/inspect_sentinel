@@ -2076,7 +2076,7 @@ def test_a_cut_renders_the_same_live_and_in_replay_and_not_from_messages(
     assert log.status == "success", log.error
     line = (
         "[OUTPUT TRUNCATED (3f9a1c7e)] The tool's output was 840 bytes; the agent's "
-        "model was shown only its first 100 and last 100 bytes, with the middle "
+        "model was shown at most its first 100 and last 100 bytes, with the middle "
         "left out."
     )
 
