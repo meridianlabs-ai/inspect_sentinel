@@ -20,6 +20,7 @@ from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
     ContentReasoning,
+    ContentText,
     ContentToolUse,
 )
 from inspect_ai.scorer import Reference
@@ -94,7 +95,7 @@ Window: TypeAlias = AllMessages | LastTurns | LastMessages | NewSinceLastReport
 class StepPreprocessor(Generic[S]):
     """What a monitor shows a model about a step.
 
-    `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds, then `transform`, which sees the result. By default `input` is shown whole, while `history` and `agent_messages` are omitted, even when the host could not provide them, so a default prompt is the same live and in replay. A scaffold may keep hidden instructions out of its own list but send them in `input` and `history`. To omit the request lists and show the agent's own list, use `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`; this requires the conversation-owning scaffold to be the outermost `@agent` agent function. Other stage content remains: every stage renders the request's tools and tool choice while `input` is known (a tool stage's are the producing request's); `AfterGenerate` renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text and call; and `AfterToolCall` renders the result. Strict blindness also needs a stage-specific `transform` or a custom prompt that curates these surfaces; a transform can clear `tools` and `tool_choice`.
+    `preprocess_step()` applies it, in this order: the windows to `input`, `history` and `agent_messages`, then the omissions to every message the step holds (`omit_assistant_text` also leaves out an assistant message it empties), then `transform`, which sees the result. By default `input` is shown whole, while `history` and `agent_messages` are omitted, even when the host could not provide them, so a default prompt is the same live and in replay. A scaffold may keep hidden instructions out of its own list but send them in `input` and `history`. To omit the request lists and show the agent's own list, use `StepPreprocessor(input_window=None, history_window=None, agent_messages_window=AllMessages())`; this requires the conversation-owning scaffold to be the outermost `@agent` agent function. Other stage content remains: every stage renders the request's tools and tool choice while `input` is known (a tool stage's are the producing request's); `AfterGenerate` renders the reply, including reasoning by default before the scaffold has curated it; both tool stages render the assistant text (unless `omit_assistant_text`) and call; and `AfterToolCall` renders the result. Strict blindness also needs a stage-specific `transform` or a custom prompt that curates these surfaces; a transform can clear `tools` and `tool_choice`.
     """
 
     input_window: Window | None = field(default_factory=AllMessages)
@@ -118,6 +119,11 @@ class StepPreprocessor(Generic[S]):
     omit_tool_usage: bool = False
     """Leave out a provider's own tool use (such as web search) recorded in a message."""
 
+    omit_assistant_text: bool = False
+    """Leave out the text of assistant messages, the agent's model's own words, and keep their tool calls, so the monitor model judges what the agent did rather than what it says it is doing.
+
+    It applies to every assistant message in `input`, `history` and `agent_messages`, to a tool stage's `message` (the text beside its call, which becomes `""`) and `assistant_message`, and to a generate's reply. Reasoning follows `omit_reasoning` and a provider's own tool use follows `omit_tool_usage`, so either can be kept or left out with it; other content, such as an image, is kept. An assistant message in a list that is left with no tool calls and no content is left out of the list; the windows are applied first, so it still counts toward `LastTurns(n)` and `LastMessages(n)`. The reply and the call are always shown, empty if need be."""
+
     transform: Callable[[S], Awaitable[S]] | None = None
     """Any further change, applied last to the thinned step. It returns a step of the same type. The messages it is given are the host's own objects: copy one before changing it."""
 
@@ -127,7 +133,7 @@ async def preprocess_step(
 ) -> S:
     """`step`, thinned as `preprocessor` says (`StepPreprocessor()` when None).
 
-    Each window cuts its list as it is. A list with no window becomes `[]`, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call's assistant message and result, and a generate's reply.
+    Each window cuts its list as it is. A list with no window becomes `[]`, even one the host could not provide; a windowed list the host could not provide stays None. The omissions apply to `input`, `history`, `agent_messages`, a tool call's assistant text, assistant message and result, and a generate's reply.
 
     Args:
         step: The step a monitor was given.
@@ -160,21 +166,22 @@ async def preprocess_step(
         ),
     )
     if isinstance(thinned, AfterToolCall):
-        [result] = _omitted([thinned.result], p)
-        thinned = replace(thinned, result=result)
-    if (
-        isinstance(thinned, BeforeToolCall | AfterToolCall)
-        and thinned.assistant_message is not None
-    ):
-        [made] = _omitted([thinned.assistant_message], p)
-        assert isinstance(made, ChatMessageAssistant)
-        thinned = replace(thinned, assistant_message=made)
+        thinned = replace(thinned, result=_omitted_from(thinned.result, p))
+    if isinstance(thinned, BeforeToolCall | AfterToolCall):
+        if p.omit_assistant_text:
+            thinned = replace(thinned, message="")
+        if thinned.assistant_message is not None:
+            made = _omitted_from(thinned.assistant_message, p)
+            assert isinstance(made, ChatMessageAssistant)
+            thinned = replace(thinned, assistant_message=made)
     if isinstance(thinned, AfterGenerate):
+        # the reply is kept even when the omissions empty it, so the stage
+        # always shows what the model returned
         output = thinned.output.model_copy(
             update={
                 "choices": [
                     choice.model_copy(
-                        update={"message": _omitted([choice.message], p)[0]}
+                        update={"message": _omitted_from(choice.message, p)}
                     )
                     for choice in thinned.output.choices
                 ]
@@ -467,25 +474,45 @@ def _last_with_id(messages: Sequence[ChatMessage]) -> tuple[int, str] | None:
 def _omitted(
     messages: Sequence[ChatMessage], p: StepPreprocessor[S]
 ) -> list[ChatMessage]:
+    # the omissions over a list, which also leave out the system messages and,
+    # under `omit_assistant_text`, an assistant message with nothing left to
+    # show: no tool calls and no content
+    kept: list[ChatMessage] = []
+    for message in messages:
+        if p.omit_system and message.role == "system":
+            continue
+        thinned = _omitted_from(message, p)
+        if (
+            p.omit_assistant_text
+            and isinstance(thinned, ChatMessageAssistant)
+            and not thinned.tool_calls
+            and not thinned.content
+        ):
+            continue
+        kept.append(thinned)
+    return kept
+
+
+def _omitted_from(message: ChatMessage, p: StepPreprocessor[S]) -> ChatMessage:
+    # one message with the omitted kinds of content taken out; a message with
+    # nothing to take out is the host's own object
+    text = p.omit_assistant_text and isinstance(message, ChatMessageAssistant)
     removed = tuple(
         kind
         for omit, kind in (
             (p.omit_reasoning, ContentReasoning),
             (p.omit_tool_usage, ContentToolUse),
+            (text, ContentText),
         )
         if omit
     )
-    return [
-        message
-        if isinstance(message.content, str) or not removed
-        else message.model_copy(
-            update={
-                "content": [c for c in message.content if not isinstance(c, removed)]
-            }
-        )
-        for message in messages
-        if not (p.omit_system and message.role == "system")
-    ]
+    if not removed:
+        return message
+    if isinstance(message.content, str):
+        return message.model_copy(update={"content": ""}) if text else message
+    return message.model_copy(
+        update={"content": [c for c in message.content if not isinstance(c, removed)]}
+    )
 
 
 def _step_block(step: Step) -> str:

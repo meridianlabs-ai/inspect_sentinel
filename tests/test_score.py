@@ -614,6 +614,42 @@ async def test_the_cut_takes_history_then_agent_messages_then_input() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_cut_counts_only_the_messages_shown_without_assistant_text() -> None:
+    def says(text: str, *calls: ToolCall) -> ChatMessage:
+        return ChatMessageAssistant(
+            content=f"{text} {PAD}", id=text, tool_calls=list(calls) or None
+        )
+
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        input=[
+            *messages("U", 2),
+            says("narration"),
+            says("calling", call("a")),
+            ChatMessageTool(content="out", id="out", tool_call_id="a"),
+            *messages("V", 1),
+        ],
+    )
+    actions_only = StepPreprocessor(omit_assistant_text=True)
+    # the whole prompt's length, then a budget that leaves room for all but
+    # the two oldest messages shown
+    whole = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)])
+    await score(whole, step, "Safe?", preprocessor=actions_only)
+    budget = -(-(len(prompt(whole)) - len(PAD) - 1000) * 100 // 95)
+    host = FakeHost(
+        outputs=[answer(explanation="see [M1]", suspicion=0.0)], budget=budget
+    )
+    observation = await score(host, step, "Safe?", preprocessor=actions_only)
+    p, n = prompt(host), nonce(host)
+    # the left-out answer is not counted; the cut takes U0 and U1
+    assert observation.metadata == {"left_out": {"input": 2}}
+    assert f"[2 earlier messages left out to fit the context window ({n})]" in p
+    assert "narration" not in p and "calling" not in p and PAD not in p.split("V0")[0]
+    assert f"[M1] ASSISTANT ({n}):" in p
+    assert [reference.id for reference in observation.references] == ["calling"]
+
+
+@pytest.mark.anyio
 async def test_a_fixed_part_too_big_raises_and_names_the_parts() -> None:
     step = replace(before_tool_call("bash", cmd="ls"), input=messages("M", 2))
     host = FakeHost(eval=EVAL, outputs=[], budget=10)

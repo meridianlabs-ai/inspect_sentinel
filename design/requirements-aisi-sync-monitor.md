@@ -109,7 +109,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 | R7 | replay over existing logs | not met; planned to build 2026-10-19, in progress as R7 PRs 1–3 and 5–7 (PR 4 dropped 2026-10-26); every R7 decision taken by Charles by 2026-10-26 ([sentinel-development.md](sentinel-development.md), "Replay over logs (R7)"); the step types replay needs built 2026-10-20 (R7 PR 2: `ReplayStep`, read-only step sequences, `AfterToolCall.output` optional); the runner, replay host and the Scout adapter (`as_scanner()`, `as_reader()`, `replay_check()`) built 2026-10-20 (R7 PR 5), with replay's public API Scout's alone since 2026-10-26 on inspect_ai's log driver (R7 PR 3); logs without recorded origins replay with turns inferred from their timeline (R7 PR 6, 2026-10-26), and transcripts imported from another source or without model events from their messages (imports decided by Charles 2026-10-27) |
 | R8 | monitor-safe message rendering | partly met, in Scout; the move to inspect_ai is not started |
 | 8.1 | agent text cannot forge structure | partly met |
-| 8.2 | actions-only view | not met |
+| 8.2 | actions-only view | met for `Host.score` and `step_as_str` by `StepPreprocessor(omit_assistant_text=True)` (2026-11-22); Scout's renderer has no equivalent |
 | 8.3 | compaction summaries | not met |
 | 8.4 | tool result status | not met |
 | 8.5 | referring to earlier calls | partly met |
@@ -148,7 +148,7 @@ Received as a comment on PR #66, lightly formatted. It answers the conflicts lis
 **R8.** The shared renderer is planned, not started ([pr-series.md](pr-series.md), Deferred, "Shared message rendering, then the prompt helpers"): Scout's `messages_as_str`, `message_as_str` and `MessageFormatOptions` move into inspect_ai with output exactly Scout's. What Scout does today (`inspect_scout/_scanner/extract.py`):
 
 - **8.1.** `format="json"` delimits messages. Inside a message, text format writes tool calls as `Tool Call: name` / `Arguments:` lines with raw values, errors as `Error in tool call '…'`, and reasoning as `<thinking>…</thinking>` around raw text, all of which agent text can imitate. Sentinel #48's lessons (a fixed marker for unparsed arguments, quoted non-identifier argument names) are recorded in that Deferred entry, not built.
-- **8.2.** `exclude_tool_usage` removes tool calls and results; there is no option that keeps only them.
+- **8.2.** Met in sentinel (2026-11-22): `StepPreprocessor(omit_assistant_text=True)` takes the text out of every assistant message a step shows (the three lists, the text beside a tool stage's call, and `AfterGenerate`'s reply) and keeps the tool calls. Reasoning follows `omit_reasoning`, so a monitor can judge actions with or without it, and a provider's own tool use follows `omit_tool_usage`. An assistant message left with nothing, such as a final answer of text alone, is left out of the lists ([sentinel.md](sentinel.md), "Step preprocessing"). In Scout, `exclude_tool_usage` removes tool calls and results, and there is no option that keeps only them.
 - **8.3.** Data content renders as `<data />`; the `compaction_summary(step)` helper waits on inspect_ai documenting the `"summary"` metadata key (Deferred, Later).
 - **8.4.** Errors are text as above; truncation is not shown. [sentinel.md](sentinel.md), "The helpers", plans `result_as_str(result, truncated=)`.
 - **8.5.** `message_numbering()` labels messages `[M1]`; tool call ids are not rendered.

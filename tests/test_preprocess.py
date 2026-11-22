@@ -13,6 +13,7 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageTool,
     ChatMessageUser,
+    ContentImage,
     ContentReasoning,
     ContentText,
     ContentToolUse,
@@ -873,10 +874,294 @@ async def test_preprocessing_leaves_the_hosts_objects_unchanged() -> None:
     assert step.input is not None
     reasoning = list(step.input[-1].content)
     await preprocess_step(
-        step, StepPreprocessor(omit_reasoning=True, omit_tool_usage=True)
+        step,
+        StepPreprocessor(
+            omit_reasoning=True, omit_tool_usage=True, omit_assistant_text=True
+        ),
     )
     assert step.output.model_dump() == before
     assert list(step.input[-1].content) == reasoning
+
+
+def narrates(text: str, *calls: ToolCall) -> ChatMessageAssistant:
+    # an assistant message with every kind of content, so a test sees which
+    # kinds an omission takes out
+    return ChatMessageAssistant(
+        id=text,
+        content=[
+            ContentReasoning(reasoning=f"thinking about {text}"),
+            ContentToolUse(
+                tool_type="web_search",
+                id="w",
+                name="search",
+                arguments="{}",
+                result=f"searched {text}",
+            ),
+            ContentText(text=f"saying {text}"),
+            ContentImage(image="data:image/png;base64,AAAA"),
+        ],
+        tool_calls=list(calls) or None,
+    )
+
+
+def narrated_lists(name: str) -> tuple[Step, StepPreprocessor]:
+    # one list narrates, in both a string message and a message of parts
+    conversation = [
+        user("task"),
+        asks(f"saying {name} plainly", call("a")),
+        result("a", "result a"),
+        narrates(name, call("b")),
+        result("b", "result b"),
+    ]
+    return (
+        replace(tool_step([], []), **{name: conversation}),
+        replace(ALL, **{f"{name}_window": AllMessages()}),
+    )
+
+
+def narrated_call(
+    stage: type[BeforeToolCall | AfterToolCall],
+) -> BeforeToolCall | AfterToolCall:
+    step: BeforeToolCall | AfterToolCall = (
+        before_tool_call("bash", cmd="ls")
+        if stage is BeforeToolCall
+        else after_tool_call("bash", "out", cmd="ls")
+    )
+    return replace(
+        step,
+        message="saying the call",
+        assistant_message=narrates("the call", step.call),
+    )
+
+
+def narrated_reply(*calls: ToolCall) -> AfterGenerate:
+    return replace(
+        after_generate_step(),
+        output=ModelOutput(
+            model="m",
+            choices=[ChatCompletionChoice(message=narrates("the reply", *calls))],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "step, preprocessor",
+    [
+        narrated_lists("input"),
+        narrated_lists("history"),
+        narrated_lists("agent_messages"),
+        (narrated_call(BeforeToolCall), StepPreprocessor()),
+        (narrated_call(AfterToolCall), StepPreprocessor()),
+        (narrated_reply(call("c")), StepPreprocessor()),
+        (narrated_reply(), StepPreprocessor()),
+    ],
+    ids=["input", "history", "agent_messages", "before", "after", "reply", "words"],
+)
+@pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])
+@pytest.mark.anyio
+async def test_omitting_assistant_text_leaves_the_calls_on_every_surface(
+    step: Step, preprocessor: StepPreprocessor, nonce: str | None
+) -> None:
+    shown = await render(step, preprocessor, nonce=nonce)
+    actions = await render(
+        step, replace(preprocessor, omit_assistant_text=True), nonce=nonce
+    )
+    mark = "" if nonce is None else f" ({nonce})"
+    assert "saying" in shown and "saying" not in actions
+    # the calls, the reasoning, the provider's tool use and the image stay
+    for kept in (f"Tool Call{mark}: bash", "thinking about", "searched", "<image />"):
+        assert shown.count(kept) == actions.count(kept)
+
+
+@pytest.mark.anyio
+async def test_omitting_assistant_text_thins_a_tool_stage_s_message_and_assistant_message() -> (
+    None
+):
+    step = narrated_call(BeforeToolCall)
+    thinned = await preprocess_step(step, StepPreprocessor(omit_assistant_text=True))
+    assert thinned.message == ""
+    made = thinned.assistant_message
+    assert made is not None and made.tool_calls == [step.call]
+    assert made.text == "" and isinstance(made.content, list)
+    assert [part.type for part in made.content] == ["reasoning", "tool_use", "image"]
+
+
+@pytest.mark.parametrize("omit_assistant_text", [False, True])
+@pytest.mark.parametrize("omit_reasoning", [False, True])
+@pytest.mark.parametrize("omit_tool_usage", [False, True])
+@pytest.mark.anyio
+async def test_assistant_text_reasoning_and_tool_use_are_omitted_independently(
+    omit_assistant_text: bool, omit_reasoning: bool, omit_tool_usage: bool
+) -> None:
+    step = replace(
+        narrated_reply(call("c")),
+        input=[user("task"), narrates("earlier", call("a")), result("a", "out")],
+    )
+    rendered = await render(
+        step,
+        StepPreprocessor(
+            omit_assistant_text=omit_assistant_text,
+            omit_reasoning=omit_reasoning,
+            omit_tool_usage=omit_tool_usage,
+        ),
+    )
+    for text, omitted in (
+        ("saying", omit_assistant_text),
+        ("thinking about", omit_reasoning),
+        ("searched", omit_tool_usage),
+    ):
+        # in INPUT and in the REPLY
+        assert rendered.count(text) == (0 if omitted else 2)
+    assert rendered.count("Tool Call: bash") == 2
+    assert rendered.count("<image />") == 2
+
+
+def says(text: str) -> ChatMessage:
+    # an answer with no tool calls, as text alone
+    return ChatMessageAssistant(content=text, id=text)
+
+
+def muses(text: str) -> ChatMessage:
+    # an answer with no tool calls, its reasoning and text
+    return ChatMessageAssistant(
+        id=text,
+        content=[
+            ContentReasoning(reasoning=f"thinking about {text}"),
+            ContentText(text=text),
+        ],
+    )
+
+
+def shows(text: str) -> ChatMessage:
+    # an answer with no tool calls, its text and an image
+    return ChatMessageAssistant(
+        id=text,
+        content=[ContentText(text=text), ContentImage(image="data:,")],
+    )
+
+
+ANSWERS = [
+    user("task"),
+    says("said"),
+    muses("mused"),
+    shows("shown"),
+    asks("", call("a")),
+    result("a", "out"),
+]
+
+
+@pytest.mark.parametrize(
+    "preprocessor, kept",
+    [
+        (StepPreprocessor(), ["task", "said", "mused", "shown", "", "out"]),
+        # an answer with nothing left is left out; reasoning or an image keeps it
+        (
+            StepPreprocessor(omit_assistant_text=True),
+            ["task", "mused", "shown", "", "out"],
+        ),
+        (
+            StepPreprocessor(omit_assistant_text=True, omit_reasoning=True),
+            ["task", "shown", "", "out"],
+        ),
+        # without the text option an answer emptied by the others is kept
+        (
+            StepPreprocessor(omit_reasoning=True),
+            ["task", "said", "mused", "shown", "", "out"],
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_an_assistant_message_left_with_nothing_is_left_out_of_a_list(
+    preprocessor: StepPreprocessor, kept: list[str]
+) -> None:
+    thinned = await preprocess_step(
+        all_lists(ANSWERS),
+        replace(
+            preprocessor,
+            **{"history_window": AllMessages(), "agent_messages_window": AllMessages()},
+        ),
+    )
+    ids = [m.id for m in thinned.input or []]
+    assert ids == [m.id for m in ANSWERS if m.id in kept or m.text in kept]
+    assert [m.id for m in thinned.history or []] == ids
+    assert [m.id for m in thinned.agent_messages or []] == ids
+
+
+@pytest.mark.parametrize(
+    "step, block",
+    [
+        (narrated_reply(), "REPLY"),
+        (replace(narrated_call(BeforeToolCall), assistant_message=None), "CALL"),
+        (replace(narrated_call(AfterToolCall), assistant_message=None), "CALL"),
+    ],
+)
+@pytest.mark.anyio
+async def test_the_reply_and_the_call_are_shown_when_their_text_is_left_out(
+    step: Step, block: str
+) -> None:
+    rendered = await render(
+        step,
+        StepPreprocessor(
+            omit_assistant_text=True, omit_reasoning=True, omit_tool_usage=True
+        ),
+    )
+    shown = rendered.split(f"[BEGIN {block}]\n")[1].split(f"\n[END {block}]")[0]
+    assert re.match(r"\[M\d\] ASSISTANT:\n", shown)
+    assert "saying" not in shown and "thinking" not in shown
+
+
+@pytest.mark.anyio
+async def test_messages_are_numbered_and_cited_without_the_left_out_answers() -> None:
+    step = tool_step(
+        [
+            user("task"),
+            says("said"),
+            user("next"),
+            asks("calling", call("a")),
+            result("a", "out"),
+            says("done"),
+        ],
+        [],
+    )
+    rendered, extract_refs = await step_as_str(
+        await preprocess_step(step, StepPreprocessor(omit_assistant_text=True))
+    )
+    assert re.findall(r"\[M\d+\] \w+", rendered) == [
+        "[M1] USER",
+        "[M2] USER",
+        "[M3] ASSISTANT",
+        "[M4] TOOL",
+        "[M5] ASSISTANT",
+    ]
+    assert [r.id for r in extract_refs("[M1], [M2], [M3], [M4], [M5] and [M6]")] == [
+        "task",
+        "next",
+        "calling",
+        "out",
+        "msg_1",
+    ]
+
+
+@pytest.mark.parametrize(
+    "window, kept",
+    [
+        (AllMessages(), ["sys", "task", "reply 1", "result a"]),
+        # the left-out answer still counts as the last turn, and as a message
+        (LastTurns(1), []),
+        (LastTurns(2), ["sys", "task", "reply 1", "result a"]),
+        (LastMessages(2), ["result a"]),
+    ],
+)
+@pytest.mark.parametrize("name", LISTS)
+@pytest.mark.anyio
+async def test_a_window_counts_an_answer_omitting_assistant_text_leaves_out(
+    window: Window, kept: list[str], name: str
+) -> None:
+    thinned = await preprocess_step(
+        all_lists(CONVERSATION),
+        replace(ALL, omit_assistant_text=True, **{f"{name}_window": window}),
+    )
+    assert [m.id for m in getattr(thinned, name)] == kept
 
 
 @pytest.mark.anyio
