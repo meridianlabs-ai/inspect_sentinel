@@ -14,14 +14,16 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Generic, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, cast
 
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
+    Content,
     ContentReasoning,
     ContentText,
     ContentToolUse,
+    ModelOutput,
 )
 from inspect_ai.scorer import Reference
 from inspect_ai.tool import ToolChoice, ToolInfo
@@ -122,7 +124,7 @@ class StepPreprocessor(Generic[S]):
     omit_assistant_text: bool = False
     """Leave out the text of assistant messages, the agent's model's own words, and keep their tool calls, so the monitor model judges what the agent did rather than what it says it is doing.
 
-    It applies to every assistant message in `input`, `history` and `agent_messages`, to a tool stage's `message` (the text beside its call, which becomes `""`) and `assistant_message`, and to a generate's reply. Reasoning follows `omit_reasoning` and a provider's own tool use follows `omit_tool_usage`, so either can be kept or left out with it; other content, such as an image, is kept. An assistant message in a list that is left with no tool calls and no content is left out of the list; the windows are applied first, so it still counts toward `LastTurns(n)` and `LastMessages(n)`. The reply and the call are always shown, empty if need be."""
+    It applies to every assistant message in `input`, `history` and `agent_messages`, to a tool stage's `message` (the text beside its call, which becomes `""`) and `assistant_message`, and to a generate's reply: every choice's message, the output's `completion`, which becomes the thinned first message's text (`""`), and the choices' `logprobs` and `prompt_logprobs`, which hold text as tokens and are left out. Reasoning follows `omit_reasoning` and a provider's own tool use follows `omit_tool_usage`, so either can be kept or left out with it; other content, such as an image, is kept. An assistant message in a list that is left with no tool calls and no content (or only empty reasoning) is left out of the list; the windows are applied first, so it still counts toward `LastTurns(n)` and `LastMessages(n)`. The reply and the call are always shown, empty if need be."""
 
     transform: Callable[[S], Awaitable[S]] | None = None
     """Any further change, applied last to the thinned step. It returns a step of the same type. The messages it is given are the host's own objects: copy one before changing it."""
@@ -175,19 +177,7 @@ async def preprocess_step(
             assert isinstance(made, ChatMessageAssistant)
             thinned = replace(thinned, assistant_message=made)
     if isinstance(thinned, AfterGenerate):
-        # the reply is kept even when the omissions empty it, so the stage
-        # always shows what the model returned
-        output = thinned.output.model_copy(
-            update={
-                "choices": [
-                    choice.model_copy(
-                        update={"message": _omitted_from(choice.message, p)}
-                    )
-                    for choice in thinned.output.choices
-                ]
-            }
-        )
-        thinned = replace(thinned, output=output)
+        thinned = replace(thinned, output=_omitted_output(thinned.output, p))
     return await p.transform(thinned) if p.transform else thinned
 
 
@@ -486,11 +476,43 @@ def _omitted(
             p.omit_assistant_text
             and isinstance(thinned, ChatMessageAssistant)
             and not thinned.tool_calls
-            and not thinned.content
+            and _nothing_in(thinned.content)
         ):
             continue
         kept.append(thinned)
     return kept
+
+
+def _nothing_in(content: str | list[Content]) -> bool:
+    # no content, or only reasoning parts that hold nothing: no reasoning, no
+    # summary and not redacted
+    return not content or all(
+        isinstance(c, ContentReasoning)
+        and not c.reasoning
+        and not c.summary
+        and not c.redacted
+        for c in content
+    )
+
+
+def _omitted_output(output: ModelOutput, p: StepPreprocessor[S]) -> ModelOutput:
+    # the reply is kept even when the omissions empty it, so the stage always
+    # shows what the model returned. Without its text, nothing else on the
+    # output may still carry it: `completion` is a stored copy of the first
+    # choice's text, so it is taken from the thinned choice as inspect_ai
+    # takes it, and logprobs hold the text as tokens that cannot be told
+    # apart by content part, so they are left out
+    text: dict[str, Any] = (
+        {"logprobs": None, "prompt_logprobs": None} if p.omit_assistant_text else {}
+    )
+    choices = [
+        choice.model_copy(update={"message": _omitted_from(choice.message, p), **text})
+        for choice in output.choices
+    ]
+    update: dict[str, Any] = {"choices": choices}
+    if p.omit_assistant_text:
+        update["completion"] = choices[0].message.text if choices else ""
+    return output.model_copy(update=update)
 
 
 def _omitted_from(message: ChatMessage, p: StepPreprocessor[S]) -> ChatMessage:
