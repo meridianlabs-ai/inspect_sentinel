@@ -198,7 +198,7 @@ async def score_step(
     # the task is the sample's input, which can hold the messages hidden from
     # the step, so what any preprocessing of it hid is hidden from the task
     # too, including a protocol's before this monitor's
-    filters = pstep.hidden.filters if pstep.hidden else ()
+    filters = () if pstep.hidden is None else pstep.hidden.filters
     task = task_text(eval.sample_input, filters, nonce) if eval else ""
     values = {
         "instructions": (instructions or DEFAULT_INSTRUCTIONS).strip(),

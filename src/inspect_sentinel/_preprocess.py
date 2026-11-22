@@ -185,7 +185,7 @@ async def preprocess_step(
     agent_messages = thin(
         "agent_messages", step.agent_messages, p.agent_messages_window
     )
-    was = before or HiddenMessages()
+    was = HiddenMessages() if before is None else before
     call = result = reply = False
     if hide is not None:
         if isinstance(step, BeforeToolCall | AfterToolCall):
@@ -206,7 +206,7 @@ async def preprocess_step(
             call=call or was.call,
             result=result or was.result,
             reply=reply or was.reply,
-            filters=(*was.filters, *([hide] if hide else [])),
+            filters=(*was.filters, *([] if hide is None else [hide])),
         ),
     )
     if isinstance(thinned, AfterToolCall):
@@ -308,7 +308,7 @@ async def render_step(
     )
 
     mark = "" if nonce is None else f" ({nonce})"
-    hidden = step.hidden or HiddenMessages()
+    hidden = HiddenMessages() if step.hidden is None else step.hidden
 
     def hidden_marker(count: int) -> str:
         return f"{hidden_line(count, nonce)}\n"

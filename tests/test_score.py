@@ -865,3 +865,36 @@ async def test_a_step_a_protocol_hid_keeps_its_task_hidden(
     p, n = prompt(host), nonce(host)
     assert SECRET not in p
     assert f"main task\n[1 message hidden ({n})]" in p
+
+
+class FalseyFilter:
+    # a predicate whose truth value is false, which must still be applied
+    def __bool__(self) -> bool:
+        return False
+
+    def __call__(self, message: ChatMessage) -> bool:
+        return SECRET in message.text
+
+
+@pytest.mark.parametrize("parent", [False, True], ids=["direct", "parent"])
+@pytest.mark.anyio
+async def test_a_predicate_whose_truth_value_is_false_keeps_the_task_hidden(
+    parent: bool,
+) -> None:
+    sample_input: list[ChatMessage] = [
+        ChatMessageUser(content="main task", id="main"),
+        ChatMessageUser(content=SECRET, id="secret"),
+    ]
+    step = replace(before_tool_call("bash", cmd="ls"), input=sample_input)
+    preprocessor: StepPreprocessor | None = StepPreprocessor(
+        hide_messages=FalseyFilter()
+    )
+    if parent:
+        step = await preprocess_step(step, preprocessor)
+        preprocessor = None
+    host = FakeHost(
+        eval=replace(EVAL, sample_input=sample_input),
+        outputs=[answer(explanation="fine", suspicion=0.0)],
+    )
+    await score(host, step, "Safe?", preprocessor=preprocessor)
+    assert SECRET not in prompt(host)
