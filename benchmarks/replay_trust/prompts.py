@@ -48,7 +48,7 @@ _MARKS = [
     r"^Tool (?:Call|Use) \(({n})\): ",
     r"^Error in tool call .* \(({n})\):$",
     r"<(?:/?(?:thinking|thinking_summary|prefill) ({n})|thinking_redacted ({n})/)>",
-    r"^The header COMPACTION SUMMARY \(({n})\) marks a summary of earlier messages, .* between <compaction_summary ({n})> tags, or as <compaction_unreadable ({n}) /> when it cannot be read\.$",
+    r"^A model provider's own compaction of earlier messages, .* between <compaction_summary ({n})> tags, or as <compaction_unreadable ({n}) /> when it cannot be read\.$",
     r"<(?:/?compaction_summary ({n})|compaction_unreadable ({n}) /)>",
     r'^Every block marker and message header in this prompt contains the code \(({n})\), for example "\[BEGIN INPUT \(({n})\)\]" and "\[M1\] USER \(({n})\):"\.',
 ]

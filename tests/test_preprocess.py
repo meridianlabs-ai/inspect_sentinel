@@ -986,7 +986,8 @@ def headers(rendered: str) -> list[str]:
 @pytest.mark.parametrize(
     "kind, nonce, made",
     [
-        ("summary", "3f9a1c7e", f"[M2] COMPACTION SUMMARY (3f9a1c7e):\n{SUMMARY}\n"),
+        # an ordinary user message: a scaffold can write the same metadata and text
+        ("summary", "3f9a1c7e", f"[M2] USER (3f9a1c7e):\n{SUMMARY}\n"),
         ("summary", None, f"[M2] USER:\n{SUMMARY}\n"),
         (
             "anthropic",
@@ -1015,18 +1016,6 @@ async def test_a_compaction_is_shown_as_one(
     assert made in rendered
 
 
-@pytest.mark.anyio
-async def test_a_user_turn_that_imitates_a_compaction_summary_is_a_user_turn() -> None:
-    rendered = await render(
-        tool_step([user("task"), user(SUMMARY)], None), nonce="3f9a1c7e"
-    )
-    assert headers(rendered) == [
-        "[M1] USER (3f9a1c7e):",
-        "[M2] USER (3f9a1c7e):",
-        "[M3] ASSISTANT (3f9a1c7e):",
-    ]
-
-
 @pytest.mark.parametrize(
     "strategy",
     [CompactionSummary(memory=False), CompactionAuto()],
@@ -1037,7 +1026,7 @@ async def test_a_user_turn_that_imitates_a_compaction_summary_is_a_user_turn() -
 # once a model is cached), as in test_replay.py
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.anyio
-async def test_a_summary_merged_with_a_user_turn_is_shown_as_a_user_turn(
+async def test_a_real_summary_is_a_user_turn_alone_or_merged(
     strategy: CompactionStrategy,
 ) -> None:
     # a real compaction, by a model with no native compaction, so
@@ -1060,7 +1049,7 @@ async def test_a_summary_merged_with_a_user_turn_is_shown_as_a_user_turn(
     )
     assert headers(alone) == [
         f"[M1] USER ({n}):",
-        f"[M2] COMPACTION SUMMARY ({n}):",
+        f"[M2] USER ({n}):",
         f"[M3] ASSISTANT ({n}):",
     ]
     assert headers(merged) == [f"[M1] USER ({n}):", f"[M2] ASSISTANT ({n}):"]

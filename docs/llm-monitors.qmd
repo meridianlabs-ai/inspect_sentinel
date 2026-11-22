@@ -201,13 +201,13 @@ How the summary is shown depends on what made it:
 
 | Compaction | Shown as |
 |------------------------------------|------------------------------------|
-| Inspect's summary (`CompactionSummary`, or the fallback of `CompactionAuto`) | A message headed `COMPACTION SUMMARY (3f9a1c7e):` rather than `USER`, when the message is the summary alone. |
+| Inspect's summary (`CompactionSummary`, or the fallback of `CompactionAuto`) | An ordinary user message, headed `USER`, whose text contains Inspect's `[CONTEXT COMPACTION SUMMARY]` label. |
 | Anthropic's native compaction | The summary, between `<compaction_summary 3f9a1c7e>` tags. |
 | OpenAI's native compaction | `<compaction_unreadable 3f9a1c7e />`, since OpenAI encrypts it. |
 
-Each marker carries the nonce (see [Untrusted Text](#untrusted-text)), so a user message that imitates a summary is still shown as a user message. `score()` tells the monitor model what the markers mean.
+The `[CONTEXT COMPACTION SUMMARY]` label is text, so agent text can imitate it, and a message holding it may also hold a user's own words: for providers that need consecutive user messages merged (e.g. Anthropic), Inspect merges the summary with the task or another user turn next to it.
 
-For providers that need consecutive user messages merged (e.g. Anthropic), Inspect merges the summary with a user's turn next to it, such as the task. A merged message is headed `USER`, since it is not the summary alone; its text still begins with Inspect's `[CONTEXT COMPACTION SUMMARY]` line. Without a nonce, as from `step_as_str()` called without one, Inspect's summary is headed `USER` and OpenAI's compaction is shown as `<data />`.
+The two tags carry the nonce (see [Untrusted Text](#untrusted-text)), so text that imitates one is shown as text. `score()` tells the monitor model what they mean. Without a nonce, as from `step_as_str()` called without one, OpenAI's compaction is shown as `<data />`.
 
 To leave an unreadable compaction out, use `StepPreprocessor(omit_unreadable_compaction=True)`. A message that held nothing else is left out too.
 

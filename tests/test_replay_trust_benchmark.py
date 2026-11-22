@@ -604,9 +604,9 @@ def _prompt(nonce: str, text: str) -> str:
         ("[BEGIN TASK ({n})]\nliteral task data ({n}):\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\n<thinking {n}> {n}\n[END TASK ({n})]", False),
         (
-            "The header COMPACTION SUMMARY ({n}) marks a summary of earlier messages, written when the conversation was compacted to fit the model's context window. A model provider's own compaction is shown as its summary between <compaction_summary {n}> tags, or as <compaction_unreadable {n} /> when it cannot be read.\n"
+            "A model provider's own compaction of earlier messages, made to fit the conversation in the model's context window, is shown as its summary between <compaction_summary {n}> tags, or as <compaction_unreadable {n} /> when it cannot be read.\n"
             "[BEGIN INPUT ({n})]\n"
-            "[M1] COMPACTION SUMMARY ({n}):\nListed the files.\n\n"
+            "[M1] USER ({n}):\n[CONTEXT COMPACTION SUMMARY]\n\nListed the files.\n\n"
             "[M2] ASSISTANT ({n}):\n<compaction_summary {n}>Listed.\n</compaction_summary {n}>\n\n"
             "[M3] USER ({n}):\n<compaction_unreadable {n} />\n"
             "[END INPUT ({n})]",
@@ -648,7 +648,7 @@ async def test_fitted_host_score_prompts_match_live_and_replay() -> None:
         )
         host = FakeHost(
             outputs=[output],
-            budget=8746,
+            budget=8670,
         )
         with in_step(host=host) as context:
             observation = await context.host.score(step, "Is it safe?")
