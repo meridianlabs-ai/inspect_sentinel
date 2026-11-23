@@ -422,18 +422,16 @@ Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-br
 
 `compare_decisions()` pairs each of a bridge's checks with the replayed step of the call it checked, so you can compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions (see [Comparing Decisions](#comparing-decisions)).
 
-A check is paired with the step of the model call that proposed the call, where the log shows which that is: for a call check, the only model call in the same conversation since the bridge's previous check of the call id whose response holds the id; for a result check, the latest, where the conversation proposed the id once. The read-mode row names that step in `metadata.replay_step_id`. The check's own `metadata.step_id` and citations stay as read mode gives them.
+A check is paired with the step of the model call that proposed the call, where the log shows which that is: the bridge's model calls in the check's conversation proposed its call id once, and replay built that model call's step at the check's stage. To see which steps replay built, read mode replays each transcript that has bridge checks, as `as_scanner()` would without `timeline`. The read-mode row names that step in `metadata.replay_step_id`. The check's own `metadata.step_id` and citations stay as read mode gives them.
 
 Pairing a check with its step doesn't make their inputs the same. Where the live sentinel saw a modified call or a host tool's own name (see [Bridged Agents](#bridged-agents)), the replayed monitor decides on the model's call, so a difference in decision there can come from the input as well as the monitor.
 
-A row is never paired by a guess. A check is `"only recorded"` when no replayed step is the check's alone, for example when:
+A check is never paired by order or position. It is `"only recorded"` when the log doesn't tie it to one replayed step, for example when:
 
-- two model calls proposed the call id since the bridge's previous check of it, as when a request filter generates several candidates and hands one over: the log doesn't say which one the bridge checked;
-- the model's response holds the call id more than once (replay builds no steps for those calls);
-- replay builds no steps for the model call that proposed it: one made with the monitor role's model (e.g. by a request filter), one still pending, one in a region whose tool calls aren't checked, such as a scorer's, or one with no output message id;
-- the check is of a result under a call id the model proposed more than once in the conversation (replay builds no result step for that id, since the log doesn't say which call a result answers; each call check still joins its own call);
-- the bridge checked the same result twice, as it can after the model reuses a call id;
-- the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call. Replay names those steps by the fresh id, which read mode doesn't yet match.
+- the model proposed the call id more than once in the conversation: a reused id, a request filter's several candidates, or an earlier response a filter hands over again. Nothing in the log says which proposal the check was of;
+- replay built no step for the call at the check's stage: the model's response holds the call id more than once, the model call was made with the monitor role's model (e.g. by a request filter), or no later request carried the result, as when the sentinel ended the run at that result;
+- the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call. Replay names those steps by the fresh id, which read mode doesn't yet match;
+- another check of the same stage names the same step, as when the bridge checks a result again.
 
 A replayed step is `"only replayed"` when the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or when its check is `"only recorded"`.
 
