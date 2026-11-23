@@ -193,7 +193,7 @@ If your scaffold rebuilds the model's message as a new message before running it
 
 At `AfterToolCall`, `result` is the tool message the agent's model will see, and `output` is the tool's full return value. They differ when the output was longer than Inspect's output limit, because `result` then holds the truncated text. To score what the agent's model saw, use `result`. If you use `output`, check it for `None`: replay sets it to `None`, because the log records only `result`.
 
-`truncated` is a `Truncation` when Inspect cut the output, with its size in `original_bytes` and the limit in `limit_bytes`. It is `False` when the output was not cut, and `None` when no record is available, as in replay from a transcript's messages. Use this field rather than looking for Inspect's "output was too long" notice in `result`, because a tool's output can contain that text.
+`truncated` is a `Truncation` when Inspect cut the output, with its size in `original_bytes` and the limit in `limit_bytes`. It is `False` when the output was not cut, and `None` when no record is available, as in replay from a transcript's messages. Use this field rather than looking for Inspect's "output was too long" notice in `result`, because a tool's output can contain that text. An LLM monitor's prompt shows a recorded cut as a line at the top of the result (see [Choosing What the Model Sees](llm-monitors.qmd#choosing-what-the-model-sees)).
 
 Output cut by a sandbox output limit or a timeout is not reported in `truncated`. Check `result.error` for those, with type `"limit"` or `"timeout"`.
 
