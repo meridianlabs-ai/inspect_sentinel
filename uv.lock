@@ -1465,7 +1465,7 @@ wheels = [
 
 [[package]]
 name = "inspect-scout"
-version = "0.6.3"
+version = "0.6.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1499,9 +1499,9 @@ dependencies = [
     { name = "wrapt" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/86/e0/a80ee08ae39b7edc5755f9839b5b225fb2bebaeb8aeb3782e330a17aeeea/inspect_scout-0.6.3.tar.gz", hash = "sha256:d93d0f0c9c85a020bbb33356fdaf35d60266e7855668c7d91631ad970abc1a8d", size = 2592655, upload-time = "2026-11-18T02:42:10.452Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/80/f7/2a9ac6a712faccabc4c732abdcffa68020f7d9957854ec920248c64145cb/inspect_scout-0.6.4.tar.gz", hash = "sha256:23d8ca9a900d406888281edfa62d4a7cc075d275d4103da0d1ddbda24e53701c", size = 2595866, upload-time = "2026-11-23T17:51:20.62Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/70/6a5b506d653c071f51fd750f257cf6edf05b8361469cd5bb6db0dbf2bf92/inspect_scout-0.6.3-py3-none-any.whl", hash = "sha256:ca0d999bcd62f388b443f32022cf2072641352e6c3b1bda48c14afc1f0cf8e3f", size = 2684434, upload-time = "2026-11-18T02:42:08.273Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/9e/24348748216ebcbca9133797956aaf087da096e1899189470656acf7f3fc/inspect_scout-0.6.4-py3-none-any.whl", hash = "sha256:2eeeaed703a0ef7e3a2db9b644c6b881527d36759174d9ff13c56e8e80dc2e84", size = 2686862, upload-time = "2026-11-23T17:51:18.828Z" },
 ]
 
 [[package]]
