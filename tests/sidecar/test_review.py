@@ -2660,6 +2660,130 @@ async def test_a_question_that_expires_says_when() -> None:
     assert question["closes"] - question["asked"] == pytest.approx(3600)
 
 
+# --- a `request_result` that names the question a person is being shown ---
+
+
+async def _result_naming(
+    client: httpx.AsyncClient, question: str | None
+) -> dict[str, Any]:
+    # `request_result` for the paused call, held for as long as the sidecar
+    # holds one, and naming a question if one is given
+    named = {"question": question} if question is not None else {}
+    answered = await _call(
+        client,
+        "request_result",
+        eval_call("request_result") | {"id": "irid-1", "wait": 30} | named,
+    )
+    result: dict[str, Any] = answered["result"]
+    return result
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("ending", "recorded"),
+    [
+        ("answered", ("decision", "approve")),
+        ("expired", ("resolution", "timed_out")),
+        ("cancelled", ("resolution", "cancelled")),
+    ],
+)
+async def test_request_result_that_names_an_open_question_is_answered_once_the_question_stops_waiting(
+    ending: str, recorded: tuple[str, str]
+) -> None:
+    handler = _reviewed(review_timeout=0.3 if ending == "expired" else None)
+    results: list[dict[str, Any]] = []
+    async with _serving(handler) as client:
+        await _paused(handler)
+        # read from the call's record, which still names a question that has
+        # expired by now on a busy machine
+        (asked,) = (await _result(client))["reviews"]
+
+        async def ask() -> None:
+            results.append(await _result_naming(client, asked["id"]))
+
+        began = time.monotonic()
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(ask)
+            if ending != "expired":
+                # the question is open, so the sidecar holds its answer
+                await anyio.sleep(0.05)
+                assert results == []
+                if ending == "answered":
+                    await _answer(client, asked["id"], "approve")
+                else:
+                    assert await _cancel(client)
+
+    # answered when the question stopped waiting, long before the hold ran out
+    assert time.monotonic() - began < 10
+    (result,) = results
+    assert result["state"] != "awaiting_review"
+    (review,) = result["reviews"]
+    assert review[recorded[0]] == recorded[1]
+
+
+@pytest.mark.anyio
+async def test_request_result_that_names_a_question_is_answered_while_the_judging_goes_on() -> (
+    None
+):
+    release = anyio.Event()
+
+    @protocol
+    def asks_about_oslo_and_waits_at_paris() -> Protocol:
+        async def decide(
+            context: Context, step: BeforeToolCall, escalations: Escalations
+        ) -> Decision | None:
+            if step.call.arguments.get("location") == "Oslo":
+                return Decision.escalate("a person checks a lookup of Oslo")
+            await release.wait()
+            return None
+
+        return decide
+
+    handler = Handler(
+        sequential([asks_about_oslo_and_waits_at_paris(), human(stages=["tool_call"])])
+    )
+    results: list[dict[str, Any]] = []
+    async with _serving(handler) as client:
+        asked = await _paused_question(
+            handler, client, weather("Oslo"), weather("Paris", "toolu_2")
+        )
+
+        async def ask() -> None:
+            results.append(await _result_naming(client, asked["id"]))
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(ask)
+            await anyio.sleep(0.05)
+            assert results == []
+            await _answer(client, asked["id"], "approve")
+            # the sentinel is still judging the lookup of Paris
+            with anyio.fail_after(5):
+                while not results:
+                    await anyio.sleep(0.01)
+            # and a call made once the question has closed isn't held either
+            with anyio.fail_after(5):
+                results.append(await _result_naming(client, asked["id"]))
+            release.set()
+
+    assert [result["state"] for result in results] == ["judging", "judging"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("named", [None, "another-question"])
+async def test_request_result_is_answered_at_once_unless_it_names_the_calls_open_question(
+    named: str | None,
+) -> None:
+    handler = _reviewed()
+    async with _serving(handler) as client:
+        await _paused_question(handler, client)
+
+        # an eval that doesn't know of the question yet learns of it at once
+        with anyio.fail_after(5):
+            result = await _result_naming(client, named)
+
+    assert result["state"] == "awaiting_review"
+
+
 @pytest.mark.anyio
 async def test_an_expired_question_where_reject_isnt_offered_ends_the_run() -> None:
     handler = _reviewed(choices=["approve", "terminate"], review_timeout=0.2)

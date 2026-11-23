@@ -207,6 +207,9 @@ class Question:
     answer_taken: anyio.Event = field(default_factory=anyio.Event)
     """Set once the question is answered."""
 
+    stopped_waiting: anyio.Event = field(default_factory=anyio.Event)
+    """Set once the question no longer waits for an answer: it was answered, it expired, or it was closed. A `request_result` that names the question waits on it."""
+
     review: Review = field(init=False)
     """The record of the question. The record is kept after the question itself is dropped."""
 
@@ -341,6 +344,7 @@ class Reviews:
             # Remove the question when its step stops waiting, so that the
             # sidecar accepts no later answer for a step that is gone.
             self._open.pop(question.id, None)
+            question.stopped_waiting.set()
         if question.answer is not None:
             review.resolve("answered")
             return question.answer
@@ -384,6 +388,28 @@ class Reviews:
             asked = self._asked
             with anyio.move_on_after(left):
                 await asked.wait()
+
+    def find_waiting_question(
+        self, eval_id: str, request_id: str, id: str
+    ) -> Question | None:
+        """Find a question of a model request that still waits for an answer.
+
+        Args:
+            eval_id: The eval that asks. To it, another eval's question is not found.
+            request_id: The `x-irid` of the model request the question must be about.
+            id: The question's id.
+
+        Returns:
+            The question, or None if it has an answer, has expired, was closed, or was never the request's.
+        """
+        question = self._open.get(id)
+        if (
+            question is None
+            or question.answer is not None
+            or (question.eval_id, question.request_id) != (eval_id, request_id)
+        ):
+            return None
+        return question
 
     def answer(self, eval_id: str, id: str, decision: str, reason: str | None) -> None:
         """Accept an eval's answer to one of its questions. A question takes one answer. The same answer sent again, with the same choice and reason, is accepted and changes nothing.
@@ -433,6 +459,7 @@ class Reviews:
         review.decision, review.reason, review.answered = decision, reason, time.time()
         question.answer = HumanAnswer(decision=decision, reason=reason)
         question.answer_taken.set()
+        question.stopped_waiting.set()
         self._receipts[id] = _Receipt(eval_id, question.sample_uuid, decision, reason)
         while len(self._receipts) > _KEPT_RECEIPTS:
             self._receipts.popitem(last=False)
@@ -441,7 +468,9 @@ class Reviews:
     def close(self, reviews: Sequence[Review], cause: Cause) -> None:
         """Close the questions of these reviews now, and record them as cancelled for `cause`. From then on `list_pending` lists none of them, and an answer to one raises `UnknownQuestionError`, even if the step that waits on it has not stopped waiting yet."""
         for review in reviews:
-            self._open.pop(review.id, None)
+            question = self._open.pop(review.id, None)
+            if question is not None:
+                question.stopped_waiting.set()
             if review.resolution is None:
                 review.cause = cause
                 review.resolve("cancelled")

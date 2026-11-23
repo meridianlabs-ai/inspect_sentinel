@@ -2054,6 +2054,19 @@
           "minimum": 0,
           "title": "Wait",
           "type": "number"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The id of a question about the request that the eval is showing a person. If given, the sidecar waits, for as long as `wait` allows, while that question waits for an answer, and not while the sentinel judges. It answers as soon as the question was answered, expired or was closed, even if the judging goes on, so the eval can stop asking the person. If the question is still waiting, the eval calls again. Without it, a request with a question open is answered at once.",
+          "title": "Question"
         }
       },
       "required": [

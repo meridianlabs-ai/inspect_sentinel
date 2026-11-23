@@ -164,6 +164,10 @@ class RequestResultParams(EvalCall):
         ge=0,
         description=f"How long to wait, in seconds, while the sentinel is still judging the request, at most {MAX_RESULT_WAIT:g}. The sidecar answers as soon as the state is no longer `judging`. If the state is still `judging`, the eval calls again.",
     )
+    question: str | None = Field(
+        default=None,
+        description="The id of a question about the request that the eval is showing a person. If given, the sidecar waits, for as long as `wait` allows, while that question waits for an answer, and not while the sentinel judges. It answers as soon as the question was answered, expired or was closed, even if the judging goes on, so the eval can stop asking the person. If the question is still waiting, the eval calls again. Without it, a request with a question open is answered at once.",
+    )
 
 
 class ReviewRecord(BaseModel):
@@ -758,7 +762,9 @@ async def _answered(
         )
     if isinstance(given, RequestResultParams):
         found = (
-            await handler.request_result(given.id, given.eval_id, given.wait)
+            await handler.request_result(
+                given.id, given.eval_id, given.wait, given.question
+            )
             if holds
             else "unknown"
         )

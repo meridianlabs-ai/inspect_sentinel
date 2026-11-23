@@ -1457,7 +1457,7 @@ class Handler:
         return None
 
     async def request_result(
-        self, id: str, eval_id: str, wait: float = 0
+        self, id: str, eval_id: str, wait: float = 0, question: str | None = None
     ) -> RequestResult | Literal["dropped", "unknown"]:
         """What happened to a request an eval names, by the eval's id for it.
 
@@ -1465,6 +1465,7 @@ class Handler:
             id: The eval's id for the request, as its `x-irid` header gave it. A client that retries a request sends it again under the same id.
             eval_id: The eval asking. A request whose `x-inspect-context` named another eval reads as unknown, as does one that was never kept: one with no `x-inspect-context`, or one whose header couldn't be read or failed the check.
             wait: How long to wait, in seconds, while the latest attempt is still being judged, at most `MAX_RESULT_WAIT`.
+            question: The id of a question about the request that the eval is showing a person. The wait then lasts while that question waits for an answer, and not while the request is judged, so the eval learns at once that it was answered, expired or was closed. Without it, a request with a question open is answered at once, which is how an eval learns of the question.
 
         Returns:
             The request's state, with every try's records in order; `dropped` if the records were kept and no longer are; or `unknown` if the request was never seen, or isn't the eval's. For a request no person was asked about, the state is that of its latest try. For a request a person was asked about, the state is that of the one model call, whatever tries have arrived since.
@@ -1489,7 +1490,24 @@ class Handler:
                 # the eval asked about the call, which counts as contact
                 operation.last_heard = time.monotonic()
             left = deadline - time.monotonic()
-            if latest.state != "judging" or left <= 0:
+            if question is not None:
+                # The eval is showing a person this question, and asks in order
+                # to stop once it has closed. So it is answered as soon as the
+                # question no longer waits, even while the judging goes on.
+                shown = (
+                    self._reviews.find_waiting_question(eval_id, id, question)
+                    if latest.state == "awaiting_review"
+                    else None
+                )
+                if left <= 0 or shown is None:
+                    break
+                # A person may take hours, and every paused call waits here
+                # meanwhile. So this wait wakes only when the question stops
+                # waiting, with no looking again in between.
+                with anyio.move_on_after(left):
+                    await shown.stopped_waiting.wait()
+                continue
+            if left <= 0 or latest.state != "judging":
                 break
             # woken at once by a decision, and looking again now and then,
             # as a retry of the request may have begun another attempt
