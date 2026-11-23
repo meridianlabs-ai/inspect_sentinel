@@ -19,7 +19,7 @@ dependencies = [
     # The wire types a monitor reads (ChatMessage, ToolCall, ModelOutput) live
     # in inspect-ai today. design/inspect-core.md describes extracting them
     # into a leaf package; when that lands this dependency narrows to it.
-    "inspect-ai>=0.3.291",
+    "inspect-ai>=0.3.292",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
     # inspect_ai (design/pr-series.md). 0.6.4 is the first release whose
@@ -71,9 +71,12 @@ envoy = ["inspect_sentinel[sidecar]", "grpcio>=1.74.0", "protobuf>=6.31.1"]
 anthropic = ["anthropic>=2.0.0"]
 # Replay through Inspect Scout (inspect_sentinel.scout). Scout is a runtime
 # dependency already, for step_as_str; this extra names the first Scout
-# release that loads a scanner's timelines only when it asks for them, which
-# as_scanner(timeline=) does, and reads back a scan whose resultsets are all
-# empty (0.6.2). The runtime floor above is higher, so the extra names it too.
+# release whose imported transcripts keep the source's message ids and record
+# which model call each message came from (Transcript.messages_from, 0.6.3),
+# which replay joins on. Replay also needs a scanner's timelines loaded only
+# when it asks for them, as as_scanner(timeline=) does, and a scan whose
+# resultsets are all empty read back (0.6.2). The runtime floor above is
+# higher, so the extra names it too.
 scout = ["inspect-scout>=0.6.4"]
 openai = ["openai>=3.4.0"]
 # The docs tools are in `doc`, which `dev` leaves out: CI installs `dev` and
