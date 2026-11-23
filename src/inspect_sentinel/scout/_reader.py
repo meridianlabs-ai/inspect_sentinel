@@ -11,9 +11,11 @@ from inspect_scout import Result, Scanner, Transcript, scanner
 
 from inspect_sentinel import Decision, Failed, MonitorFailedError, Observation, Report
 
+from ._context import Contexts
 from ._positions import Positions
 from ._results import Cites, step_result
 from ._scanner import EVENTS, Stage, within
+from ._steps import replayed_step_ids
 
 
 # the replay scanner's events, so a cite label numbers the same event in both
@@ -29,9 +31,16 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
         path: The instance's path, as `SentinelEvent.path` records it: empty for the root protocol (the default), else such as `attempt/suspicion`, or a lone monitor's name.
         stage: Only the steps at this stage; all stages when None, each row carrying its stage, since a tool call's two steps share its id.
     """
+    contexts = _Contexts()
 
     async def scan(transcript: Transcript) -> list[Result]:
         positions = Positions(transcript.events, transcript.transcript_id)
+        if positions.bridge_checks:
+            # an agent bridge's check names a replayed step only where replay
+            # built it, so replay this transcript's steps as `as_scanner()`
+            # would
+            eval_info = await contexts.get().eval_info(transcript)
+            positions.join(replayed_step_ids(transcript, eval_info))
         cites = Cites(transcript)
         # each step's children's reports, by conversation as well as stage and
         # id, since two agents' tool calls can share an id
@@ -96,6 +105,21 @@ def as_reader(path: str = "", *, stage: Stage | None = None) -> Scanner[Transcri
         return results
 
     return scan
+
+
+class _Contexts:
+    # each process's log headers, read once per log; Scout sends the scanner
+    # to its worker processes by pickling it, and the locks don't pickle
+    def __init__(self) -> None:
+        self._contexts: Contexts | None = None
+
+    def get(self) -> Contexts:
+        if self._contexts is None:
+            self._contexts = Contexts()
+        return self._contexts
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {"_contexts": None}
 
 
 def _below(child: str, parent: str) -> bool:

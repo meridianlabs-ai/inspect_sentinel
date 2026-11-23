@@ -1,7 +1,9 @@
 from typing import Any
 
 import pytest
+from inspect_ai import Task, eval
 from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
+from inspect_ai.dataset import Sample
 from inspect_ai.event import (
     Event,
     ModelEvent,
@@ -10,17 +12,27 @@ from inspect_ai.event import (
     SpanEndEvent,
     ToolEvent,
 )
+from inspect_ai.log import read_eval_log
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageTool,
     ChatMessageUser,
     GenerateConfig,
     ModelOutput,
+    get_model,
 )
 from inspect_ai.tool import ToolCall, ToolCallError
 from inspect_scout import Result, Transcript
 
-from inspect_sentinel import MonitorFailedError
+from inspect_sentinel import (
+    BeforeToolCall,
+    Context,
+    Monitor,
+    MonitorFailedError,
+    Observation,
+    monitor,
+    observe_only,
+)
 from inspect_sentinel.scout import Stage, as_reader
 
 SAMPLE = "sample"
@@ -594,28 +606,35 @@ async def test_a_decision_with_no_action_is_a_malformed_log() -> None:
         await scan(transcript)
 
 
+@monitor
+def quiet() -> Monitor:
+    async def before(context: Context, step: BeforeToolCall) -> Observation:
+        return Observation.score(0.0)
+
+    return before
+
+
+@pytest.fixture(scope="module")
+def header(tmp_path_factory: pytest.TempPathFactory) -> tuple[str, EvalInfo]:
+    # a log written by this inspect_ai with a sentinel, whose header read mode
+    # reads to replay a transcript as `as_scanner()` would
+    [log] = eval(
+        Task(dataset=[Sample(input="hi")], sentinel=observe_only(quiet())),
+        model=get_model("mockllm/model"),
+        log_dir=str(tmp_path_factory.mktemp("header")),
+        display="none",
+    )
+    assert log.status == "success", log.error
+    return log.location, EvalInfo.from_eval(read_eval_log(log.location).eval)
+
+
 def bridged_turn(case: str) -> list[Event]:
     # a bridged model call proposing "a", the bridge's checks of its call and
     # result, and the next bridged request carrying the result, with the
-    # proposal changed as `case` says
+    # proposal changed as `case` says (the review probes of 2026-11-23)
     first = proposal("out", "a")
     first.origin = "agent"
     first.requested_model = "inspect"
-    native: list[Event] = []
-    if case == "monitor role":
-        first.role = "monitor"
-    elif case == "pending":
-        first.pending = True
-    elif case == "scorer origin":
-        first.origin = "scorer"
-    elif case == "no output message id":
-        first.output.message.id = None
-    elif case == "handed over under another id":
-        first.agent_tool_call_ids = ["fresh"]
-    elif case == "run by a native tool":
-        run = tool("native", None, "a")
-        run.call_message_id = "out"
-        native.append(run)
     later = generate("later", None)
     later.origin = "agent"
     later.requested_model = "inspect"
@@ -626,49 +645,116 @@ def bridged_turn(case: str) -> list[Event]:
             id="answer", content="2", tool_call_id="a", function="addition"
         ),
     ]
+    before: list[Event] = []
+    middle: list[Event] = []
+    after: list[Event] = [later]
+    if case == "monitor role":
+        first.role = "monitor"
+    elif case == "pending":
+        first.pending = True
+    elif case == "scorer origin":
+        first.origin = "scorer"
+    elif case == "no output message id":
+        first.output.message.id = None
+    elif case == "agent origin inside a sentinel span":
+        first.span_id = "outer"
+        before = [SpanBeginEvent(id="outer", name="sentinel", type="sentinel")]
+        middle = [SpanEndEvent(id="outer")]
+    elif case == "handed over under another id":
+        first.agent_tool_call_ids = ["fresh"]
+    elif case == "agent ids swapped":
+        first.output.message.tool_calls = [
+            ToolCall(id="a", function="addition", arguments={}),
+            ToolCall(id="b", function="addition", arguments={}),
+        ]
+        first.agent_tool_call_ids = ["b", "a"]
+    elif case == "agent ids repeated":
+        first.output.message.tool_calls = [
+            ToolCall(id="a", function="addition", arguments={}),
+            ToolCall(id="b", function="addition", arguments={}),
+        ]
+        first.agent_tool_call_ids = ["a", "a"]
+    elif case == "run by a native tool":
+        run = tool("native", None, "a")
+        run.call_message_id = "out"
+        middle = [run]
+    elif case == "native run from no proposing message":
+        run = tool("native", None, "a", execution_id="native-run")
+        run.call_message_id = "not-an-output"
+        middle = [
+            *checked("native-call", "tool_call", "a", None, "native-run"),
+            run,
+            *checked("native-result", "tool_result", "a", None, "native-run"),
+        ]
+    elif case == "no next request":
+        after = []
+    elif case == "result not in the next request":
+        later.input = first.input
     return [
+        *before,
         first,
+        *middle,
         *checked("call", "tool_call", "a", None, "execution", bridge=True),
-        *native,
         *checked("result", "tool_result", "a", None, "execution", bridge=True),
-        later,
+        *after,
     ]
 
 
+# each case's steps read mode names: a bridge check's only where replay
+# built the step of the one model call that proposed its id
+BOTH = {("tool_call", "gout/a"), ("tool_result", "gout/a")}
+NAMED: dict[str, set[tuple[str, str]]] = {
+    "plain": BOTH,
+    "monitor role": set(),
+    "pending": set(),
+    "scorer origin": set(),
+    "no output message id": set(),
+    "agent origin inside a sentinel span": set(),
+    "handed over under another id": set(),
+    # the agent received the model's "b" as "a", and replay names that call's
+    # steps "gout/a", the step the bridge's check under "a" was of
+    "agent ids swapped": {("tool_call", "gout/a")},
+    "agent ids repeated": set(),
+    "run by a native tool": set(),
+    # the native checks name their own native steps; replay builds no bridged
+    # step for the call the native tool ran
+    "native run from no proposing message": {("tool_call", "a"), ("tool_result", "a")},
+    "no next request": {("tool_call", "gout/a")},
+    "result not in the next request": {("tool_call", "gout/a")},
+}
+
+
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    "case",
-    [
-        "plain",
-        "monitor role",
-        "pending",
-        "scorer origin",
-        "no output message id",
-        "handed over under another id",
-        "run by a native tool",
-    ],
-)
-async def test_a_bridge_check_names_only_a_step_replay_builds(case: str) -> None:
-    # read mode names a bridge check's step only where inspect_ai's replay
-    # builds it: none for a model call replay builds no tool steps for, or for
-    # a call it names by another id or leaves to its native run
+@pytest.mark.parametrize("case", list(NAMED))
+async def test_a_bridge_check_names_only_a_step_replay_builds(
+    case: str, header: tuple[str, EvalInfo]
+) -> None:
+    # read mode names a bridge check's step only where inspect_ai's replay of
+    # the same events builds it
+    location, eval_info = header
     events = bridged_turn(case)
-    later = events[-1]
-    assert isinstance(later, ModelEvent)
+    messages = [m for e in events if isinstance(e, ModelEvent) for m in e.input]
     steps = steps_from_events(
-        later.input,
+        messages,
         events,
         [],
         sample_uuid=SAMPLE,
-        eval_info=EvalInfo("0.3.292", True),
+        eval_info=eval_info,
     )
     built = {(s.stage, s.id) for s in steps if s.stage.startswith("tool")}
+    transcript = Transcript(
+        transcript_id=SAMPLE,
+        source_type="eval_log",
+        source_uri=location,
+        events=events,
+        messages=messages,
+    )
+    scan: Any = as_reader()
+    rows: list[dict[str, Any]] = [r.metadata or {} for r in await scan(transcript)]
     named = {
-        (stage, joined)
-        for stage in ("tool_call", "tool_result")
-        for row in await read(stage, events)
-        if (joined := (row.metadata or {}).get("replay_step_id")) is not None
+        (str(row["stage"]), str(row["replay_step_id"]))
+        for row in rows
+        if str(row["stage"]).startswith("tool") and row["replay_step_id"] is not None
     }
     assert named <= built
-    if case == "plain":
-        assert named == built == {("tool_call", "gout/a"), ("tool_result", "gout/a")}
+    assert named == NAMED[case]

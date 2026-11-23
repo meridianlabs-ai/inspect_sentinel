@@ -52,7 +52,34 @@ def transcript_steps(
     # taken for an agent turn. Each step gets its conversation's depth in the
     # chosen timeline.
     stored = _timeline(transcript, timeline) if timeline is not None else None
+    steps, from_events = _replayed(transcript, eval_info, stored)
     turns: Turns
+    if not from_events:
+        turns = "inferred"
+    elif stored is not None:
+        turns = "stored"
+    elif _origins(transcript):
+        turns = "recorded"
+    else:
+        turns = "inferred"
+    depths = _depths(transcript, stored, not from_events)
+    return [replace(s, depth=depths.get(s.step.conversation)) for s in steps], turns
+
+
+def replayed_step_ids(
+    transcript: Transcript, eval_info: EvalInfo | None
+) -> set[tuple[str, str]]:
+    # the (stage, step id) of each step replay builds for the transcript, as
+    # `as_scanner()` builds them without a stored timeline: read mode names a
+    # bridge check's replayed step only where replay built it
+    steps, _ = _replayed(transcript, eval_info, None)
+    return {(s.stage, s.id) for s in steps}
+
+
+def _replayed(
+    transcript: Transcript, eval_info: EvalInfo | None, stored: Timeline | None
+) -> tuple[list[ReplayStep], bool]:
+    # the transcript's steps, and whether they came from its events
     from_events = _model_events(transcript) and (
         transcript.messages_from is not None
         if eval_info is None
@@ -68,34 +95,26 @@ def transcript_steps(
         recorded = [e for e in transcript.events if isinstance(e, SentinelEvent)]
         if recorded:
             steps = _as_recorded(steps, recorded)
-        turns = "inferred"
-    else:
-        # Scout hands every model input expanded, a list of messages it shares
-        # between inputs; the driver reads inputs as ranges of a pool, so pool
-        # them once here. Condensing keeps each event's uuid, which citations
-        # and a stored timeline find events by.
-        events, data = condense_events(transcript.events)
-        steps = steps_from_events(
-            transcript.messages,
-            events,
-            data["messages"],
-            sample_uuid=transcript.transcript_id,
-            eval_info=eval_info,
-            timeline=stored,
-            messages_from=transcript.messages_from,
-            # in a log from an eval that ran no sentinel, the decisions of
-            # inspect_ai's built-in human approver, and no other, are a
-            # person's
-            human_approvers=(_HUMAN_APPROVER,),
-        )
-        if stored is not None:
-            turns = "stored"
-        elif _origins(transcript):
-            turns = "recorded"
-        else:
-            turns = "inferred"
-    depths = _depths(transcript, stored, not from_events)
-    return [replace(s, depth=depths.get(s.step.conversation)) for s in steps], turns
+        return steps, False
+    # Scout hands every model input expanded, a list of messages it shares
+    # between inputs; the driver reads inputs as ranges of a pool, so pool
+    # them once here. Condensing keeps each event's uuid, which citations
+    # and a stored timeline find events by.
+    events, data = condense_events(transcript.events)
+    steps = steps_from_events(
+        transcript.messages,
+        events,
+        data["messages"],
+        sample_uuid=transcript.transcript_id,
+        eval_info=eval_info,
+        timeline=stored,
+        messages_from=transcript.messages_from,
+        # in a log from an eval that ran no sentinel, the decisions of
+        # inspect_ai's built-in human approver, and no other, are a
+        # person's
+        human_approvers=(_HUMAN_APPROVER,),
+    )
+    return steps, True
 
 
 def _depths(

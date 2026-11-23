@@ -40,7 +40,7 @@ from inspect_sentinel.scout import (
 
 Row = dict[str, Any]
 Client = Literal["openai", "anthropic"]
-Filter = Literal["candidates", "monitor"]
+Filter = Literal["candidates", "cached", "monitor"]
 READ_FILE = "Read a file."
 PATH = {"type": "object", "properties": {"path": {"type": "string"}}}
 
@@ -78,9 +78,10 @@ def scaffold(
 ) -> Agent:
     """A tool loop over the `client` SDK that runs its tools itself, as Claude Code does.
 
-    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does. With `filter`, the bridge's requests go through a request filter: `"candidates"` generates a second candidate for the first request and hands over the first, and `"monitor"` generates with the model for the monitor role.
+    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does. With `filter`, the bridge's requests go through a request filter: `"candidates"` generates a second candidate for the first request and hands over the first, `"cached"` generates for the second request but hands over its response to the first again, and `"monitor"` generates with the model for the monitor role.
     """
     first = True
+    cached: list[ModelOutput] = []
 
     async def choose(
         model: Model,
@@ -103,6 +104,10 @@ def scaffold(
                 tool_choice=tool_choice,
                 config=config,
             )
+        if filter == "cached":
+            cached.append(chosen)
+            if len(cached) == 2:
+                return cached[0]
         return chosen
 
     async def execute(state: AgentState) -> AgentState:
@@ -185,8 +190,8 @@ async def _anthropic_loop(task: str) -> None:
 
 
 @protocol
-def judge(bad: str = "bad") -> ProtocolGroup:
-    """Rejects a call to read the file `bad`, and proceeds otherwise, recording the call's arguments or the result it saw; proceeds at each generate's output."""
+def judge(bad: str = "bad", stop: bool = False) -> ProtocolGroup:
+    """Rejects a call to read the file `bad`, and proceeds otherwise, recording the call's arguments or the result it saw; proceeds at each generate's output. With `stop`, ends the run at the first result it sees."""
 
     async def tool_call(
         context: Context, step: BeforeToolCall, escalations: Escalations
@@ -199,7 +204,10 @@ def judge(bad: str = "bad") -> ProtocolGroup:
     async def tool_result(
         context: Context, step: AfterToolCall, escalations: Escalations
     ) -> Decision:
-        return Decision(action="proceed", metadata={"result": step.result.text})
+        seen = {"result": step.result.text}
+        if stop:
+            return Decision(action="terminate", explanation="Done.", metadata=seen)
+        return Decision(action="proceed", metadata=seen)
 
     async def model_output(
         context: Context, step: AfterGenerate, escalations: Escalations
@@ -291,19 +299,19 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", "1/c", "proceed"),
         ],
     ),
-    # the model proposes "a" in both turns, so a result under "a" could
-    # answer either call: replay builds no result step for "a", and none of
-    # its result checks joins, the first turn's included. (The bridge also
-    # checks the first turn's result again beside the second's.) Each call
-    # check still joins its own turn's call
+    # the model proposes "a" in both turns, so nothing in the log says which
+    # proposal a check under "a" is of: no check of "a" joins, the first
+    # turn's included, and replay builds no result step for "a". (The bridge
+    # also checks the first turn's result again beside the second's.) "b",
+    # proposed once, joins
     "reused id": (
         [calls("a", "b"), calls("a")],
         [
-            ("tool_call", "0/a", "proceed"),
+            ("tool_call", None, "proceed"),
             ("tool_call", "0/b", "proceed"),
             ("tool_result", None, "proceed"),
             ("tool_result", "0/b", "proceed"),
-            ("tool_call", "1/a", "proceed"),
+            ("tool_call", None, "proceed"),
             ("tool_result", None, "proceed"),
             ("tool_result", None, "proceed"),
         ],
@@ -320,18 +328,17 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
         ],
     ),
     # the agent sends its first request twice and uses the second response,
-    # then the model reuses "a": every response proposes "a", so no result
-    # step is built for it and no result check joins. Each call check joins
-    # its own response's call, the discarded first response's included
+    # then the model reuses "a": every response proposes "a", so no check
+    # joins, and no result step is built for "a"
     "retried request, reused id": (
         [calls("a"), calls("a"), calls("a"), calls("a")],
         [
-            ("tool_call", "0/a", "proceed"),
-            ("tool_call", "1/a", "proceed"),
+            ("tool_call", None, "proceed"),
+            ("tool_call", None, "proceed"),
             ("tool_result", None, "proceed"),
-            ("tool_call", "2/a", "proceed"),
+            ("tool_call", None, "proceed"),
             ("tool_result", None, "proceed"),
-            ("tool_call", "3/a", "proceed"),
+            ("tool_call", None, "proceed"),
             ("tool_result", None, "proceed"),
         ],
     ),
@@ -346,6 +353,20 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", None, "proceed"),
         ],
     ),
+    # a request filter generates for the second request but hands over its
+    # first response again: the bridge checks the old call a second time,
+    # after a newer proposal of "a" the agent never received, so neither
+    # check joins either proposal
+    "filter hands over a cached response": (
+        [calls("a", path="old"), calls("a", path="new")],
+        [
+            ("tool_call", None, "proceed"),
+            ("tool_result", None, "proceed"),
+            ("tool_call", None, "proceed"),
+            ("tool_result", None, "proceed"),
+            ("tool_result", None, "proceed"),
+        ],
+    ),
     # a request filter generates with the monitor role's model, whose calls
     # replay builds no steps for, so the bridge's checks of them join none
     "filter generates as the monitor": (
@@ -355,6 +376,16 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", None, "proceed"),
         ],
     ),
+    # the sentinel ends the run at the first result, so no later request
+    # carries it and replay builds no result step: the call check joins, the
+    # result check doesn't
+    "terminated at the first result": (
+        [calls("a")],
+        [
+            ("tool_call", "0/a", "proceed"),
+            ("tool_result", None, "terminate"),
+        ],
+    ),
 }
 
 # the cases whose agent sends its first request twice
@@ -362,8 +393,11 @@ RETRIED = {"retried request, reused id"}
 # the cases whose bridge requests go through a request filter
 FILTERED: dict[str, Filter] = {
     "filter hands over one of two candidates": "candidates",
+    "filter hands over a cached response": "cached",
     "filter generates as the monitor": "monitor",
 }
+# the cases whose live sentinel ends the run at the first result
+STOPPED = {"terminated at the first result"}
 
 
 def ordered(rows: list[tuple[str, str | None, str]]) -> list[tuple[str, str, str]]:
@@ -382,7 +416,7 @@ def test_a_bridge_check_names_the_replayed_step_of_the_call_it_checked(
         tmp_path,
         turns,
         client,
-        judge(),
+        judge(stop=case in STOPPED),
         retry=case in RETRIED,
         filter=FILTERED.get(case),
     )
@@ -422,7 +456,7 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
         tmp_path,
         turns,
         "openai",
-        judge(),
+        judge(stop=case in STOPPED),
         retry=case in RETRIED,
         filter=FILTERED.get(case),
     )
@@ -479,7 +513,7 @@ def test_read_mode_names_only_steps_replay_built(tmp_path: Path, case: str) -> N
         tmp_path,
         turns,
         "openai",
-        judge(),
+        judge(stop=case in STOPPED),
         retry=case in RETRIED,
         filter=FILTERED.get(case),
     )
@@ -500,19 +534,30 @@ def test_read_mode_names_only_steps_replay_built(tmp_path: Path, case: str) -> N
 
 
 # the replayed steps no check joins: the results the model received after a
-# rejection, which the bridge never checked. A reused id has no replayed result
-# step to leave unjoined
+# rejection, which the bridge never checked, and the calls under an id
+# proposed more than once, whose checks can't be told apart. A reused id has
+# no replayed result step to leave unjoined
 UNCHECKED: dict[str, list[tuple[str, str]]] = {
     "plain": [],
     "rejection": [("tool_result", "0/ok"), ("tool_result", "0/bad")],
-    "reused id": [],
+    "reused id": [("tool_call", "0/a"), ("tool_call", "1/a")],
     "duplicate ids": [],
-    "retried request, reused id": [],
+    "retried request, reused id": [
+        ("tool_call", "0/a"),
+        ("tool_call", "1/a"),
+        ("tool_call", "2/a"),
+        ("tool_call", "3/a"),
+    ],
     "filter hands over one of two candidates": [
         ("tool_call", "0/a"),
         ("tool_call", "1/a"),
     ],
+    "filter hands over a cached response": [
+        ("tool_call", "0/a"),
+        ("tool_call", "1/a"),
+    ],
     "filter generates as the monitor": [],
+    "terminated at the first result": [],
 }
 
 
@@ -530,7 +575,7 @@ def test_compare_decisions_pairs_a_new_protocols_decisions_with_a_bridges_checks
         tmp_path,
         turns,
         "openai",
-        judge(),
+        judge(stop=case in STOPPED),
         retry=case in RETRIED,
         filter=FILTERED.get(case),
     )
