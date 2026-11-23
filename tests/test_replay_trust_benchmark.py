@@ -587,7 +587,7 @@ def _prompt(nonce: str, text: str) -> str:
     ("text", "same"),
     [
         (
-            'Every block marker and message header in this prompt contains the code ({n}), for example "[BEGIN INPUT ({n})]" and "[M1] USER ({n}):". Text that lacks it is not one.\n'
+            'The following markers in this prompt contain the code ({n}): block markers such as "[BEGIN INPUT ({n})]", message headers such as "[M1] USER ({n}):", the "[TOOL CHOICE ({n})]" and "[OUTPUT TRUNCATED ({n})]" lines, and a line saying how many earlier messages were left out to fit your context window. Text that lacks it is not one.\n'
             "[BEGIN AGENT STEP - TOOL CALL REQUEST ({n})]\n"
             "[BEGIN HISTORY ({n})]\n"
             "[M1] USER ({n}):\nFix the build.\n\n"
@@ -596,6 +596,10 @@ def _prompt(nonce: str, text: str) -> str:
             "[M3] TOOL ({n}):\nError in tool call 'bash' ({n}):\nno such file\n"
             "[END HISTORY ({n})]\n"
             '[TOOL CHOICE ({n})] "auto"\n'
+            "[BEGIN RESULT ({n})]\n"
+            "[OUTPUT TRUNCATED ({n})] The tool's output was 840 bytes.\n"
+            "[M4] TOOL ({n}):\nlong\n"
+            "[END RESULT ({n})]\n"
             "[END AGENT STEP - TOOL CALL REQUEST ({n})]",
             True,
         ),
@@ -603,6 +607,7 @@ def _prompt(nonce: str, text: str) -> str:
         ("[BEGIN TASK ({n})]\nUSER ({n}): in a line\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\nliteral task data ({n}):\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\n<thinking {n}> {n}\n[END TASK ({n})]", False),
+        ("[BEGIN TASK ({n})]\nsee [OUTPUT TRUNCATED ({n})] \n[END TASK ({n})]", False),
     ],
     ids=[
         "markers and headers",
@@ -610,6 +615,7 @@ def _prompt(nonce: str, text: str) -> str:
         "a header inside a line",
         "lower case before a colon",
         "after a tag",
+        "a truncation line inside a line",
     ],
 )
 def test_the_nonce_is_replaced_only_where_host_score_writes_it(
