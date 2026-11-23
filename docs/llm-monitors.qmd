@@ -223,7 +223,9 @@ def actions(model: str | None = None, role: str | None = None) -> Monitor:
     return check
 ```
 
-The monitor model sees the user messages, the tool calls and their results, and the tool call being judged, but none of the agent's model's text. The text is left out everywhere the step shows the agent's model's messages: the three lists, the text beside the tool call being judged, and the reply after a model call.
+The monitor model sees the user messages, the tool calls and their results, and the tool call being judged, without the text parts of the agent's model's messages. The text is left out everywhere the step shows the agent's model's messages: the three lists, the text beside the tool call being judged, and the reply after a model call.
+
+Text the agent's model wrote can still reach the monitor model in other ways: in tool call arguments (such as a `think()` call or a comment in a command), in compaction summaries (shown as user messages), and in results returned by sub-agents or tools.
 
 Reasoning is controlled separately by `omit_reasoning`, so you can keep it (to judge actions together with the reasoning behind them) or leave it out as above. A provider's own tool use, such as web search, follows `omit_tool_usage`. Images and other media in a message are still shown as placeholders.
 
