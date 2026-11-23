@@ -19,7 +19,7 @@ dependencies = [
     # The wire types a monitor reads (ChatMessage, ToolCall, ModelOutput) live
     # in inspect-ai today. design/inspect-core.md describes extracting them
     # into a leaf package; when that lands this dependency narrows to it.
-    "inspect-ai>=0.3.291",
+    "inspect-ai>=0.3.292",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
     # inspect_ai (design/pr-series.md). The floor is the scout extra's.
