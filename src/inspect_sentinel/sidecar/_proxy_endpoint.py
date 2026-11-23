@@ -16,14 +16,14 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ._exchange import MAX_BODY_BYTES, Answer, Pass, Refuse, Reply, Request
-from ._handler import Handler, TimeLimitError
+from ._handler import Handler, JudgingTimeoutError
 from ._http import health_route, read_within
 from ._json_rpc import (
     INVALID_PARAMS,
     INVALID_REQUEST,
+    JUDGING_TIMEOUT,
     METHOD_NOT_FOUND,
     SENTINEL_FAILED,
-    TIME_LIMIT,
     UNKNOWN_STREAM,
     UNREADABLE,
     UNREGISTERED,
@@ -150,9 +150,9 @@ _ERRORS: dict[int, tuple[str, str]] = {
         "sentinel_failed",
         f"The sentinel failed, so the request or reply was not judged. {_NOT_JUDGED}",
     ),
-    TIME_LIMIT: (
-        "time_limit",
-        f"The sentinel didn't finish judging within the sidecar's time limit, and was cancelled. {_NOT_JUDGED}",
+    JUDGING_TIMEOUT: (
+        "judging_timeout",
+        f"The sentinel didn't finish judging within the sidecar's judging timeout, and was cancelled. {_NOT_JUDGED}",
     ),
     UNREGISTERED: (
         "unregistered",
@@ -195,7 +195,7 @@ def proxy_app(
 
     A proxy hook that hands over a streamed reply as it arrives uses a reply stream instead of `judge_reply`: `begin_reply` with the reply's status and headers, `reply_chunk` with each part of its body in order, and `end_reply` once it has ended, or `abort_reply` if its caller goes. Meanwhile it calls `next_release` again and again, and sends the caller what each answer gives: bytes to send, a refusal with a status, which comes only while nothing has been sent, an error event to send once something has, or the reply's end. Every call can be sent again safely. The reply is held whole, or released as it arrives, as the handler's `release` says. A reply stream runs in the app's lifespan.
 
-    A refusal is a result, because it is a decision. A request or reply that was not judged is answered with a JSON-RPC error: one that couldn't be read, one the sentinel failed on, and one the sentinel didn't finish judging within the handler's time limit each have a code of their own, which the schema lists under `errors`. A proxy hook refuses the call on any of them, unless its operator has chosen to let calls that weren't judged through, as Inspect fails a sample whose sentinel fails. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
+    A refusal is a result, because it is a decision. A request or reply that was not judged is answered with a JSON-RPC error: one that couldn't be read, one the sentinel failed on, and one the sentinel didn't finish judging within the handler's judging timeout each have a code of their own, which the schema lists under `errors`. A proxy hook refuses the call on any of them, unless its operator has chosen to let calls that weren't judged through, as Inspect fails a sample whose sentinel fails. A call larger than `max_body_bytes` is not read, and is answered with an HTTP 413.
 
     The app also answers a health check at `/health`, which a proxy doesn't call.
 
@@ -285,8 +285,8 @@ async def _judge(
 
 def _not_judged(ex: Exception, what: str, id: str) -> RpcError:
     # the JSON-RPC error that says a request or reply wasn't judged, and why
-    if isinstance(ex, TimeLimitError):
-        return RpcError(TIME_LIMIT, str(ex))
+    if isinstance(ex, JudgingTimeoutError):
+        return RpcError(JUDGING_TIMEOUT, str(ex))
     if isinstance(ex, UnregisteredSampleError):
         return RpcError(UNREGISTERED, str(ex))
     if isinstance(ex, TooLargeError):

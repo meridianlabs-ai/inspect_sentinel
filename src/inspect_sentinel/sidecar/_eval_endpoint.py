@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from inspect_ai.tool import ToolCall
+from inspect_ai.tool import ToolCall, ToolFunction
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, model_validator
 from pydantic.json_schema import GenerateJsonSchema, models_json_schema
 from starlette.requests import Request as HttpRequest
@@ -135,9 +135,13 @@ class RegisterTaskResult(BaseModel):
 
 
 class CompleteRegistrationParams(SampleFacts, EvalCall):
-    """Parameters of `complete_registration`: one sample of a registered task, sent before the sample's first epoch."""
+    """Parameters of `complete_registration`: one sample of a registered task, sent before each run of the sample makes its first request."""
 
     task: str = Field(description="The task's name, as `register_task` gave it.")
+    sample_uuid: str | None = Field(
+        default=None,
+        description="The uuid of the run completing the registration, as its requests' `x-inspect-context` gives it. The sidecar holds the sample's facts while a run that named itself here is in progress, and frees them when the last one has ended (`end_sample`), so each epoch and each retry of a sample sends them again. Where a registration of the sample names no run, its facts are kept until the task's registration expires.",
+    )
 
 
 class CompleteRegistrationResult(BaseModel):
@@ -171,12 +175,12 @@ class ReviewRecord(BaseModel):
     try_number: int = Field(
         description="The number of the try at which the sentinel asked the question, counting from 1 in the order the sidecar received the tries. It is the try whose request or reply the sentinel was judging. A client that retries a request sends it again under the same `x-irid`."
     )
-    stage: Literal["tool_call", "tool_result", "model_output"] = Field(
-        description="The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run, `model_output` about the model's whole turn, before any of its calls runs."
+    stage: Literal["tool_call", "tool_result", "model_input", "model_output"] = Field(
+        description="The stage at which the sentinel asked: `tool_call` before the call runs, `tool_result` after it has run, `model_input` about the request before the model is sent it, `model_output` about the model's whole turn, before any of its calls runs."
     )
     call: str | None = Field(
         default=None,
-        description="The id of the tool call the question was about. Left out at `model_output`, where the question was about the whole turn.",
+        description="The id of the tool call the question was about. Left out at a generate stage, where the question was about a request or a whole turn.",
     )
     asked: float = Field(
         description="When the sentinel asked the question, in seconds since the epoch."
@@ -327,6 +331,10 @@ class EndSampleParams(EvalCall):
     sample_uuid: str = Field(
         description="The sample's uuid, as `x-inspect-context` gives it."
     )
+    task: str | None = Field(
+        default=None,
+        description="The sample's task, as `register_task` gave it. It finds the task's registration, where the run stops counting as one in progress of its sample (`complete_registration`). The sample is ended whatever it names.",
+    )
 
 
 class EndSampleResult(BaseModel):
@@ -334,7 +342,7 @@ class EndSampleResult(BaseModel):
 
     sample_uuid: str
     state: Literal["ended", "unknown"] = Field(
-        description="`ended`, or `unknown` for a sample the sidecar never saw."
+        description="`ended`, or `unknown` for a sample that neither made a request nor completed a registration naming it."
     )
 
 
@@ -362,8 +370,39 @@ class Escalation(BaseModel):
     )
 
 
+class MessageShown(BaseModel):
+    """One message of a request that the model has not been sent before."""
+
+    position: int = Field(
+        description="Where the message is in the request, counting from 1."
+    )
+    message: dict[str, Any] = Field(
+        description="The message, as Inspect writes a `ChatMessage`. It is for showing to the person. Do not add it to the agent's conversation."
+    )
+
+
+class RequestShown(BaseModel):
+    """What a question at `model_input` shows of the request the model is about to be sent."""
+
+    model: str = Field(description="The model the request is for.")
+    messages: int = Field(description="How many messages the request sends.")
+    new: list[MessageShown] = Field(
+        description="The messages the model has not been sent before, in the request's order. A message that was rewritten since it was sent is among them, as is an assistant message the client wrote itself. A message sent before is left out wherever it now sits."
+    )
+    tools: list[str] = Field(
+        description="The names of the tools the request offers the model."
+    )
+    tool_choice: Literal["auto", "any", "none", "function"] = Field(
+        description="Which tool the model is to call. `auto`: any of them, or none. `any`: one of them. `none`: none of them. `function`: the one that `tool_function` names."
+    )
+    tool_function: str | None = Field(
+        default=None,
+        description="The name of the function the model must call. Present where `tool_choice` is `function`. It is kept apart from `tool_choice`, since a tool can be named `auto`, `any` or `none`.",
+    )
+
+
 class QuestionAsked(BaseModel):
-    """A question that a sentinel asked a person about one of the eval's model requests: about a tool call, or about the model's whole turn. The step waits for the answer."""
+    """A question that a sentinel asked a person about one of the eval's model requests: about a tool call, about the model's whole turn, or about the request itself. The step waits for the answer."""
 
     id: str = Field(description="The question's id. `answer_question` takes it.")
     sample_uuid: str = Field(
@@ -372,19 +411,19 @@ class QuestionAsked(BaseModel):
     request_id: str = Field(
         description="The `x-irid` of the model request that the question paused. The request stays paused until the question has an answer."
     )
-    stage: Literal["tool_call", "tool_result", "model_output"] = Field(
-        description="`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model. `model_output`: the model's turn is complete, and none of its calls has run."
+    stage: Literal["tool_call", "tool_result", "model_input", "model_output"] = Field(
+        description="`tool_call`: the call has not run yet. `tool_result`: the call has run, and its result is about to reach the model. `model_input`: the request has not been sent to the provider. `model_output`: the model's turn is complete, and none of its calls has run."
     )
     call: dict[str, Any] | None = Field(
         default=None,
-        description="The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation. Left out at `model_output`.",
+        description="The tool call with its arguments, as Inspect writes a `ToolCall`. It is for showing to the person. Do not add it to the agent's conversation. Left out at a generate stage.",
     )
     message: str = Field(
-        description="The assistant's text: what came with the call, or at `model_output` the turn's own text."
+        description="The assistant's text: what came with the call, or at `model_output` the turn's own text. Empty at `model_input`."
     )
     view: dict[str, Any] | None = Field(
         default=None,
-        description="How to display the call, as Inspect writes a `ToolCallView`. Left out at `model_output`.",
+        description="How to display the call, as Inspect writes a `ToolCallView`. Left out at a generate stage.",
     )
     result: dict[str, Any] | None = Field(
         default=None,
@@ -393,6 +432,10 @@ class QuestionAsked(BaseModel):
     turn: dict[str, Any] | None = Field(
         default=None,
         description="The model's turn, as Inspect writes a `ChatMessageAssistant`. The eval has been given none of it yet, so it is for showing to the person. Do not add it to the agent's conversation: its reasoning has no signature, and none of the cipher text a provider returns in place of reasoning it withheld. At `model_output` it is the whole turn, unless the reply held none: its text, its reasoning and every tool call it makes, each with the call part of its view. A viewer's separate context is only in the call's own question. At `tool_call` it is the turn that made the call, without its tool calls. Left out at `tool_result`, where the eval already has the turn.",
+    )
+    request: RequestShown | None = Field(
+        default=None,
+        description="The request the model is about to be sent. Present at `model_input`.",
     )
     escalations: list[Escalation] = Field(
         description="The escalations passed to the protocol that asked the person, in order: who escalated, and why."
@@ -699,7 +742,7 @@ async def _answered(
         )
         try:
             fixed = await handler.complete_registration(
-                given.eval_id, given.task, sample
+                given.eval_id, given.task, sample, given.sample_uuid
             )
         except UnknownTaskError as ex:
             raise RpcError(UNKNOWN_TASK, str(ex)) from None
@@ -802,7 +845,7 @@ async def _answered(
         return EndSampleResult(
             sample_uuid=given.sample_uuid,
             state=(
-                await handler.end_sample(given.sample_uuid, given.eval_id)
+                await handler.end_sample(given.sample_uuid, given.eval_id, given.task)
                 if holds
                 else "unknown"
             ),
@@ -895,6 +938,32 @@ def _question(question: Question) -> QuestionAsked:
             if question.turn is not None
             else None
         ),
+        request=(
+            RequestShown(
+                model=question.request.model,
+                messages=question.request.messages,
+                new=[
+                    MessageShown(
+                        position=position,
+                        message=message.model_dump(mode="json", exclude_none=True),
+                    )
+                    for position, message in question.request.new
+                ],
+                tools=list(question.request.tools),
+                tool_choice=(
+                    "function"
+                    if isinstance(question.request.tool_choice, ToolFunction)
+                    else question.request.tool_choice
+                ),
+                tool_function=(
+                    question.request.tool_choice.name
+                    if isinstance(question.request.tool_choice, ToolFunction)
+                    else None
+                ),
+            )
+            if question.request is not None
+            else None
+        ),
         escalations=[
             Escalation(name=escalation.name, explanation=escalation.explanation)
             for escalation in question.escalations
@@ -906,7 +975,9 @@ def _question(question: Question) -> QuestionAsked:
 
 
 _CALL = TypeAdapter(ToolCall)
-_ASKED_STAGE = TypeAdapter(Literal["tool_call", "tool_result", "model_output"])
+_ASKED_STAGE = TypeAdapter(
+    Literal["tool_call", "tool_result", "model_input", "model_output"]
+)
 _DECISION = TypeAdapter(Literal["approve", "reject", "terminate"] | None)
 
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import socket
 import subprocess
 import tempfile
 import threading
@@ -26,7 +25,8 @@ from starlette.applications import Starlette
 
 from inspect_sentinel.sidecar import Answer, Handler, Reply, Request
 from inspect_sentinel.sidecar._eval_endpoint import eval_routes
-from inspect_sentinel.sidecar.envoy import ENVOY_VERSION, envoy_server, envoy_yaml
+from inspect_sentinel.sidecar.envoy import ENVOY_VERSION, envoy_yaml
+from inspect_sentinel.sidecar.envoy._shim import bind_envoy_server
 
 IMAGE = os.environ.get("SENTINEL_ENVOY_IMAGE", f"envoyproxy/envoy:v{ENVOY_VERSION}")
 """The Envoy the tests run, which `SENTINEL_ENVOY_IMAGE` changes, to test another release."""
@@ -254,13 +254,14 @@ def envoy_stack(
         # listen on every address
         provider_server = await asyncio.start_server(provider.serve, "0.0.0.0", 0)
         ports["provider"] = provider_server.sockets[0].getsockname()[1]
-        ports["shim"] = _free_port()
+        # Each server listens on port 0, so the system gives it a port no other
+        # test can take first, and Envoy's configuration is written after.
         stop_shim: Callable[[], Awaitable[None]]
         if shim:
-            server = envoy_server(
+            server, _, ports["shim"] = bind_envoy_server(
                 switched,  # type: ignore[arg-type] # judges as a Handler does
                 host="0.0.0.0",
-                port=ports["shim"],
+                port=0,
                 max_body_bytes=max_body_bytes,
             )
             await server.start()
@@ -269,25 +270,26 @@ def envoy_stack(
             # what Envoy reaches in place of the shim takes each connection
             # and closes it, so that Envoy fails at once, where a port
             # nothing listens on is held open by Docker Desktop
-            refusing = await asyncio.start_server(_close, "0.0.0.0", ports["shim"])
+            refusing = await asyncio.start_server(_close, "0.0.0.0", 0)
+            ports["shim"] = refusing.sockets[0].getsockname()[1]
 
             async def stop_refusing() -> None:
                 refusing.close()
                 await refusing.wait_closed()
 
             stop_shim = stop_refusing
-        ports["sidecar"] = _free_port()
         sidecar = uvicorn.Server(
             uvicorn.Config(
                 Starlette(routes=eval_routes(switched, max_body_bytes=max_body_bytes)),  # type: ignore[arg-type]
                 host="0.0.0.0",
-                port=ports["sidecar"],
+                port=0,
                 log_level="warning",
             )
         )
         serving = asyncio.ensure_future(sidecar.serve())
         while not sidecar.started:
             await asyncio.sleep(0.01)
+        ports["sidecar"] = sidecar.servers[0].sockets[0].getsockname()[1]
         ready.set()
         await stop.wait()
         sidecar.should_exit = True
@@ -379,12 +381,6 @@ def _wait_for(url: str, container: str) -> None:
         ["docker", "logs", container], capture_output=True, text=True
     ).stderr
     raise TimeoutError(f"Envoy didn't start:\n{logs}")
-
-
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("0.0.0.0", 0))
-        return probe.getsockname()[1]
 
 
 def headers_of(stack: Stack) -> list[dict[str, Any]]:

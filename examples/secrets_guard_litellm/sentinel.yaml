@@ -1,0 +1,4 @@
+# The sidecar's sentinel: the secrets_guard rule, from the secrets_rules
+# package in rule/.
+sentinel:
+  name: secrets_rules/secrets_guard

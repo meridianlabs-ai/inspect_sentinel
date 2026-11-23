@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -15,10 +16,12 @@ import pytest
 import uvicorn
 
 from inspect_sentinel._context import Context
-from inspect_sentinel._decorators import protocol
-from inspect_sentinel._report import Decision, Escalations
+from inspect_sentinel._decorators import monitor, protocol
+from inspect_sentinel._protocols import observe_only
+from inspect_sentinel._report import Decision, Escalations, Observation
+from inspect_sentinel._runner import run_monitors
 from inspect_sentinel._step import BeforeToolCall
-from inspect_sentinel._types import Protocol
+from inspect_sentinel._types import Monitor, MonitorGroup, Protocol
 from inspect_sentinel.sidecar import Handler, Refuse
 from inspect_sentinel.sidecar._eval_endpoint import TOKEN_VARIABLE
 from inspect_sentinel.sidecar._inspect_client import judgment
@@ -119,7 +122,7 @@ def test_defaults_are_one_port_and_no_limits() -> None:
     assert arguments.reject_status == 400
     assert arguments.release == "whole"
     assert arguments.keepalive == 15.0
-    assert arguments.time_limit is None
+    assert arguments.judging_timeout is None
     assert arguments.max_body_bytes == 64 * 1024 * 1024
     assert arguments.run_expiry == 24 * 60 * 60
     assert arguments.timestamp_window == 300
@@ -237,6 +240,93 @@ async def test_a_sidecar_can_be_told_how_strict_to_be() -> None:
         await handler.request(request())
 
 
+@monitor(portable=False)
+def reads_the_sandbox() -> Monitor:
+    async def observe(context: Context, step: BeforeToolCall) -> Observation | None:
+        return None
+
+    return observe
+
+
+@protocol(portable=False)
+def reads_the_store() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return Decision.proceed()
+
+    return decide
+
+
+@protocol
+def builds_its_monitor() -> Protocol:
+    return observe_only([reads_the_sandbox()])
+
+
+@protocol
+def runs_its_monitor() -> Protocol:
+    held = reads_the_sandbox()
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        await run_monitors(held, context, step)
+        return Decision.proceed()
+
+    return decide
+
+
+_BUILT_AT_IMPORT = reads_the_sandbox()
+
+
+@monitor
+def returns_a_built_monitor() -> Monitor:
+    return _BUILT_AT_IMPORT
+
+
+@monitor
+def groups_a_built_monitor() -> MonitorGroup:
+    return MonitorGroup(_BUILT_AT_IMPORT)
+
+
+@pytest.mark.parametrize(
+    ("sentinel", "named"),
+    [
+        ("name: reads_the_store", "reads_the_store"),
+        (
+            "name: observe_only\n  monitors:\n    - name: reads_the_sandbox",
+            "reads_the_sandbox",
+        ),
+        ("name: builds_its_monitor", "reads_the_sandbox"),
+        ("name: runs_its_monitor", "reads_the_sandbox"),
+        (
+            "name: observe_only\n  monitors:\n    - name: returns_a_built_monitor",
+            "reads_the_sandbox",
+        ),
+        (
+            "name: observe_only\n  monitors:\n    - name: groups_a_built_monitor",
+            "reads_the_sandbox",
+        ),
+    ],
+    ids=[
+        "the sentinel itself",
+        "a monitor the configuration gives a protocol",
+        "a monitor a protocol's factory builds and returns",
+        "a monitor a protocol's factory builds and runs itself",
+        "a monitor a factory returns but did not build",
+        "a monitor a factory groups but did not build",
+    ],
+)
+def test_a_sentinel_that_holds_an_eval_only_monitor_or_protocol_is_refused(
+    tmp_path: Path, sentinel: str, named: str
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(f"sentinel:\n  {sentinel}\n")
+
+    with pytest.raises(ValueError, match=f"holds {named}, declared `portable=False`"):
+        handler_from_arguments(parse_arguments(["--sentinel", str(config)]))
+
+
 _STANZA = """
 sentinel:
   name: no_tokyo
@@ -245,6 +335,7 @@ server:
     monitor: mockllm/model
   port: 9000
   reject_status: 503
+  judging_timeout: 30
   release: early
   keepalive: 5
   eval_results: false
@@ -269,6 +360,7 @@ def test_the_server_stanza_sets_what_the_options_would(tmp_path: Path) -> None:
 
     assert arguments.model_role == ["monitor=mockllm/model"]
     assert (arguments.port, arguments.reject_status) == (9000, 503)
+    assert arguments.judging_timeout == 30
     assert arguments.release == "early"
     assert arguments.keepalive == 5
     assert (arguments.no_eval_results, arguments.no_runtime_task_registration) == (
@@ -307,6 +399,26 @@ def test_an_option_given_wins_over_the_stanza_even_at_its_default(
     assert arguments.port == 9000
 
 
+def test_a_judging_timeout_given_as_an_option_wins_over_the_stanzas(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(_STANZA)
+
+    arguments = parse_arguments(["--sentinel", str(config), "--judging-timeout", "5"])
+
+    assert arguments.judging_timeout == 5
+
+
+def test_the_judging_timeouts_old_option_is_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        parse_arguments(["--sentinel", "no_tokyo", "--time-limit", "5"])
+
+    assert "unrecognized arguments: --time-limit" in capsys.readouterr().err
+
+
 @pytest.mark.anyio
 async def test_a_handler_is_built_from_a_file_with_a_stanza(tmp_path: Path) -> None:
     config = tmp_path / "sentinel.yaml"
@@ -339,6 +451,7 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     ("text", "says"),
     [
         ("sentinel:\n  name: no_tokyo\nserver:\n  colour: blue\n", "doesn't fit"),
+        ("sentinel:\n  name: no_tokyo\nserver:\n  time_limit: 5\n", "doesn't fit"),
         (
             "sentinel:\n  name: no_tokyo\nserver:\n  envoy:\n    colour: blue\n",
             "doesn't fit",
@@ -357,6 +470,7 @@ def test_a_registered_name_is_found_as_an_eval_finds_it() -> None:
     ],
     ids=[
         "a setting the server doesn't have",
+        "the judging timeout's old name",
         "a setting the Envoy shim doesn't have",
         "another key",
         "no sentinel",
@@ -409,14 +523,9 @@ def lets_all_through():
 )
 def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) -> None:
     (tmp_path / "lets_all_through.py").write_text(_RULE)
-    free: list[int] = []
-    for _ in range(1 if second is None else 2):
-        with socket.socket() as found:
-            found.bind(("127.0.0.1", 0))
-            free.append(found.getsockname()[1])
-    given = ["--port", str(free[0])]
-    if second is not None:
-        given += [second, str(free[1])]
+    # Each port is 0, so the system gives the sidecar ports no other test can
+    # take first, and the sidecar's own log says which they are.
+    given = ["--port", "0", *([second, "0"] if second is not None else [])]
     serving = subprocess.Popen(
         [
             sys.executable,
@@ -432,32 +541,58 @@ def test_ctrl_c_stops_the_sidecar_cleanly(second: str | None, tmp_path: Path) ->
         env=os.environ | {TOKEN_VARIABLE: "s3cret"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
     )
+    listeners = 1 if second is None else 2
+    log: list[str] = []
+    ports: dict[str, list[int]] = {"Uvicorn": [], "Envoy shim": []}
+    started = threading.Event()
+
+    def read_log() -> None:
+        assert serving.stderr is not None
+        try:
+            with serving.stderr as stream:
+                for line in stream:
+                    log.append(line)
+                    listening = _LISTENING.search(line)
+                    if listening is not None:
+                        ports[listening[1]].append(int(listening[2]))
+                        if sum(map(len, ports.values())) == listeners:
+                            started.set()
+        finally:
+            started.set()
+
+    reader = threading.Thread(target=read_log, daemon=True)
+    reader.start()
     try:
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                httpx.get(f"http://127.0.0.1:{free[0]}/health", timeout=1)
-                break
-            except httpx.HTTPError:
-                assert serving.poll() is None and time.monotonic() < deadline
-                time.sleep(0.1)
+        started.wait(60)
+        assert sum(map(len, ports.values())) == listeners, "".join(log)
+        endpoint = f"http://127.0.0.1:{ports['Uvicorn'][0]}"
+        assert httpx.get(f"{endpoint}/health", timeout=5).is_success
         if second is None:
             # a running sidecar can ask a person through an eval, so its
             # probe reports `review: true`
-            probed = httpx.get(f"http://127.0.0.1:{free[0]}/sentinel/info", timeout=5)
+            probed = httpx.get(f"{endpoint}/sentinel/info", timeout=5)
             assert probed.json()["review"] is True
         if second == "--envoy-port":
-            # the shim listens before the endpoints do
-            socket.create_connection(("127.0.0.1", free[1]), timeout=5).close()
+            socket.create_connection(
+                ("127.0.0.1", ports["Envoy shim"][0]), timeout=5
+            ).close()
         serving.send_signal(signal.SIGINT)
-        _, errors = serving.communicate(timeout=30)
+        serving.wait(timeout=30)
     finally:
         if serving.poll() is None:
             serving.kill()
+            serving.wait()
+        reader.join(timeout=30)
 
     assert serving.returncode == 0
-    assert b"Traceback" not in errors
+    assert "Traceback" not in "".join(log)
+
+
+_LISTENING = re.compile(r"(Uvicorn|Envoy shim) running on \S*:(\d+)")
+"""The sidecar's line saying where a server listens, which gives the port the system chose for port 0: the number after the address's last colon, past an IPv6 host's own."""
 
 
 @pytest.mark.parametrize(
@@ -471,6 +606,29 @@ def test_the_handler_keeps_a_client_alive_as_the_arguments_say(
     )
 
     assert handler.keepalive == keepalive
+
+
+@pytest.mark.parametrize("given", ["option", "stanza"])
+def test_the_handler_names_runs_by_the_header_it_is_given(
+    given: str, tmp_path: Path
+) -> None:
+    config = tmp_path / "sentinel.yaml"
+    config.write_text(
+        "sentinel:\n  name: no_tokyo\nserver:\n  run_header: X-Claude-Code-Session-Id\n"
+    )
+    arguments = (
+        _arguments("--sentinel", "no_tokyo", "--run-header", "X-Claude-Code-Session-Id")
+        if given == "option"
+        else parse_arguments(["--sentinel", str(config)])
+    )
+
+    assert handler_from_arguments(arguments).run_header == "x-claude-code-session-id"
+
+
+def test_no_header_names_a_run_by_default() -> None:
+    handler = handler_from_arguments(_arguments("--sentinel", "no_tokyo"))
+
+    assert handler.run_header is None
 
 
 def test_the_handler_checks_timestamps_within_the_window_the_arguments_say() -> None:

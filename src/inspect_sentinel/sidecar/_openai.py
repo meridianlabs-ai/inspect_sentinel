@@ -831,6 +831,29 @@ def responses_results_in(entry: object) -> list[object]:
     return [entry] if responses_result_of(entry)[0] is not None else []
 
 
+def responses_put_back_from_plain(call: object) -> bool:
+    """Whether a call of the model's is put back in place of an eval's copy that inspect_ai wrote from its message alone.
+
+    A custom tool's call and a computer call are.
+    """
+    return responses_call_of(call)[1] in ("custom_tool_call", "computer_call")
+
+
+def responses_result_as(result: object | None, call: object) -> list[object] | None:
+    """What an eval holds as the result of its copy of a call, or None if it holds none, as the result of the model's own `call`: empty where it holds none, and None if it can't be written as one.
+
+    A computer call's can't be. Its result holds a screenshot, which the eval's doesn't, so only the rejection the sidecar wrote answers it.
+    """
+    kind = responses_call_of(call)[1]
+    held = cast("dict[str, Any]", result) if _is_output(result) else None
+    plain = held is not None and held.get("type") == "function_call_output"
+    if kind == "computer_call" and (held is None or plain):
+        return None
+    if kind == "custom_tool_call" and held is not None and plain:
+        return [{**held, "type": "custom_tool_call_output"}]
+    return [] if result is None else [result]
+
+
 def responses_pick(rendered: list[Any], id: str) -> tuple[Any, tuple[Any, ...]]:
     call = next(item for item in rendered if _call_id(item) == id)
     told = [item for item in rendered if responses_result_of(item)[0] == id]
