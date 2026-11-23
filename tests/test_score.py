@@ -10,6 +10,7 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageTool,
     ChatMessageUser,
+    ContentData,
     ContentImage,
     ContentText,
     GenerateConfig,
@@ -883,6 +884,37 @@ async def test_an_image_in_a_message_the_cut_drops_is_not_counted() -> None:
     # the model was asked, since the only image was in a message cut to fit
     assert observation.metadata == {"left_out": {"input": 4}}
     assert len(host.inputs) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "metadata, flagged",
+    [
+        ({"type": "anthropic_compact", "content": "Listed the files."}, False),
+        ({"type": "openai_compact", "encrypted_content": "gAAAAB"}, True),
+    ],
+    ids=["anthropic", "openai"],
+)
+async def test_flag_fails_closed_only_on_a_compaction_the_model_cannot_read(
+    metadata: dict[str, str], flagged: bool
+) -> None:
+    compacted = ChatMessageAssistant(
+        id="compacted",
+        content=[ContentData(data={"compaction_metadata": metadata})],
+    )
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        input=[ChatMessageUser(content="task", id="task"), compacted],
+    )
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.1)])
+    observation = await score(host, step, "Safe?", on_unrenderable="flag")
+    if flagged:
+        assert observation.suspicion == 1.0
+        assert observation.metadata == {"unrenderable": {"input": {"data": 1}}}
+        assert host.inputs == []
+    else:
+        assert (observation.suspicion, observation.metadata) == (0.1, None)
+        assert "Listed the files." in prompt(host)
 
 
 @pytest.mark.anyio

@@ -22,6 +22,7 @@ from inspect_ai.model import (
     ChatMessageAssistant,
     ChatMessageUser,
     Content,
+    ContentData,
     ContentReasoning,
     ContentText,
     ContentToolUse,
@@ -260,13 +261,13 @@ class Unrenderable:
     """The id of the message that holds it."""
 
     content_type: str
-    """The content's type: `"image"`, `"audio"`, `"video"`, `"document"` or `"data"`, or a type the renderer does not know."""
+    """The content's type: `"image"`, `"audio"`, `"video"`, `"document"` or `"data"` (which includes a model provider's compaction that cannot be read, rendered as `<compaction_unreadable 3f9a1c7e />`), or a type the renderer does not know."""
 
 
 def unrenderable(step: Step) -> list[Unrenderable]:
     """The content in `step` that `step_as_str()` would render as a placeholder rather than as text, in the order it is rendered.
 
-    Images, audio, video, documents and provider data are rendered as a placeholder naming their type, such as `<image 3f9a1c7e />`, and so is a content type the renderer does not know. The monitor model sees that the content was there, but not what it holds. A monitor that must not judge a step it cannot fully show can test for this content, and fail closed when it finds some (`Host.score` does this with `on_unrenderable=`).
+    Images, audio, video, documents and provider data are rendered as a placeholder naming their type, such as `<image 3f9a1c7e />`, and so is a content type the renderer does not know. A model provider's compaction of earlier messages is data: one that can be read, such as Anthropic's, is rendered as its summary between `<compaction_summary>` tags and is not listed, while one that cannot, such as OpenAI's encrypted one, is rendered as `<compaction_unreadable 3f9a1c7e />` (`<data />` without a nonce) and is listed with the type `"data"`. The monitor model sees that the content was there, but not what it holds. A monitor that must not judge a step it cannot fully show can test for this content, and fail closed when it finds some (`Host.score` does this with `on_unrenderable=`).
 
     Count what the model is shown: pass the step as `preprocess_step()` returns it, so that content the windows, omissions or `transform` leave out is not counted, and neither is content in a message `hide_messages` hid or in a hidden result of the step's own call, which render as the hidden-messages marker. Reasoning the provider redacted is not counted: it renders as a `<thinking_redacted>` tag, or as its summary.
 
@@ -296,8 +297,27 @@ def unrenderable(step: Step) -> list[Unrenderable]:
     return found
 
 
-# what Scout renders as text; anything else is a placeholder
+# what Scout renders as text; anything else is a placeholder, except a
+# compaction Scout can read (`_readable_compaction`)
 _TEXT_CONTENT = ("text", "reasoning", "tool_use")
+
+
+def _readable_compaction(content: Content) -> bool:
+    # a model provider's compaction that Scout renders as its summary, between
+    # <compaction_summary> tags, rather than as a placeholder. Scout 0.6.4's
+    # rule (`_provider_compaction_text` in inspect_scout/_scanner/extract.py):
+    # data holding a dict `compaction_metadata` of type "anthropic_compact"
+    # whose `content` is a string. Any other compaction, such as OpenAI's
+    # encrypted "openai_compact" or a failed Anthropic one with no summary, is
+    # <compaction_unreadable /> with a nonce and <data /> without one
+    if not isinstance(content, ContentData):
+        return False
+    metadata = content.data.get("compaction_metadata")
+    return (
+        isinstance(metadata, dict)
+        and metadata.get("type") == "anthropic_compact"
+        and isinstance(metadata.get("content"), str)
+    )
 
 
 def _unrenderable_in(
@@ -830,7 +850,7 @@ def _call(step: BeforeToolCall | AfterToolCall) -> ChatMessage:
     # message that is not text, such as an image beside the call, follows the
     # text, so it renders as a placeholder rather than being lost; a message of
     # text alone renders as the text
-    media = _placeholder_content(step.assistant_message)
+    media = _non_text_content(step.assistant_message)
     return ChatMessageAssistant(
         id=step.message_id,
         content=[
@@ -843,10 +863,14 @@ def _call(step: BeforeToolCall | AfterToolCall) -> ChatMessage:
     )
 
 
-def _placeholder_content(message: ChatMessage | None) -> list[Content]:
+def _non_text_content(message: ChatMessage | None) -> list[Content]:
     if message is None or isinstance(message.content, str):
         return []
     return [c for c in message.content if c.type not in _TEXT_CONTENT]
+
+
+def _placeholder_content(message: ChatMessage | None) -> list[Content]:
+    return [c for c in _non_text_content(message) if not _readable_compaction(c)]
 
 
 def _reply(step: AfterGenerate) -> list[ChatMessage]:

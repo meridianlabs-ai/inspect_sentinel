@@ -1439,6 +1439,68 @@ async def test_unrenderable_leaves_out_what_hide_messages_hides() -> None:
     assert rendered.count("[1 message hidden (3f9a1c7e)]") == 2
 
 
+def provider_compaction(**metadata: Any) -> ContentData:
+    # a model provider's compaction as inspect_ai keeps it
+    return ContentData(data={"compaction_metadata": metadata})
+
+
+@pytest.mark.parametrize(
+    "content, placeholder",
+    [
+        (provider_compaction(type="anthropic_compact", content="Listed."), None),
+        (
+            provider_compaction(type="anthropic_compact", content=None),
+            "compaction_unreadable",
+        ),
+        (
+            provider_compaction(
+                type="openai_compact", id="cmp_1", encrypted_content="gAAAAB"
+            ),
+            "compaction_unreadable",
+        ),
+        (provider_compaction(type="other_compact"), "compaction_unreadable"),
+        (ContentData(data={"compaction_metadata": "not a dict"}), "data"),
+        (ContentData(data={"k": "v"}), "data"),
+        (IMAGE, "image"),
+    ],
+    ids=[
+        "anthropic",
+        "anthropic with no summary",
+        "openai",
+        "unknown compaction",
+        "compaction metadata not a dict",
+        "data",
+        "image",
+    ],
+)
+@pytest.mark.anyio
+async def test_unrenderable_agrees_with_the_placeholders_scout_renders(
+    content: Content, placeholder: str | None
+) -> None:
+    # the same content in INPUT and beside the call; what Scout renders is
+    # the reference, so unrenderable() lists one part per placeholder in it
+    stage = before_tool_call("bash", cmd="ls")
+    step = replace(
+        stage,
+        input=[holding("task", content, id="task")],
+        assistant_message=ChatMessageAssistant(
+            id=stage.message_id,
+            content=[ContentText(text="See this"), content],
+            tool_calls=[stage.call],
+        ),
+    )
+    n = "3f9a1c7e"
+    rendered, _ = await step_as_str(step, nonce=n)
+    placeholders = re.findall(rf"<([a-z_]+) {n} />", rendered)
+    assert placeholders == ([] if placeholder is None else [placeholder] * 2)
+    assert [(u.where, u.content_type) for u in unrenderable(step)] == (
+        [] if placeholder is None else [("input", content.type), ("call", content.type)]
+    )
+    if placeholder is None:
+        # a readable compaction is its summary, in INPUT and in CALL alike
+        assert rendered.count(f"<compaction_summary {n}>Listed.") == 2
+
+
 @pytest.mark.anyio
 async def test_text_reasoning_and_tool_use_are_not_unrenderable() -> None:
     reasoning = ChatMessageAssistant(
