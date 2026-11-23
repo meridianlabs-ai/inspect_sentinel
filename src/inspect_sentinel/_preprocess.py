@@ -36,6 +36,7 @@ from ._step import (
     BeforeToolCall,
     HiddenMessages,
     Step,
+    Truncation,
 )
 from ._unhandled import current_invocation
 
@@ -239,11 +240,11 @@ async def step_as_str(
 ) -> tuple[str, ExtractReferences]:
     """Render `step` for a monitor's prompt, numbering its messages `[M1]`, `[M2]` and so on, and return the text with a function that turns those cites in a model's answer into references.
 
-    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. Messages that `StepPreprocessor.hide_messages` hid are one marker line per run where they stood, such as `[2 messages hidden]`, which takes no message number; a hidden call, result or reply is that marker in its block. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, the `[TOOL CHOICE]` line and every hidden-messages marker carry it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
+    Everything is in one block, marked `[BEGIN AGENT STEP - ...]` and `[END AGENT STEP - ...]` and named for the stage: `TOOL CALL REQUEST` before a tool call, `TOOL CALL RESULT` after one, `MODEL REQUEST` before a generate, and `MODEL REPLY` after one. Inside it are blocks between `[BEGIN ...]` and `[END ...]` lines, each left out when it is empty. At every stage: `HISTORY` (`step.history`, every message the agent has sent its model), `AGENT MESSAGES` (`step.agent_messages`, the outermost running agent function's own message list, which its scaffold may curate), then the model request, as `INPUT`, `TOOLS` (the tools offered, as JSON) and a one-line `[TOOL CHOICE] "auto"`; at a tool stage, the request that produced the call. Then after a generate, `REPLY`; at a tool stage, `CALL` (the assistant's text and the call) and, after the call, `RESULT`. When the host cut the tool's output before the agent's model saw it (`step.truncated` is a `Truncation`), `RESULT` opens with a line such as `[OUTPUT TRUNCATED] The tool's output was 48,210 bytes; the agent's model was shown at most its first 8,192 and last 8,192 bytes, with the middle left out.`; a result the host did not cut, or cannot tell about (`None`, as in a replay from messages), has no such line. Messages that `StepPreprocessor.hide_messages` hid are one marker line per run where they stood, such as `[2 messages hidden]`, which takes no message number; a hidden call, result or reply is that marker in its block. A list the host could not provide (None) is named in its block (`preprocess_step()` leaves a list with no window empty, so only a windowed one is named); at a tool stage whose input is not known, the tools and tool choice are left out. With a `nonce`, every `[BEGIN ...]` and `[END ...]` line, the `[TOOL CHOICE]` and `[OUTPUT TRUNCATED]` lines and every hidden-messages marker carry it in parentheses, as `[BEGIN INPUT (3f9a1c7e)]`, and so does every message header. Everything rendered was written by or shown to the agent under observation, so treat it as untrusted in the prompt around it.
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
-        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header; none by default. Scout needs at least 8 characters.
+        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header and the `[TOOL CHOICE]` and `[OUTPUT TRUNCATED]` lines; none by default. Scout needs at least 8 characters.
     """
     return await render_step(step, nonce=nonce, cut={})
 
@@ -420,7 +421,9 @@ async def render_step(
         parts.append(blocks(("CALL", made)))
         if isinstance(step, AfterToolCall):
             result = (
-                hidden_marker(1) if hidden.result else await text([step.result], "")
+                hidden_marker(1)
+                if hidden.result
+                else _truncation(step.truncated, mark) + await text([step.result], "")
             )
             parts.append(blocks(("RESULT", result)))
     return (
@@ -675,6 +678,23 @@ def _step_block(step: Step) -> str:
     if isinstance(step, BeforeGenerate):
         return "MODEL REQUEST"
     return "MODEL REPLY"
+
+
+def _truncation(truncated: Truncation | Literal[False] | None, mark: str) -> str:
+    # a line before the result when the host cut it. Inspect keeps the first
+    # half of the limit and the last, joined with nothing between them, and
+    # drops a character either cut splits, so the counts are upper bounds. A host
+    # that cannot tell (None) gets no line: a replay from messages always
+    # cannot, and a line there would change every such prompt
+    if not truncated:
+        return ""
+    head = truncated.limit_bytes // 2
+    tail = truncated.limit_bytes - head
+    return (
+        f"[OUTPUT TRUNCATED{mark}] The tool's output was "
+        f"{truncated.original_bytes:,} bytes; the agent's model was shown at most "
+        f"its first {head:,} and last {tail:,} bytes, with the middle left out.\n"
+    )
 
 
 def _tools(tools: Sequence[ToolInfo] | None) -> str:

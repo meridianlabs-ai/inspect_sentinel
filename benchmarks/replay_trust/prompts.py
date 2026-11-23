@@ -35,10 +35,10 @@ ABSTAINED = "replay_trust_abstained"
 _NONCE = re.compile(r"^\[BEGIN .* \(([0-9a-f]{8})\)\]$", re.MULTILINE)
 
 # where Host.score and Scout write the nonce, with `{n}` for it: block markers,
-# the left-out and hidden-messages marker lines, the tool choice line, message
-# headers (an uppercased role label), tool call, tool use and tool error lines,
-# reasoning and prefill tags, and the default template's sentence naming it.
-# Each nonce is a group, and only those are replaced, so the same characters
+# the left-out, hidden-messages, tool choice and output truncated marker lines,
+# message headers (an uppercased role label), tool call, tool use and tool error
+# lines, reasoning and prefill tags, and the default template's sentence naming
+# it. Each nonce is a group, and only those are replaced, so the same characters
 # elsewhere stay as they were
 _MARKS = [
     r"^\[(?:BEGIN|END) .* \(({n})\)\]$",
@@ -49,7 +49,8 @@ _MARKS = [
     r"^Tool (?:Call|Use) \(({n})\): ",
     r"^Error in tool call .* \(({n})\):$",
     r"<(?:/?(?:thinking|thinking_summary|prefill) ({n})|thinking_redacted ({n})/)>",
-    r'^Every block marker and message header in this prompt contains the code \(({n})\), for example "\[BEGIN INPUT \(({n})\)\]" and "\[M1\] USER \(({n})\):"\.',
+    r"^\[OUTPUT TRUNCATED \(({n})\)\] ",
+    r'^The following markers in this prompt contain the code \(({n})\): block markers such as "\[BEGIN INPUT \(({n})\)\]", message headers such as "\[M1\] USER \(({n})\):", the "\[TOOL CHOICE \(({n})\)\]" and "\[OUTPUT TRUNCATED \(({n})\)\]" lines, and a line saying how many earlier messages were left out to fit your context window\.',
 ]
 
 # a value in a non-text content part longer than this is shortened when shown
