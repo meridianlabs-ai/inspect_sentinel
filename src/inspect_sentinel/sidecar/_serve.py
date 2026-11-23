@@ -4,7 +4,7 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.applications import Starlette
 
 from .._config import parse_config_file
+from .._decorators import eval_only_names
 from ..config import sentinel_from_config
 from ._eval_endpoint import TOKEN_VARIABLE, eval_routes
 from ._exchange import MAX_BODY_BYTES
@@ -98,7 +99,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="The HTTP status a rejected turn is refused with. 400, the default, is final to a client. One a client retries by itself, such as 503, brings it back, and the model is then told of the rejection.",
     )
     parser.add_argument(
-        "--time-limit",
+        "--judging-timeout",
         type=float,
         default=None,
         metavar="SECONDS",
@@ -154,6 +155,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="How long a run's state is kept once no request has named it. A day by default.",
     )
     parser.add_argument(
+        "--run-header",
+        default=None,
+        metavar="NAME",
+        help="A request header whose value names the run of a request no Inspect eval names, such as x-claude-code-session-id, which Claude Code sends with its session's id. Conversations that send the same value are one run: a sentinel's tally counts them together, and a sentinel that ends the run ends them all, a subagent's conversation and one compacted to a new opening included. The proxy must pass the header on (--envoy-header, or the LiteLLM guardrail's sidecar_headers). The caller sets the header, so its value is trusted as the caller is. By default such a run is named by how its conversation opens.",
+    )
+    parser.add_argument(
         "--timestamp-window",
         type=float,
         default=TIMESTAMP_WINDOW,
@@ -165,7 +172,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         metavar="SECONDS",
-        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. The eval's prompt for it stays open until someone answers, and that answer is then not used. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --time-limit.",
+        help="How long a question waits for a person's answer before it expires, when the sentinel asks one during an Inspect eval, which shows the question in its approval UI. A question that expires is answered with caution: rejected if that was offered, otherwise the run is ended. The eval's prompt for it stays open until someone answers, and that answer is then not used. By default a question has no expiry, as a person may take days. No connection waits meanwhile, and the wait is not counted against --judging-timeout.",
     )
 
 
@@ -195,7 +202,7 @@ class ServerSettings(BaseModel):
     eval_port: int | None = None
     envoy: EnvoySettings | None = None
     reject_status: int | None = None
-    time_limit: float | None = None
+    judging_timeout: float | None = None
     eval_results: bool | None = None
     runtime_task_registration: bool | None = None
     strictness: Literal["open", "known_tasks", "registered_only"] | None = None
@@ -205,6 +212,7 @@ class ServerSettings(BaseModel):
     run_expiry: float | None = None
     timestamp_window: float | None = None
     review_timeout: float | None = None
+    run_header: str | None = None
     release: Literal["whole", "early"] | None = None
     keepalive: float | None = None
 
@@ -232,7 +240,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "eval_port",
             "envoy_port",
             "reject_status",
-            "time_limit",
+            "judging_timeout",
             "strictness",
             "task_expiry",
             "max_task_registrations",
@@ -240,6 +248,7 @@ _OPTIONS: dict[str, tuple[str, str, Callable[[Any, Path], Any]]] = {
             "run_expiry",
             "timestamp_window",
             "review_timeout",
+            "run_header",
             "release",
             "keepalive",
         )
@@ -344,7 +353,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         arguments: Parsed arguments that `add_arguments` defined.
 
     Raises:
-        ValueError: If a `--model-role` is not `ROLE=MODEL`, or the sentinel configuration or a tasks file is invalid.
+        ValueError: If a `--model-role` is not `ROLE=MODEL`, the sentinel configuration or a tasks file is invalid, or the sentinel holds a monitor or protocol declared `portable=False`.
     """
     roles: dict[str, str] = {}
     for role in arguments.model_role:
@@ -352,12 +361,22 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         if not sep or not name or not model:
             raise ValueError(f"--model-role takes ROLE=MODEL, not {role!r}.")
         roles[name] = model
+    sentinel = sentinel_from_config(
+        getattr(arguments, "sentinel_config", arguments.sentinel)
+    )
+    eval_only = sorted(eval_only_names(sentinel))
+    if eval_only:
+        raise ValueError(
+            f"The sentinel holds {', '.join(eval_only)}, declared `portable=False`, which runs only in an eval's process. "
+            "No sample runs in a sidecar, so what it reaches for there, such as `sandbox()`, `store()` or `transcript()`, isn't the eval's. "
+            "Take it out of this sidecar's sentinel, or make it portable."
+        )
     return Handler(
-        sentinel_from_config(getattr(arguments, "sentinel_config", arguments.sentinel)),
+        sentinel,
         host=SidecarHost(roles),
         state=MemoryState(expiry=arguments.run_expiry),
         reject_status=arguments.reject_status,
-        time_limit=arguments.time_limit,
+        judging_timeout=arguments.judging_timeout,
         eval_results=not arguments.no_eval_results,
         tasks=read_tasks_folder(arguments.tasks_folder)
         if arguments.tasks_folder
@@ -371,6 +390,7 @@ def handler_from_arguments(arguments: argparse.Namespace) -> Handler:
         keepalive=arguments.keepalive or None,
         timestamp_window=arguments.timestamp_window,
         review_timeout=arguments.review_timeout,
+        run_header=arguments.run_header,
     )
 
 
@@ -451,23 +471,34 @@ class _GrpcServer(Protocol):
 
 def _envoy_shim(
     handler: Handler, arguments: argparse.Namespace
-) -> Callable[[], _GrpcServer] | None:
-    # the shim's server, made in the event loop it serves in
+) -> Callable[[], Awaitable[_GrpcServer]] | None:
+    # starts the shim's server, in the event loop it serves in
     if arguments.envoy_port is None:
         return None
     try:
-        from .envoy import envoy_server
+        from .envoy._shim import bind_envoy_server
     except ImportError as ex:
         raise ValueError(
             f"--envoy-port needs the `envoy` extra: pip install 'inspect_sentinel[envoy]' ({ex})."
         ) from None
-    return lambda: envoy_server(
-        handler,
-        host=arguments.host,
-        port=arguments.envoy_port,
-        max_body_bytes=arguments.max_body_bytes,
-        headers=arguments.envoy_header,
-    )
+
+    async def start_shim() -> _GrpcServer:
+        shim = bind_envoy_server(
+            handler,
+            host=arguments.host,
+            port=arguments.envoy_port,
+            max_body_bytes=arguments.max_body_bytes,
+            headers=arguments.envoy_header,
+        )
+        await shim.server.start()
+        # beside uvicorn's line for each endpoint, which says where it listens,
+        # and so the port the system chose for port 0
+        logging.getLogger("uvicorn.error").info(
+            "Envoy shim running on %s", shim.address
+        )
+        return shim.server
+
+    return start_shim
 
 
 _SHIM_GRACE = 5.0
@@ -476,7 +507,7 @@ _SHIM_GRACE = 5.0
 
 async def _serve_all(
     servers: list[uvicorn.Server],
-    shim: Callable[[], _GrpcServer] | None = None,
+    shim: Callable[[], Awaitable[_GrpcServer]] | None = None,
     handler: Handler | None = None,
 ) -> None:
     if handler is not None:
@@ -493,9 +524,7 @@ async def _serve_all(
         for other in servers:
             other.should_exit = True
 
-    envoy = shim() if shim is not None else None
-    if envoy is not None:
-        await envoy.start()
+    envoy = await shim() if shim is not None else None
     try:
         async with anyio.create_task_group() as group:
             for server in servers:

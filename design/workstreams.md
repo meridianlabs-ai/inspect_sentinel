@@ -203,6 +203,25 @@ Raised by the maintainer on 2026-10-02 and not well defined yet: reporting on wh
 
 Reads `SentinelEvent`s and the recorded configuration, so it overlaps the read-mode scanner in workstream 10.
 
+Defined further on 2026-11-16. The reporting has to answer three questions an operator is asked about oversight:
+
+- **Coverage:** what share of an agent's actions did a monitor judge?
+- **Review latency:** how long did a monitor take, and then a person, where one was asked?
+- **Escalation rate:** how often did a sentinel stop or change an action, or ask a person about one?
+
+[sidecar.md, section 12](sidecar.md#12-measuring-what-a-sentinel-did) gives the unit they are counted in, and what a percentage may claim. The work is [steps 18 to 23](sidecar-plan.md#step-18-typed-fields-for-what-a-sentinel-did) of the sidecar plan. Step 18 adds typed fields to inspect_ai's log, which a sentinel inside Inspect (step 20) and a sidecar (step 22) both fill, and step 19 shows them in the log viewer. Step 23's reader of eval logs serves both.
+
+What a sentinel inside Inspect still lacks for these measures:
+
+- A `SentinelEvent` has a time and no duration. Monitors run at once by default, so the gaps between their events don't give how long each took. Steps 18 and 20 add and fill a duration, with an event for a step that wasn't judged and stats for the sample.
+- When `human()` asks a person, nothing is logged until they answer, so how long they took can't be read. With steps 18 and 20, `human()`'s event has when the person was asked and when they answered.
+- Nothing records that a person looked at a decision afterwards.
+
+What monitoring after the fact, with Scout, still lacks:
+
+- A scan result holds the time it was made, but Scout's list of a result's fields leaves it out.
+- Nothing records that a flagged result went to a person, or that a person reviewed it.
+
 ## 13. Remote human surfaces
 
 **Priority:** lower.

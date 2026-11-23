@@ -19,8 +19,8 @@ class UnauthorizedError(Exception):
     """A call to the endpoint for evals that didn't present the eval's token."""
 
 
-class TimeLimitError(TimeoutError):
-    """The sentinel didn't finish judging a request or a reply within the handler's time limit, and was cancelled."""
+class JudgingTimeoutError(TimeoutError):
+    """The sentinel didn't finish judging a request or a reply within the handler's judging timeout, and was cancelled."""
 
 
 def not_judged(ex: Exception) -> NotJudged:
@@ -29,8 +29,8 @@ def not_judged(ex: Exception) -> NotJudged:
         return "unreadable"
     if isinstance(ex, UnregisteredSampleError):
         return "unregistered"
-    if isinstance(ex, TimeLimitError):
-        return "time_limit"
+    if isinstance(ex, JudgingTimeoutError):
+        return "judging_timeout"
     return "error"
 
 
@@ -55,7 +55,7 @@ def refusal_for(ex: Exception, what: str, id: str, *, reply: bool) -> Refuse:
         id: The proxy's id for the request, for the log.
         reply: Whether it is a reply, which a provider sent rather than the client.
     """
-    if isinstance(ex, TimeLimitError):
+    if isinstance(ex, JudgingTimeoutError):
         return Refuse(504, str(ex))
     if isinstance(ex, UnregisteredSampleError):
         return Refuse(400, str(ex))

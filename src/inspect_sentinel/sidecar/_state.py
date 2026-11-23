@@ -6,7 +6,7 @@ import time
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, Protocol, TypeAlias, TypeVar
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
 import anyio
 from inspect_ai.model import ChatMessage, ChatMessageAssistant, ModelUsage
@@ -39,7 +39,7 @@ Registered: TypeAlias = Literal["kept", "full", "tokens_full", "another_token"]
 NotJudged: TypeAlias = Literal[
     "unreadable",
     "unregistered",
-    "time_limit",
+    "judging_timeout",
     "error",
     "provider_error",
     "cut_off",
@@ -197,6 +197,9 @@ class Conversation:
     judged: set[str] = field(default_factory=set[str])
     """Digests of the tool results in the conversation the sentinel has been shown and let go on."""
 
+    calls: set[str] = field(default_factory=set[str])
+    """The id of every tool call the model made in the conversation. A call is known by its id within its conversation, so these tell a call of its own from another conversation's with the same id."""
+
     made: dict[str, Made] = field(default_factory=dict[str, Made])
     """For the latest tool calls the client was handed, by call id, what the model was sent for the generate that made each. The oldest are dropped past `MADE_KEPT`, as each holds what the model was sent, which grows with the conversation."""
 
@@ -205,6 +208,12 @@ class Conversation:
 
     recent: list[Sent] = field(default_factory=list[Sent])
     """What each of the conversation's latest requests sent the model, latest last, which a later request is matched against."""
+
+    shown: list[Sent] = field(default_factory=list[Sent])
+    """What each of the conversation's latest judged requests held, latest last, with the id the sentinel saw each message under. A later request's messages take their ids from these (`with_sent_ids`). A request is here from when it is judged, and in `recent` only once it goes to the provider."""
+
+    sent_to: dict[str, Counter[str]] = field(default_factory=dict[str, Counter[str]])
+    """For each model, by what a message says (`sent_keys`), the most copies of it that any one of the conversation's requests sent that model. What a question before a generate goes by, since `sent` holds what any model was sent. Like `sent`, it counts a request once it goes to the provider, not when it is judged: one a person approved counts when the eval's resend is passed on."""
 
 
 @dataclass
@@ -249,10 +258,10 @@ class Run:
     eval_id: str | None = None
     """For a run an eval names, the eval, the only one the endpoint for evals answers for the run."""
 
-    redacted: dict[str, tuple[Format, Any]] = field(
-        default_factory=dict[str, tuple[Format, Any]]
+    redacted: dict[tuple[str, str], tuple[Format, Amendment]] = field(
+        default_factory=dict[tuple[str, str], tuple[Format, Amendment]]
     )
-    """For a run an eval names, the model's own calls that a decision acted on, by call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
+    """For a run an eval names, the model's own calls that a decision acted on, by the conversation each was made in and its call id, each in the format its request was written in. The eval holds each with its id and function only, and each later request has the model's own call put back."""
 
 
 @dataclass(frozen=True)
@@ -277,6 +286,8 @@ class Held:
     conversation: str
     named: bool
     """Whether an eval named the run."""
+    by_header: bool
+    """Whether a request header named the run, as the handler's `run_header` says. A sentinel that ends such a run ends every conversation in it."""
     sample_attempt: str
     """The attempt at the sample an eval names, or `""`."""
     answered: bool
@@ -304,6 +315,8 @@ class Held:
     """For a run no eval names, the request as the client sent it, so that a run ended meanwhile by another exchange refuses its reply when it continues the ended conversation with blocks added to its last entry."""
     binding: str = ""
     """For an eval's request, a digest that identifies the request. A request sent again under the same `x-irid` must have the same digest to count as a try of the same model call."""
+    message_keys: tuple[str, ...] = ()
+    """Each of the request's messages as the model is sent it (`sent_keys`): what a question before a generate compares, and what `Conversation.sent_to` counts once the request goes to the provider."""
 
     @property
     def sent(self) -> int:
@@ -434,6 +447,18 @@ class State(Protocol):
 
         Returns:
             Whether the run was known, and the eval's if one was given: kept, or ended before.
+        """
+        ...
+
+    async def end_unseen_run(self, key: str, eval_id: str) -> bool:
+        """Remember that an eval's run ended before any request of it came, for as long as an ended run is remembered. A request of it that arrives late finds it ended.
+
+        Args:
+            key: The run's key.
+            eval_id: The eval ending it.
+
+        Returns:
+            Whether it is remembered as ended: not if a run is kept or was ended under the key, which is left as it is.
         """
         ...
 
@@ -633,6 +658,15 @@ class MemoryState:
             self._ended.put(
                 key, Run(refusal=run.refusal, closed=True, eval_id=run.eval_id)
             )
+        return True
+
+    async def end_unseen_run(self, key: str, eval_id: str) -> bool:
+        if await self.peek_run(key) is not None:
+            return False
+        ended = Run(
+            refusal=Refuse(400, "This run has ended."), closed=True, eval_id=eval_id
+        )
+        self._ended.put(key, ended)
         return True
 
     async def attempt(self, request: str, exchange: str, eval_id: str) -> Attempt:

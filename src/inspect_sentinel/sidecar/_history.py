@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from bisect import bisect_right
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from difflib import SequenceMatcher
 from typing import Any, cast
 
@@ -24,7 +25,7 @@ RECENT_REQUESTS = 16
 
 
 def record_sent(
-    conversation: Conversation, input: Sequence[ChatMessage], body: bytes
+    conversation: Conversation, input: Sequence[ChatMessage], keys: Sequence[str]
 ) -> None:
     """Add what one request of the conversation sent the model to what it has sent.
 
@@ -32,37 +33,102 @@ def record_sent(
 
     Args:
         conversation: The conversation.
-        input: The messages the request sends the model, as read from `body`.
-        body: The request body they were read from, which tells an id the request carries from one a reader made up.
+        input: The messages the request sends the model.
+        keys: Each message of `input`, by `sent_keys`.
     """
-    keys = _keys(input, body)
-    matched = _matched(conversation, keys)
+    matched = _matched(conversation.recent, keys)
     for position, message in enumerate(input):
         if position not in matched:
             conversation.sent.append(message)
-    conversation.recent.append(Sent(keys, [message.id for message in input]))
+    conversation.recent.append(Sent(list(keys), [message.id for message in input]))
     del conversation.recent[:-RECENT_REQUESTS]
 
 
 def with_sent_ids(
     conversation: Conversation, input: Sequence[ChatMessage], body: bytes
 ) -> list[ChatMessage]:
-    """The request's messages, each that the conversation sent before under the id it had then.
+    """The request's messages, each that the sentinel was shown before under the id it had then.
 
-    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one an earlier request sent, as `record_sent` matches it, is given that message's id, and any other keeps the new one.
+    In Inspect's own process a message keeps its id from one model call to the next, and a monitor can find a message it was shown before by its id, as `NewSinceLastReport` does. A request carries no message ids, so each read gives a message a new one. A message matched to one of an earlier request, as `record_sent` matches them, is given that message's id. A reply's message that a request sends back for the first time is given the id the reply was judged under, the `step.message_id` of its calls' tool stages: it is known by its calls, whose ids the request carries. Any other keeps the new one.
+
+    The earlier requests are those the sentinel judged (`Conversation.shown`), whether or not they have gone to the provider. A request a person is asked about goes later, when the eval resends it, and a request judged meanwhile takes its ids all the same. The request is added to them here, so this is called once for each request judged.
 
     Args:
         conversation: The conversation.
         input: The messages the request sends the model, as read from `body`.
         body: The request body they were read from.
     """
-    matched = _matched(conversation, _keys(input, body))
-    return [
-        message.model_copy(update={"id": matched[position]})
-        if matched.get(position) is not None
+    keys = _keys(input, body)
+    matched = _matched(conversation.shown, keys)
+    replied = _replied(conversation, input, matched)
+    given = [
+        message.model_copy(update={"id": id})
+        if (id := matched.get(position) or replied.get(position)) is not None
         else message
         for position, message in enumerate(input)
     ]
+    conversation.shown.append(Sent(keys, [message.id for message in given]))
+    del conversation.shown[:-RECENT_REQUESTS]
+    return given
+
+
+def _replied(
+    conversation: Conversation,
+    input: Sequence[ChatMessage],
+    matched: Mapping[int, str | None],
+) -> dict[int, str]:
+    # The positions of the request that hold a reply's message no earlier
+    # request held, each with the id the reply was judged under. The reply
+    # is known by its calls, whose ids the request carries, so a call the
+    # sentinel rejected or changed doesn't hide it. A message is the reply's
+    # only if each of its calls is from that reply, no other message of the
+    # request holds a call of it, and none has its id. A client may send one
+    # reply's calls back as several messages, and none of those is the
+    # reply's, whether or not an earlier request held it.
+    origins = _reply_ids(conversation)
+    holders: Counter[str] = Counter()
+    claims: dict[int, str] = {}
+    for position, message in enumerate(input):
+        if message.role != "assistant":
+            continue
+        made = {origins.get(call.id) for call in message.tool_calls or []}
+        holders.update(reply for reply in made if reply is not None)
+        if matched.get(position) is None and len(made) == 1:
+            reply = next(iter(made))
+            if reply is not None:
+                claims[position] = reply
+    used = {
+        matched.get(position) or message.id for position, message in enumerate(input)
+    }
+    return {
+        position: reply
+        for position, reply in claims.items()
+        if holders[reply] == 1 and reply not in used
+    }
+
+
+def _reply_ids(conversation: Conversation) -> dict[str, str | None]:
+    # The id of the reply that made each call, by the call's id. The calls a
+    # client was handed are kept with the reply as the model wrote it, which
+    # also holds any call of it a sentinel rejected: the sidecar puts that
+    # call back in a later request. The turns a sentinel rejected whole, which
+    # no client was handed, are kept apart. Where what is kept disagrees about
+    # a call's reply, the call tells neither.
+    replies: dict[str, str | None] = {}
+    made = [
+        (id, handed.message_id)
+        for handed_id, handed in conversation.made.items()
+        for id in (handed_id, *(call.id for call in handed.message.tool_calls or []))
+    ]
+    rejected = [
+        (call.id, message.id)
+        for point in conversation.rejected
+        for message, _, _ in point.turns
+        for call in message.tool_calls or []
+    ]
+    for call_id, reply in (*made, *rejected):
+        replies[call_id] = reply if replies.get(call_id, reply) == reply else None
+    return replies
 
 
 def _keys(input: Sequence[ChatMessage], body: bytes) -> list[str]:
@@ -70,13 +136,13 @@ def _keys(input: Sequence[ChatMessage], body: bytes) -> list[str]:
     return [_digest(_key(message, carried)) for message in input]
 
 
-def _matched(conversation: Conversation, keys: Sequence[str]) -> dict[int, str | None]:
-    # The positions of the request that the earlier request it continues
-    # sent, each with the id the message had there.
-    begins = [_begun(earlier.keys, keys) for earlier in conversation.recent]
+def _matched(requests: Sequence[Sent], keys: Sequence[str]) -> dict[int, str | None]:
+    # The positions of the request that the one of `requests` it continues
+    # held, each with the id the message had there.
+    begins = [_begun(earlier.keys, keys) for earlier in requests]
     longest = max(begins, default=0)
     matched: dict[int, str | None] = {}
-    for earlier, begun in zip(conversation.recent, begins, strict=True):
+    for earlier, begun in zip(requests, begins, strict=True):
         if begun != longest:
             continue
         shared = _shared(earlier.keys, keys, begun)
@@ -210,3 +276,48 @@ def _without_made_up_id(item: object, carried: frozenset[str]) -> object:
 
 def _carried(id: object, carried: frozenset[str]) -> bool:
     return isinstance(id, str) and id in carried
+
+
+def sent_keys(input: Sequence[ChatMessage], body: bytes) -> tuple[str, ...]:
+    """What the model is sent of each of a request's messages, as `record_sent` compares them: all but a message's id, source, metadata and the model it names, and any id a reader made up for an item the request carries without one, which is new at each read.
+
+    Args:
+        input: The messages the request sends the model, as read from `body`.
+        body: The request body they were read from.
+    """
+    return tuple(_keys(input, body))
+
+
+def record_sent_to(conversation: Conversation, model: str, keys: Sequence[str]) -> None:
+    """Add a request that went to `model` to what the conversation has sent that model: for each message, the most copies of it that any one request held.
+
+    Args:
+        conversation: The conversation.
+        model: The model the request went to.
+        keys: The request's messages, by `sent_keys`.
+    """
+    held = conversation.sent_to.setdefault(model, Counter())
+    for key, copies in Counter(keys).items():
+        held[key] = max(held[key], copies)
+
+
+def not_sent_before(
+    input: Sequence[ChatMessage], keys: Sequence[str], sent: Mapping[str, int]
+) -> list[tuple[int, ChatMessage]]:
+    """The messages of a request that the model has not been sent before, each with its position in the request, counting from 1.
+
+    A message was sent before if the model has been sent one that says the same that no earlier message of the request has been matched to, as in Inspect's own process. So a message rewritten since it was sent is here as its new version, as is an assistant message the client wrote itself. A message sent before is left out wherever it now sits, so one that moved is not here. A message that repeats an earlier one, such as an agent's fixed prompt to continue, is here when the request holds it more times than any request the model was sent did.
+
+    Args:
+        input: The messages the request sends the model.
+        keys: Each message of `input`, by `sent_keys`.
+        sent: What the conversation has sent the model (`Conversation.sent_to`).
+    """
+    left = Counter(sent)
+    new: list[tuple[int, ChatMessage]] = []
+    for position, (message, key) in enumerate(zip(input, keys, strict=True), 1):
+        if left[key] > 0:
+            left[key] -= 1
+        else:
+            new.append((position, message))
+    return new

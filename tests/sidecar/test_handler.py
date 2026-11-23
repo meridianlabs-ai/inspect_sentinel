@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from collections.abc import Callable, Sequence
@@ -17,12 +18,13 @@ from inspect_sentinel._types import Protocol, ProtocolGroup
 from inspect_sentinel.sidecar import (
     Answer,
     Handler,
+    JudgingTimeoutError,
     ModifyError,
     Pass,
     Record,
     Refuse,
     Replace,
-    TimeLimitError,
+    Request,
     UnreadableError,
     _handler,
     read_reply,
@@ -250,11 +252,11 @@ def takes(seconds: float) -> Protocol:
 
 
 @pytest.mark.anyio
-async def test_sentinel_past_the_time_limit_is_cancelled() -> None:
-    handler = Handler(takes(30), time_limit=0.05)
+async def test_sentinel_past_the_judging_timeout_is_cancelled() -> None:
+    handler = Handler(takes(30), judging_timeout=0.05)
     await handler.request(request())
 
-    with pytest.raises(TimeLimitError, match="reply 'x' within 0.05 seconds"):
+    with pytest.raises(JudgingTimeoutError, match="reply 'x' within 0.05 seconds"):
         await handler.reply(reply(message(weather("Oslo"))))
 
     # the rejection it was about to make is not kept
@@ -263,7 +265,7 @@ async def test_sentinel_past_the_time_limit_is_cancelled() -> None:
 
 @pytest.mark.anyio
 async def test_sentinel_is_not_timed_unless_a_limit_is_set() -> None:
-    within = Handler(takes(0.05), time_limit=30)
+    within = Handler(takes(0.05), judging_timeout=30)
     unlimited = Handler(takes(0.05))
 
     for handler in (within, unlimited):
@@ -1291,6 +1293,316 @@ async def test_every_later_request_of_a_sample_that_ended_is_refused() -> None:
     assert not await handler.records("b")
 
 
+_SESSION = "x-agent-session"
+
+
+def _in_session(asked: Request, name: str) -> Request:
+    # as from an agent that sends an id for its session in a header
+    return replace(asked, headers={**asked.headers, _SESSION: name})
+
+
+@pytest.mark.anyio
+async def test_a_header_names_one_run_however_its_conversations_open() -> None:
+    handler = Handler(third_lookup_ends_the_run(), run_header=_SESSION)
+
+    async def lookup(id: str, opening: str, session: str) -> Answer:
+        await handler.request(_in_session(request(id, opening), session))
+        return await handler.reply(reply(message(weather("Oslo")), id=id))
+
+    answers = [
+        await lookup("a", "The agent's conversation", "session-1"),
+        await lookup("b", "A subagent's conversation", "session-1"),
+        await lookup("c", "The agent's conversation", "session-1"),
+    ]
+    # another session, though it opens as the first did, has a tally of its own
+    other = await lookup("d", "The agent's conversation", "session-2")
+
+    assert [isinstance(answer, Refuse) for answer in answers] == [False, False, True]
+    assert not isinstance(other, Refuse)
+
+
+@pytest.mark.anyio
+async def test_every_conversation_of_a_run_a_header_names_ends_with_it() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    again = await handler.request(_in_session(request("b"), "session-1"))
+    subagent = await handler.request(
+        _in_session(request("c", "A subagent's conversation"), "session-1")
+    )
+    other = await handler.request(_in_session(request("d"), "session-2"))
+
+    assert [ended, again, subagent] == [_ENDED] * 3
+    assert other == Pass()
+    # the sentinel was not asked again
+    assert not await handler.records("b")
+
+
+@pytest.mark.anyio
+async def test_a_name_not_seen_before_starts_a_run_whatever_the_request_holds() -> None:
+    # The caller sets the header, so its value is trusted as the caller is. A
+    # session an agent resumes, after the sidecar dropped its run, sends its
+    # name with model turns already behind it, and a name swapped in for an
+    # ended run's looks the same.
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    renamed = await handler.request(
+        _in_session(request("b", then=ran("Oslo", "sunny")), "session-2")
+    )
+
+    assert renamed == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_rejected_turn_is_kept_for_its_conversation_in_a_run_a_header_names() -> (
+    None
+):
+    handler = Handler(weather_rule("reject", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    subagent = await handler.request(
+        _in_session(request("b", "A subagent's conversation"), "session-1")
+    )
+    told = await handler.request(_in_session(request("c"), "session-1"))
+
+    assert subagent == Pass()
+    assert isinstance(told, Replace)
+
+
+@pytest.mark.anyio
+async def test_an_evals_header_names_the_run_whatever_other_header_is_sent() -> None:
+    # as when the agent inside an eval is one that sends its session's id
+    handler = await holding(
+        Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    )
+    await handler.request(_in_session(request("a", sample="sample-1"), "session-1"))
+    ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    same_sample = await handler.request(
+        _in_session(request("b", sample="sample-1"), "session-2")
+    )
+    other_sample = await handler.request(
+        _in_session(request("c", sample="sample-2"), "session-1")
+    )
+    no_eval = await handler.request(_in_session(request("d"), "session-1"))
+
+    assert [ended, same_sample] == [_ENDED] * 2
+    assert [other_sample, no_eval] == [Pass()] * 2
+
+
+@pytest.mark.parametrize(
+    ("run_header", "sent"),
+    [
+        # no header names a run unless the sidecar is told which does
+        (None, {_SESSION: "session-1"}),
+        (_SESSION, {}),
+        (_SESSION, {_SESSION: "  "}),
+        (_SESSION, {"x-another-header": "session-1"}),
+    ],
+    ids=["not configured", "not sent", "sent empty", "another header"],
+)
+@pytest.mark.anyio
+async def test_a_run_no_header_names_is_named_by_how_its_conversation_opens(
+    run_header: str | None, sent: dict[str, str]
+) -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=run_header)
+    await handler.request(replace(request("a"), headers=sent))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    subagent = await handler.request(
+        replace(request("b", "A subagent's conversation"), headers=sent)
+    )
+
+    assert subagent == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_long_name_still_names_its_own_run() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    long = "s" * 1000
+    await handler.request(_in_session(request("a"), long + "1"))
+    ended = await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    same = await handler.request(
+        _in_session(request("b", "A subagent's conversation"), long + "1")
+    )
+    other = await handler.request(_in_session(request("c"), long + "2"))
+
+    assert [ended, same] == [_ENDED] * 2
+    assert other == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_name_and_another_names_digest_name_runs_of_their_own() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header=_SESSION)
+    long = "s" * 1000
+    await handler.request(_in_session(request("a"), long))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    # a short name that is the digest the long one is kept under
+    digest = hashlib.sha256(long.encode()).hexdigest()
+    other = await handler.request(_in_session(request("b"), digest))
+
+    assert other == Pass()
+
+
+@pytest.mark.parametrize("named_by", ["a header", "an eval"])
+@pytest.mark.anyio
+async def test_a_call_a_conversation_made_isnt_taken_for_another_conversations_changed_call(
+    named_by: str,
+) -> None:
+    handler = await holding(
+        Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+    )
+
+    def asked(id: str, opening: str, then: Sequence[dict[str, Any]] = ()) -> Request:
+        if named_by == "an eval":
+            return request(id, opening, then, sample="sample-1")
+        return _in_session(request(id, opening, then), "session-1")
+
+    # one conversation of the run is handed a changed call
+    await handler.request(asked("a", "The agent's conversation"))
+    await handler.reply(reply(message(weather("Tokyo", "call_0")), id="a"))
+    # Another makes a call of its own with the same id, as a local model
+    # that numbers its calls does. A call is known by its id within its
+    # conversation only.
+    await handler.request(asked("b", "A subagent's conversation"))
+    passed = await handler.reply(reply(message(weather("Paris", "call_0")), id="b"))
+
+    result = await handler.request(
+        asked("c", "A subagent's conversation", ran("Paris", "Sunny.", "call_0"))
+    )
+
+    assert passed == Pass()
+    assert result == Pass()
+
+
+@pytest.mark.parametrize("rejected", ["out of its turn", "with its whole turn"])
+@pytest.mark.anyio
+async def test_a_conversations_own_call_isnt_given_the_arguments_of_anothers_rejected_call(
+    rejected: str,
+) -> None:
+    # a run an eval names: the eval holds a rejected call without its
+    # arguments, and each later request has the model's own call put back
+    handler = await holding(Handler(weather_rule("reject", "Tokyo")))
+    sample = "sample-1"
+    await handler.request(request("a", "The agent's conversation", sample=sample))
+    turn = [weather("Tokyo", "call_0")]
+    if rejected == "out of its turn":
+        turn.append(weather("Paris", "call_1"))
+    await handler.reply(reply(message(*turn), id="a"))
+    # another conversation's model makes a call of its own with the same id,
+    # which takes no arguments
+    own: dict[str, Any] = {
+        "type": "tool_use",
+        "id": "call_0",
+        "name": "get_weather",
+        "input": {},
+    }
+    await handler.request(request("b", "A subagent's conversation", sample=sample))
+    await handler.reply(reply(message(own), id="b"))
+
+    result = await handler.request(
+        request(
+            "c",
+            "A subagent's conversation",
+            [
+                {"role": "assistant", "content": [own]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_0",
+                            "content": "Sunny.",
+                        }
+                    ],
+                },
+            ],
+            sample=sample,
+        )
+    )
+
+    # the request goes to the provider as the client sent it
+    assert result == Pass()
+
+
+@pytest.mark.anyio
+async def test_a_compaction_request_that_keeps_its_conversations_opening_is_amended_as_the_conversation_is() -> (
+    None
+):
+    handler = Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo", "toolu_1")), id="a"))
+
+    # As Claude Code asks for a compaction (measured, 2.1.293): the same
+    # system prompt and entries, with the instruction added to the last entry,
+    # beside the result of the call as it ran.
+    call, result = ran("Oslo", "Sunny.", "toolu_1")
+    result["content"].append({"type": "text", "text": "Summarise the conversation."})
+    compaction = await handler.request(
+        _in_session(request("b", then=[call, result]), "session-1")
+    )
+
+    # the model is sent its own call, as in any later request of the conversation
+    assert isinstance(compaction, Replace)
+    assistant = _messages(compaction.body)[1]
+    calls = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [call["input"] for call in calls] == [{"location": "Tokyo"}]
+
+
+@pytest.mark.parametrize(
+    "carried",
+    ["the changed call", "a call let through from a turn with one taken out"],
+)
+@pytest.mark.anyio
+async def test_a_request_that_holds_a_call_of_an_edited_turn_under_another_opening_is_unreadable_in_a_run_a_header_names(
+    carried: str,
+) -> None:
+    if carried == "the changed call":
+        handler = Handler(weather_rule("modify", "Tokyo"), run_header=_SESSION)
+        turn = [weather("Tokyo", "toolu_1")]
+        # the client ran the call as it was changed
+        history = ran("Oslo", "Sunny.", "toolu_1")
+    else:
+        handler = Handler(weather_rule("reject", "Tokyo"), run_header=_SESSION)
+        turn = [weather("Paris", "toolu_1"), weather("Tokyo", "toolu_2")]
+        # only the call let through, unchanged, and its result
+        history = ran("Paris", "Sunny.", "toolu_1")
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(*turn), id="a"))
+
+    # The conversation's history under another system prompt is a
+    # conversation of its own, in the same run. It holds a call of the
+    # edited turn, which its own model didn't make, so the call can't be
+    # matched with the edit, as for a run an eval names.
+    with pytest.raises(UnreadableError, match="which call ran"):
+        await handler.request(
+            _in_session(
+                request("b", then=history, system="You summarise conversations."),
+                "session-1",
+            )
+        )
+
+
+@pytest.mark.anyio
+async def test_the_header_that_names_a_run_is_found_whatever_its_case() -> None:
+    handler = Handler(weather_rule("terminate", "Tokyo"), run_header="X-Agent-Session")
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+
+    subagent = await handler.request(
+        _in_session(request("b", "A subagent's conversation"), "session-1")
+    )
+
+    assert handler.run_header == "x-agent-session"
+    assert subagent == _ENDED
+
+
 @pytest.mark.anyio
 async def test_a_sample_ended_at_a_result_is_refused_without_that_result() -> None:
     handler = await holding(Handler(storm_rule()))
@@ -1883,3 +2195,153 @@ async def test_a_request_that_waited_for_a_judgment_that_ended_the_run_is_refuse
 
     assert _Gate.judged == 1
     assert all(isinstance(answer, Refuse) for answer in answers.values())
+
+
+@protocol
+def notes_message_ids(seen: list[tuple[str, Any]], tokyo: str = "proceed") -> Protocol:
+    # notes the id a reply's message has when each of its calls is judged, and
+    # the ids of the messages each later request holds; decides `tokyo` for a
+    # lookup of Tokyo
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        if isinstance(step, BeforeGenerate):
+            seen.append(("input", [message.id for message in step.input]))
+            seen.append(("history", [message.id for message in step.history or []]))
+        if not isinstance(step, BeforeToolCall):
+            return Decision.proceed()
+        seen.append(("call", step.message_id))
+        if step.call.arguments.get("location") != "Tokyo" or tokyo == "proceed":
+            return Decision.proceed()
+        if tokyo == "modify":
+            changed = replace(step.call, arguments={"location": "Oslo"})
+            return Decision(action="modify", modified=changed)
+        return Decision.reject("Tokyo", message="Tokyo is not allowed.")
+
+    return decide
+
+
+def _noted(seen: list[tuple[str, Any]], kind: str) -> list[Any]:
+    return [noted for of, noted in seen if of == kind]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tokyo", ["proceed", "modify", "reject"])
+async def test_a_replys_message_keeps_its_id_in_the_requests_that_send_it_back(
+    tokyo: str,
+) -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen, tokyo))
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Tokyo")), id="a"))
+    (judged,) = _noted(seen, "call")
+
+    # the client holds the turn as it was handed it; a turn rejected whole it
+    # was never handed, and the sidecar puts it back
+    turn = (
+        []
+        if tokyo == "reject"
+        else ran("Oslo" if tokyo == "modify" else "Tokyo", "Sunny.")
+    )
+    await handler.request(request("b", then=turn))
+    said = {"type": "text", "text": "Sunny."}
+    await handler.reply(reply(message(said, stop_reason="end_turn"), id="b"))
+    more = [
+        {"role": "assistant", "content": [said]},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+    await handler.request(request("c", then=[*turn, *more]))
+
+    _, second, third = _noted(seen, "input")
+    assert second.count(judged) == 1
+    assert third.count(judged) == 1
+    # and the message is in what the conversation has sent, once, under it
+    assert _noted(seen, "history")[-1].count(judged) == 1
+
+
+@pytest.mark.anyio
+async def test_a_reply_with_one_call_rejected_keeps_its_messages_id() -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen, "reject"))
+    await handler.request(request("a"))
+    both = message(weather("Tokyo"), weather("Oslo", "toolu_2"))
+    assert isinstance(await handler.reply(reply(both, id="a")), Replace)
+    judged, _ = _noted(seen, "call")
+
+    # the client was handed the lookup of Oslo alone, and the sidecar puts
+    # the rejected one back beside it
+    await handler.request(request("b", then=ran("Oslo", "Rain.", "toolu_2")))
+
+    assert _noted(seen, "input")[-1].count(judged) == 1
+
+
+def _both_ran(*, together: bool) -> list[dict[str, Any]]:
+    # two lookups one reply made, sent back as one message or as two
+    paris, oslo = ran("Paris", "Sunny.", "toolu_1"), ran("Oslo", "Rain.", "toolu_2")
+    if not together:
+        return [*paris, *oslo]
+    return [
+        {
+            "role": "assistant",
+            "content": [weather("Paris"), weather("Oslo", "toolu_2")],
+        },
+        {"role": "user", "content": [*paris[1]["content"], *oslo[1]["content"]]},
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("together", [True, False], ids=["one message", "two messages"])
+async def test_a_reply_sent_back_as_several_messages_is_none_of_them(
+    together: bool,
+) -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen))
+    await handler.request(request("a"))
+    both = message(weather("Paris"), weather("Oslo", "toolu_2"))
+    await handler.reply(reply(both, id="a"))
+    first, second = _noted(seen, "call")
+    assert first == second
+
+    await handler.request(request("b", then=_both_ran(together=together)))
+
+    held = _noted(seen, "input")[-1]
+    assert held.count(first) == (1 if together else 0)
+    assert len(set(held)) == len(held)
+
+
+@pytest.mark.anyio
+async def test_a_reply_sent_back_as_two_messages_is_neither_when_one_changes() -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen))
+    await handler.request(request("a"))
+    both = message(weather("Paris"), weather("Oslo", "toolu_2"))
+    await handler.reply(reply(both, id="a"))
+    judged, _ = _noted(seen, "call")
+    split = _both_ran(together=False)
+    await handler.request(request("b", then=split))
+    fine = {"type": "text", "text": "Fine."}
+    await handler.reply(reply(message(fine, stop_reason="end_turn"), id="b"))
+
+    # the message with the lookup of Oslo is as the last request held it,
+    # and still holds a call of the reply
+    split[0]["content"][0]["text"] = "Checking the weather in Paris."
+    await handler.request(request("c", then=split))
+
+    assert judged not in _noted(seen, "input")[-1]
+
+
+@pytest.mark.anyio
+async def test_a_message_holding_the_calls_of_two_replies_is_neither() -> None:
+    seen: list[tuple[str, Any]] = []
+    handler = Handler(notes_message_ids(seen))
+    await handler.request(request("a"))
+    await handler.reply(reply(message(weather("Paris")), id="a"))
+    await handler.request(request("b", then=ran("Paris", "Sunny.")))
+    await handler.reply(reply(message(weather("Oslo", "toolu_2")), id="b"))
+    paris, oslo = _noted(seen, "call")
+
+    # a client that writes its two turns as one
+    await handler.request(request("c", then=_both_ran(together=True)))
+
+    held = _noted(seen, "input")[-1]
+    assert paris not in held and oslo not in held
