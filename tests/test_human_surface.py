@@ -1,6 +1,7 @@
+import functools
 import subprocess
 import sys
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any, cast
 
 import anyio
 import pytest
+from inspect_ai import eval, eval_retry
 from inspect_ai.log import SentinelConfig
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
@@ -372,9 +374,14 @@ async def ask(question):
 """
 
 
+# a directory with a colon in its name, as every absolute Windows path has
+@pytest.mark.parametrize("directory", ["", "c:"])
 @pytest.mark.anyio
-async def test_a_configuration_names_a_surface_in_a_python_file(tmp_path: Path) -> None:
-    file = (tmp_path / "review.py").resolve()
+async def test_a_configuration_names_a_surface_in_a_python_file(
+    tmp_path: Path, directory: str
+) -> None:
+    (tmp_path / directory).mkdir(exist_ok=True)
+    file = (tmp_path / directory / "review.py").resolve()
     file.write_text(SURFACE_FILE)
     raw: Any = {
         "name": "human",
@@ -390,6 +397,61 @@ async def test_a_configuration_names_a_surface_in_a_python_file(tmp_path: Path) 
     # the function the file defines is recorded by the file, as it was named
     assert sentinel_config(again) == SentinelConfig.model_validate(raw)
     assert file.with_suffix(".runs").read_text() == "ran\n"
+
+
+def retried(
+    ask: Callable[[HumanQuestion], Awaitable[HumanAnswer]],
+) -> Callable[[HumanQuestion], Awaitable[HumanAnswer]]:
+    # a decorator defined in another file than the surface it wraps, as a
+    # library's retry decorator is
+    @functools.wraps(ask)
+    async def again(question: HumanQuestion) -> HumanAnswer:
+        return await ask(question)
+
+    return again
+
+
+DECORATED_TASK_FILE = """\
+from inspect_ai import Task, task
+from inspect_ai.dataset import Sample
+from inspect_ai.solver import generate
+
+from inspect_sentinel import HumanAnswer, human
+from tests.test_human_surface import retried
+
+
+@retried
+async def ask(question):
+    return HumanAnswer("approve", "approved by the decorated surface")
+
+
+@task
+def decorated():
+    return Task(
+        dataset=[Sample(input="hello")],
+        solver=generate(),
+        sentinel=human(["model_input"], surface=ask),
+    )
+"""
+
+
+def test_a_decorated_surface_in_a_task_file_is_found_again_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path("decorated_task.py").write_text(DECORATED_TASK_FILE)
+
+    log = eval("decorated_task.py", model="mockllm/model", log_dir="logs")[0]
+    retried_log = eval_retry(log, log_dir="logs")[0]
+
+    assert log.status == "success", log.error
+    assert log.eval.config.sentinel == SentinelConfig.model_validate(
+        {
+            "name": "human",
+            "params": {"stages": ["model_input"], "surface": "decorated_task.py:ask"},
+        }
+    )
+    assert retried_log.status == "success", retried_log.error
 
 
 SCRIPT = """\

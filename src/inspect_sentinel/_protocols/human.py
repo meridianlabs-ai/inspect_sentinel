@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal, cast
 
 from .._context import Context
@@ -192,12 +192,15 @@ def _surface(surface: object) -> HumanSurface:
     return cast(HumanSurface, found)
 
 
-def _surface_name(surface: object) -> str:
+def _surface_name(surface: Callable[..., object]) -> str:
     # the name that finds a function again in another process: its module's
     # name where that imports, else its file, as for a script run as
     # `__main__`, a task file inspect_ai loaded, or a file named in a
-    # configuration
-    module = getattr(surface, "__module__", "")
+    # configuration. The module and file are the original function's, which
+    # a decorator's wrapper names by `__wrapped__`: the wrapper's own code is
+    # the decorator's
+    original = inspect.unwrap(surface)
+    module = getattr(original, "__module__", "")
     qualname = getattr(surface, "__qualname__", "")
     if "<" in qualname:
         raise TypeError(
@@ -205,7 +208,7 @@ def _surface_name(surface: object) -> str:
         )
     if importable_by_name(module):
         return f"{module}:{qualname}"
-    code = getattr(surface, "__code__", None)
+    code = getattr(original, "__code__", None)
     file = file_reference(code.co_filename) if code is not None else None
     if file is None:
         raise TypeError(
@@ -215,7 +218,9 @@ def _surface_name(surface: object) -> str:
 
 
 def _named(name: str) -> object:
-    module, _, qualname = name.partition(":")
+    # at the last colon, since a file's path may hold one, as a Windows path
+    # does, and a qualified name never does
+    module, _, qualname = name.rpartition(":")
     if not module or not qualname:
         raise ValueError(
             f"A surface given by name is 'module:function', where the module may be a .py file's path; got {name!r}."
