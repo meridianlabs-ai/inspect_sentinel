@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import hashlib
-import importlib
-import importlib.util
-import sys
 from collections.abc import Iterator, Mapping, Sequence
-from pathlib import Path
-from types import ModuleType
 from typing import cast
 
 from inspect_ai._util.registry import registry_lookup
 from inspect_ai.log import SentinelConfig, SentinelEntry
+
+from .._sources import import_source, source_file
 
 # a bare name in a configuration also finds a factory in this package, which
 # registers its own factories when it is imported
@@ -52,69 +48,6 @@ def import_factory_sources(
         raise ValueError(
             f"Cannot rebuild the sentinel in this process: {', '.join(repr(m) for m in missing)} is not a registered monitor or protocol, and importing the modules that defined its factories did not register it. A factory defined in a REPL, notebook or `python -c` can be rebuilt only in the process that defined it; define it in a module or script."
         )
-
-
-def source_file(module: str) -> str | None:
-    file = getattr(sys.modules.get(module), "__file__", None)
-    return _relative(file) if file and Path(file).is_file() else None
-
-
-def import_source(module: str, file: str | None) -> ModuleType | None:
-    # The module a recorded source names, imported if this process lacks it:
-    # by name, else from its file under a name of its own. A script, recorded
-    # as `__main__`, is this process's `__main__` (or `__mp_main__`, as a
-    # worker started by spawning runs it) when that is its file, and is
-    # otherwise loaded from the file, once. None for a `__main__` with no file.
-    path = _absolute(file) if file is not None else None
-    if module == "__main__":
-        for alias in ("__main__", "__mp_main__"):
-            loaded = sys.modules.get(alias)
-            main = getattr(loaded, "__file__", None)
-            if main is not None and path is not None and Path(main).resolve() == path:
-                return loaded
-        return _import_file(path) if path is not None else None
-    if module in sys.modules:
-        return sys.modules[module]
-    try:
-        return importlib.import_module(module)
-    except ModuleNotFoundError as ex:
-        # only the module itself missing from the path, not one it imports
-        if path is None or ex.name is None or not module.startswith(ex.name):
-            raise
-        return _import_file(path)
-
-
-def _import_file(path: Path) -> ModuleType:
-    # under a name of its own, so it never stands in for a module of the
-    # same name, nor runs twice
-    digest = hashlib.sha256(str(path).encode()).hexdigest()[:8]
-    name = f"_sentinel_source_{path.stem}_{digest}"
-    loaded = sys.modules.get(name)
-    if loaded is not None:
-        return loaded
-    if not path.is_file():
-        raise ValueError(
-            f"Cannot import {str(path)!r}, which defines a monitor, protocol or callback the scan records: the file does not exist."
-        )
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot import {str(path)!r}.")
-    loaded = importlib.util.module_from_spec(spec)
-    sys.modules[name] = loaded
-    spec.loader.exec_module(loaded)
-    return loaded
-
-
-def _relative(file: str) -> str:
-    path = Path(file).resolve()
-    try:
-        return path.relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _absolute(file: str) -> Path:
-    return (Path.cwd() / file).resolve()
 
 
 def _unregistered(config: SentinelConfig) -> list[str]:

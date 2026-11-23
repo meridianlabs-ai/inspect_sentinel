@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
 
@@ -14,14 +15,15 @@ from inspect_ai.tool import ToolCallContent
 from inspect_ai.tool._tool_call import substitute_tool_call_content
 from starlette.applications import Starlette
 
-from inspect_sentinel import human, preprocess_step, sequential
+from inspect_sentinel import Sentinel, human, preprocess_step, sequential
 from inspect_sentinel._context import Context
 from inspect_sentinel._decorators import protocol
-from inspect_sentinel._host import HumanAnswer
+from inspect_sentinel._host import HumanAnswer, HumanQuestion
 from inspect_sentinel._report import Decision, Escalations
 from inspect_sentinel._step import AfterToolCall, BeforeGenerate, BeforeToolCall
 from inspect_sentinel._types import Protocol
 from inspect_sentinel.sidecar import (
+    Answer,
     Handler,
     Pass,
     Refuse,
@@ -33,6 +35,7 @@ from inspect_sentinel.sidecar import (
     _handler,
     _state,
 )
+from inspect_sentinel.sidecar._errors import JudgingTimeoutError
 from inspect_sentinel.sidecar._eval_endpoint import (
     JUDGED_REPLY_PATH,
     PATH,
@@ -51,7 +54,7 @@ from inspect_sentinel.sidecar._proxy_endpoint import PATH as PROXY_PATH
 from inspect_sentinel.sidecar._proxy_endpoint import proxy_app
 from inspect_sentinel.sidecar._reply_stream import ERROR_BODY_BYTES
 from inspect_sentinel.sidecar._review import UnknownQuestionError
-from inspect_sentinel.sidecar._state import MemoryState
+from inspect_sentinel.sidecar._state import ListRecorder, MemoryState
 from inspect_sentinel.sidecar._wire import UnreadableError
 from tests.sidecar._traffic import (
     JSON,
@@ -3215,6 +3218,272 @@ async def test_a_host_with_its_own_way_to_ask_a_person_is_still_asked() -> None:
 
         assert isinstance(answer, Pass)
         assert await handler.reviews.list_pending("eval_789") == []
+
+
+async def desk_approves(question: HumanQuestion) -> HumanAnswer:
+    """A team's own review tool, which approves every call."""
+    return HumanAnswer(decision="approve", reason="Approved at the team's desk.")
+
+
+@pytest.mark.anyio
+async def test_a_human_with_a_channel_asks_it_instead_of_the_evals_approval_ui() -> (
+    None
+):
+    handler = Handler(
+        sequential([escalates(), human(stages=["tool_call"], channel=desk_approves)])
+    )
+    async with _serving(handler):
+        await handler.request(_from_eval())
+
+        answer = await handler.reply(reply(message(weather("Oslo"))))
+
+        assert isinstance(answer, Pass)
+        assert await handler.reviews.list_pending("eval_789") == []
+
+
+class _Desk:
+    """A team's review tool that answers only once released: whether it was asked, and whether its question was withdrawn."""
+
+    def __init__(self) -> None:
+        self.asked = anyio.Event()
+        self.release = anyio.Event()
+        self.withdrawn = False
+
+
+_desk: ContextVar[_Desk] = ContextVar("desk")
+
+
+async def desk_waits(question: HumanQuestion) -> HumanAnswer:
+    desk = _desk.get()
+    desk.asked.set()
+    try:
+        await desk.release.wait()
+        return HumanAnswer("approve", "Approved at the team's desk.")
+    finally:
+        # withdrawing the question from the team's tool awaits, as it would
+        with anyio.CancelScope(shield=True):
+            await anyio.lowlevel.checkpoint()
+            desk.withdrawn = True
+
+
+def _waits_at_desk(**options: Any) -> tuple[Handler, _Desk]:
+    desk = _Desk()
+    _desk.set(desk)
+    handler = Handler(
+        sequential([escalates(), human(stages=["tool_call"], channel=desk_waits)]),
+        **options,
+    )
+    return handler, desk
+
+
+@pytest.mark.parametrize("eval_results", [True, False])
+@pytest.mark.anyio
+async def test_ending_the_sample_withdraws_a_channels_question(
+    eval_results: bool,
+) -> None:
+    # with eval results the judging runs in the handler's own task; without,
+    # in the exchange
+    handler, desk = _waits_at_desk(eval_results=eval_results)
+    answers: list[Any] = []
+    async with _serving(handler):
+        await handler.request(_from_eval())
+
+        async def judge() -> None:
+            answers.append(await handler.reply(reply(message(weather("Oslo")))))
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(judge)
+            await desk.asked.wait()
+            assert await handler.end_sample("sample_123", "eval_789") == "ended"
+
+        records = await handler.records("x")
+
+    assert desk.withdrawn
+    [answer] = answers
+    assert isinstance(answer, Refuse)
+    assert answer.message == "This run ended while the request waited for a person."
+    assert records is not None
+    assert [(r.kind, r.path) for r in records] == [
+        ("record", "escalates"),
+        ("cancelled", "human"),
+        ("cancelled", ""),
+    ]
+
+
+_SESSION = "x-agent-session"
+
+
+def _in_session(asked: Request, session: str) -> Request:
+    # as from an agent that sends an id for its session in a header
+    return replace(asked, headers={**asked.headers, _SESSION: session})
+
+
+@pytest.mark.parametrize("late", [False, True], ids=["waiting", "not_yet_asked"])
+@pytest.mark.anyio
+async def test_ending_a_proxy_session_withdraws_its_channels_question(
+    late: bool,
+) -> None:
+    # An ordinary proxy client, whose run a header names: the session ends at
+    # its Bergen lookup while its Oslo lookup waits for a person, or before the
+    # Oslo lookup's judging reaches the channel. Another session goes on.
+    reached, go = anyio.Event(), anyio.Event()
+    links: list[Sentinel] = [ends_at_bergen()]
+    if late:
+        links.append(waits_at("toolu_1", reached, go))
+    links.append(human(stages=["tool_call"], channel=desk_waits))
+    handler = Handler(sequential(links), run_header=_SESSION)
+    first, other = _Desk(), _Desk()
+    answers: dict[str, Answer] = {}
+    ended: Answer | None = None
+
+    async def judge(id: str, desk: _Desk) -> None:
+        _desk.set(desk)
+        answers[id] = await handler.reply(reply(message(weather("Oslo")), id=id))
+
+    await handler.request(_in_session(request("a"), "session-1"))
+    await handler.request(_in_session(request("o"), "session-2"))
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(judge, "a", first)
+            group.start_soon(judge, "o", other)
+            if late:
+                # both lookups wait in the link before the channel
+                await reached.wait()
+            else:
+                await first.asked.wait()
+                await other.asked.wait()
+
+            await handler.request(_in_session(request("b"), "session-1"))
+            ended = await handler.reply(
+                reply(message(weather("Bergen", "toolu_9")), id="b")
+            )
+            go.set()
+            # the other session's question is still open, and answered
+            await anyio.wait_all_tasks_blocked()
+            assert not other.withdrawn
+            other.release.set()
+
+    assert isinstance(ended, Refuse)
+    assert first.asked.is_set() is not late
+    assert first.withdrawn is not late
+    assert answers["a"] == ended
+    assert isinstance(answers["o"], Pass)
+    assert other.withdrawn
+    later = await handler.request(_in_session(request("c"), "session-1"))
+    assert isinstance(later, Refuse)
+    records = await handler.records("a")
+    assert records is not None
+    assert ("cancelled", "human") in [(r.kind, r.path) for r in records]
+
+
+class _PausingState(MemoryState):
+    """A state whose recorder pauses at one call for one request, as a shared state's might while it reaches its store. The sidecar awaits the recorder while it prepares a request for judging, after checking that its run hasn't ended."""
+
+    def __init__(self, id: str, pause_at: int) -> None:
+        super().__init__()
+        self._id, self._pause_at, self._calls = id, pause_at, 0
+        self.paused = anyio.Event()
+        self.resume = anyio.Event()
+
+    async def recorder(self, id: str) -> ListRecorder:
+        if id == self._id:
+            self._calls += 1
+            if self._calls == self._pause_at:
+                self.paused.set()
+                await self.resume.wait()
+        return await super().recorder(id)
+
+
+@protocol
+def stops_when_told() -> Protocol:
+    async def decide(
+        context: Context, step: BeforeGenerate, escalations: Escalations
+    ) -> Decision | None:
+        if step.input[-1].text == "stop":
+            return Decision.terminate("Told to stop.")
+        return Decision.escalate("every request is checked by a person")
+
+    return decide
+
+
+def _asks_before_each_request(state: MemoryState, **options: Any) -> Handler:
+    return Handler(
+        sequential(
+            [stops_when_told(), human(stages=["model_input"], channel=desk_waits)]
+        ),
+        state=state,
+        **options,
+    )
+
+
+@pytest.mark.anyio
+async def test_a_proxy_session_ended_while_a_request_is_prepared_asks_no_channel() -> (
+    None
+):
+    # The request passes the check that its session hasn't ended, then waits
+    # on the state while it is prepared; meanwhile another request ends the
+    # session. Its judging then reaches the channel, which isn't asked.
+    state = _PausingState("a", pause_at=1)
+    handler = _asks_before_each_request(state, run_header=_SESSION)
+    desk = _Desk()
+    answers: list[Answer] = []
+    ended: Answer | None = None
+
+    async def first() -> None:
+        _desk.set(desk)
+        answers.append(await handler.request(_in_session(request("a"), "session-1")))
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as group:
+            group.start_soon(first)
+            await state.paused.wait()
+            ended = await handler.request(
+                _in_session(request("b", user_text="stop"), "session-1")
+            )
+            state.resume.set()
+
+    assert isinstance(ended, Refuse)
+    assert answers == [ended]
+    assert not desk.asked.is_set()
+
+
+@pytest.mark.parametrize("eval_results", [True, False])
+@pytest.mark.anyio
+async def test_a_sample_ended_while_a_request_is_prepared_asks_no_channel(
+    eval_results: bool,
+) -> None:
+    # The same for an eval's request, paused at the recorder's second call,
+    # the one made after the check that its run hasn't ended
+    state = _PausingState("x", pause_at=2)
+    handler = _asks_before_each_request(state, eval_results=eval_results)
+    desk = _Desk()
+    answers: list[Answer] = []
+
+    async def first() -> None:
+        _desk.set(desk)
+        answers.append(await handler.request(_from_eval()))
+
+    async with _serving(handler):
+        async with anyio.create_task_group() as group:
+            group.start_soon(first)
+            await state.paused.wait()
+            assert await handler.end_sample("sample_123", "eval_789") == "ended"
+            state.resume.set()
+
+    [answer] = answers
+    assert isinstance(answer, Refuse)
+    assert not desk.asked.is_set()
+
+
+@pytest.mark.anyio
+async def test_the_judging_timeout_withdraws_a_channels_question() -> None:
+    handler, desk = _waits_at_desk(judging_timeout=0.05)
+    await handler.request(request())
+
+    with pytest.raises(JudgingTimeoutError):
+        await handler.reply(reply(message(weather("Oslo"))))
+
+    assert desk.withdrawn
 
 
 # --- what the sidecar keeps of a question ---
