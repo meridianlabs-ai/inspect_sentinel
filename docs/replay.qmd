@@ -1,7 +1,7 @@
 ---
 title: "Replay"
 description: "Measuring a monitor or protocol on agent runs you already have, by replaying it over their logs with Inspect Scout."
-llms-description: "as_scanner() replays a monitor or protocol over Inspect logs as an Inspect Scout scanner (one result per step per stage; stage=, results=, steps=, human=, timeline=, depth=); measuring a monitor with observe_only(), score percentiles and precision/recall from scan_results_df(); @monitor(version=); step selectors and human stand-ins as plain module-level functions; as_reader() for read mode and joining its rows with a replay's; replay_check() and replay_check_differences(); what a replayed step holds; older logs (turns inferred from the span tree), transcripts replayed from messages, and stored timelines."
+llms-description: "as_scanner() replays a monitor or protocol over Inspect logs as an Inspect Scout scanner (one result per step per stage; stage=, results=, steps=, human=, timeline=, depth=); measuring a monitor with observe_only(), score percentiles and precision/recall from scan_results_df(); @monitor(version=); step selectors and human stand-ins as plain module-level functions; as_reader() for read mode, and compare_decisions() to compare its decisions with a replay's; replay_check() and replay_check_differences(); what a replayed step holds; older logs (turns inferred from the span tree), transcripts replayed from messages, and stored timelines."
 ---
 
 ## Overview
@@ -66,7 +66,8 @@ Each row of the results dataframe is one step at one stage:
 | Column | Description |
 |---------------------------|---------------------------------------------|
 | `transcript_id` | The sample the step belongs to. |
-| `metadata.step_id` | The tool call id at a tool stage, or the model call id at a generate stage. A tool call's two steps share its id. |
+| `metadata.step_id` | The tool call id at a tool stage, or the model call id at a generate stage. A tool call's two steps share its id. Where a call id runs more than once (a retry after a tool error, or a provider that reuses ids), a run of the id after an earlier run's steps took it has its execution id instead, in logs that record one, so each step's id is unique in its transcript. A tool step of an agent run through an agent bridge has the id of the model call that proposed it, a `/`, then the call id. In read mode, an agent bridge's check of a tool call has its execution id, or, for a result the bridge could not tie to one run of a call id it handed out more than once, the id of the sentinel span it was reported in, which the reports of its monitors share. Either way it matches no replayed step (see [Bridged Agents](#bridged-agents)). |
+| `metadata.replay_step_id` | In read mode, the replayed step the row joins: its own `metadata.step_id`, except for an agent bridge's check, which names the replayed step of the model call that proposed its call id, or `None` where the log doesn't tie it to one (see [Bridged Agents](#bridged-agents)). |
 | `metadata.stage` | `"model_input"` (`BeforeGenerate`), `"model_output"` (`AfterGenerate`), `"tool_call"` (`BeforeToolCall`) or `"tool_result"` (`AfterToolCall`). |
 | `metadata.conversation` | The conversation the step is in. Each agent and sub-agent has its own message thread, its conversation, so this tells a sub-agent's steps apart from the main agent's. |
 | `value` | For a monitor, the suspicion score: a number, or a dict with one entry per dimension. For a protocol, `True` if the action is `reject`, `modify` or `terminate`, and `False` for `proceed` or `escalate`. `None` where the monitor or protocol abstained. |
@@ -305,26 +306,60 @@ Counting the `"unanswered"` and `"simulated"` rows tells you how many steps woul
 
 Pass `stage` to keep one stage's rows, as for `as_scanner()`. A step where the instance abstained recorded nothing, so it has no read-mode row. A protocol decision that was superseded at its step also gets a row, with `metadata.status` `"superseded"`, so read mode can give more than one row for a step.
 
-To compare a replayed monitor with what it recorded live, scan in both modes and join the rows:
+Read mode is also the only way to see what a protocol's decisions did during the eval, since a replay doesn't change the transcript.
+
+### Comparing Decisions
+
+Replay lets you see how a new monitor or protocol would have decided on runs you already have. To compare its decisions with the ones made live, scan the logs in both modes and pass the two results to `compare_decisions()`:
 
 ``` python
-from inspect_sentinel.scout import as_reader, as_scanner
+from inspect_sentinel.scout import as_reader, as_scanner, compare_decisions
 
 status = scan(
     scanners={
-        "replayed": as_scanner(suspicion(), stage="tool_call"),
-        "recorded": as_reader("suspicion", stage="tool_call"),
+        "replayed": as_scanner(new_protocol()),
+        "recorded": as_reader(),
     },
     transcripts=transcripts_from("./logs"),
 )
 frames = scan_results_df(status.location).scanners
-keys = ["transcript_id", "metadata.conversation", "metadata.step_id", "metadata.stage"]
-both = frames["replayed"].merge(frames["recorded"], on=keys, suffixes=("_replayed", "_recorded"))
+compared = compare_decisions(frames["replayed"], frames["recorded"])
+compared[~compared["agree"]]
 ```
 
-A read-mode row's conversation is the one the log recorded, from its span tree. A replayed row has the same conversation only where its `metadata.turns` is `"recorded"`, so join on all four keys only there. Any other replay (with `timeline`, of an older log, or from messages; see [Older Logs and Other Sources](#older-logs-and-other-sources)) may have conversations of its own, so join it on `transcript_id`, `metadata.step_id` and `metadata.stage` only. That join is ambiguous where two agents' tool calls share an id.
+The result has one row per step:
 
-Read mode is also the only way to see what a protocol's decisions did during the eval, since a replay does not change the transcript.
+| Column | Holds |
+|---------------------------|---------------------------------------------|
+| transcript, conversation, step and stage | Which step. The conversation is `None` where rows were matched without it. |
+| `replayed`, `recorded` | Each side's decision: a protocol's action (e.g. `"reject"`), or a monitor's suspicion score. `None` on a side that has no row for the step, or where the replay abstained. |
+| `agree` | `True` where both sides have the step and decided the same. |
+| `replayed_explanation`, `recorded_explanation` | Each side's explanation. |
+| `status` | `"matched"`, or `"only replayed"` or `"only recorded"` for a step only one side has. |
+
+So `compared[~compared["agree"]]` lists every step worth a look: the steps decided differently, and the steps only one side has. Scores are compared exactly, so for a monitor, compare the `replayed` and `recorded` scores themselves rather than `agree`.
+
+Some steps are on one side only by design:
+
+- A step where the live instance abstained has no read-mode row, so the replayed row there is `"only replayed"`, with `replayed` `None` if the replay abstained too.
+- A protocol decision that was superseded (`metadata.status` `"superseded"`) didn't take effect, so it's left out.
+- An agent bridge's check that no replayed step is the check's alone is `"only recorded"` (see [Bridged Agents](#bridged-agents)).
+
+`compare_decisions()` is an outer join of the two results, and for other columns you can do the same join yourself:
+
+``` python
+keys = ["transcript_id", "metadata.conversation", "metadata.stage"]
+both = frames["replayed"].merge(
+    frames["recorded"],
+    left_on=[*keys, "metadata.step_id"],
+    right_on=[*keys, "metadata.replay_step_id"],
+    how="outer",
+    suffixes=("_replayed", "_recorded"),
+    indicator=True,
+)
+```
+
+A read-mode row's `metadata.replay_step_id` is the replayed step it joins: its own `metadata.step_id`, except for a check made by an agent bridge. Join on the conversation only where the replay's `metadata.turns` is `"recorded"`. Any other replay (with `timeline`, of an older log, or from messages; see [Older Logs and Other Sources](#older-logs-and-other-sources)) may have conversations of its own, so leave `metadata.conversation` out of `keys`. Two agents' tool calls that share an id then give one side two rows with one key. `compare_decisions()` lists each of them as unmatched rather than pair them by a guess, but a plain merge pairs them all.
 
 ## Checking Replay
 
@@ -356,7 +391,7 @@ An empty dataframe means replay handed the monitor what it received live. Otherw
 | the two digests | The replayed and the recorded digest. |
 | `reason` | `"differs"`, or `"only replayed"` or `"only recorded"` for a step only one side reported. |
 
-Rows are matched by transcript, conversation, stage and step where the replay's `metadata.turns` is `"recorded"`. Any other transcript (replayed with `timeline`, from an older log, or from messages) may have conversations read mode doesn't, so its rows are matched by transcript, stage and step. Where two of one side's rows then share a key (as two agents' calls with one id do), `replay_check_differences()` raises rather than compare the wrong rows.
+Rows are matched by transcript, conversation, stage and step where the replay's `metadata.turns` is `"recorded"`. A read-mode row's step is its `metadata.replay_step_id`, so an agent bridge's checks are compared with the replayed steps of the calls they checked (see [Bridged Agents](#bridged-agents)). Any other transcript (replayed with `timeline`, from an older log, or from messages) may have conversations read mode doesn't, so its rows are matched by transcript, stage and step. Where two of one side's rows then share a key (as two agents' calls with one id do), `replay_check_differences()` raises rather than compare the wrong rows.
 
 Note that replay hands the monitor the sample's final metadata, so if a solver changed the metadata during the run, earlier steps show an `eval` difference.
 
@@ -379,6 +414,29 @@ Some fields differ from the live step, because a log doesn't record them:
 
 Logs written by older versions of inspect_ai, and transcripts from other sources, replay too, with some limits (see [Older Logs and Other Sources](#older-logs-and-other-sources)).
 
+### Bridged Agents
+
+Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools. Replay rebuilds their tool steps from the bridge's model calls (inspect_ai 0.3.292 and later), both for a tool the bridge runs on the host for the agent (a `bridged_tools` tool) and for one the agent runs itself. It shows each tool call as the model wrote it, and each result as the model next received it, and names both steps `<model call uuid>/<call id>`. Where a conversation's model calls proposed a call id more than once, replay can't tell which call a result answers, so it builds no `tool_result` step for that id. Calls sharing an id in one response get no steps, with a warning. A live sentinel saw the call as the bridge showed it at the check, which is usually the model's call but not always: after an approver's `modify`, the sentinel saw the modified arguments, and at a host tool a sandbox bridge ran, it saw the call under that tool's own name, where replay shows the name the model used (e.g. `mcp__host__addition`). A call a sentinel rejected has the rejection the model received as its result, and a result that never reached the model has no step. A person's decision at a bridge's check still reaches the later steps of the conversation.
+
+#### Comparing With the Recorded Sentinel
+
+`compare_decisions()` pairs each of a bridge's checks with the replayed step of its call, so you can compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions (see [Comparing Decisions](#comparing-decisions)).
+
+A check is paired with the step of the model call that proposed the call, where the log shows which that is: the bridge's model calls in the check's conversation proposed its call id once, and replay built that model call's step at the check's stage. To see which steps replay built, read mode replays each transcript that has bridge checks, as `as_scanner()` would without `timeline`. The read-mode row names that step in `metadata.replay_step_id`. The check's own `metadata.step_id` and citations stay as read mode gives them.
+
+Pairing a check with its step doesn't make their inputs the same. Where the live sentinel saw a modified call or a host tool's own name (see [Bridged Agents](#bridged-agents)), the replayed monitor decides on the model's call, so a difference in decision there can come from the input as well as the monitor.
+
+A check is never paired by order or position. It is `"only recorded"` when the log doesn't tie it to one replayed step, for example when:
+
+- the model proposed the call id more than once in the conversation: a reused id, a request filter's several candidates, or an earlier response a filter hands over again. Nothing in the log says which proposal the check was of;
+- replay built no step for the call at the check's stage: the model's response holds the call id more than once, the model call was made with the monitor role's model (e.g. by a request filter), or no later request carried the result, as when the sentinel ended the run at that result;
+- the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call. Replay names those steps by the fresh id, which read mode doesn't yet match;
+- another check of the same stage names the same step, as when the bridge checks a result again.
+
+The log doesn't record which model call produced a bridged call. So with an `agent_bridge(filter=...)` that generates several responses and hands one over under a call id that another of them proposed, read mode can pair the check with the other generation's step, and `compare_decisions()` lists the two as `"matched"`. Without such a filter, a check is paired with the step of the call it was of, as described above.
+
+A replayed step is `"only replayed"` when the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or when its check is `"only recorded"`.
+
 ### Sub-agents and Timelines
 
 Each row's `metadata.depth` is how deeply nested the step's conversation is among the transcript's agents, where 1 is the outermost agent. Pass `depth` to `as_scanner()` to run only steps at most that deep, for example `depth=1` to leave out most sub-agents:
@@ -395,7 +453,7 @@ Some transcripts carry a stored timeline of their own (e.g. Petri's `"target"`).
 as_scanner(suspicion(), timeline="target")
 ```
 
-`metadata.turns` is then `"stored"`, except for a transcript replayed from messages, which stays `"inferred"`. A stored timeline only groups steps: in a log without origins, it doesn't change which calls are inferred as agent turns. A transcript with no timeline of that name raises an error. With `timeline`, join replayed rows with read-mode rows without the conversation (see [Read Mode](#read-mode)), because the conversations differ.
+`metadata.turns` is then `"stored"`, except for a transcript replayed from messages, which stays `"inferred"`. A stored timeline only groups steps: in a log without origins, it doesn't change which calls are inferred as agent turns. A transcript with no timeline of that name raises an error. With `timeline`, replayed rows are joined with read-mode rows without the conversation (see [Comparing Decisions](#comparing-decisions)), because the conversations differ.
 
 ### Running and Resuming
 
@@ -437,9 +495,25 @@ Logs written by inspect_ai before 0.3.100 don't separate the agent's work from s
 
 A transcript where an approver changed a tool call, but the log records a different call as the one that ran (as inspect_ai before 0.3.277 could), can't be replayed, since the log doesn't show which arguments ran. Scout reports an error for that transcript.
 
+### Imported Transcripts
+
+Scout imports transcripts from other agent frameworks (Claude Code, LangSmith, Logfire, Phoenix, Weave and ATIF). Scout 0.6.3 and later keep one id per message across a transcript's model calls and its messages, and record which model calls the messages come from. Such a transcript replays from its model calls, with `metadata.turns` `"inferred"`:
+
+-   Its agent turns are inferred as for an older Inspect log (see [Older Inspect Logs](#older-inspect-logs)), and each gives a `model_input` and a `model_output` step.
+
+-   Its tool steps come from its messages. Each assistant message is matched by its id to the model call that produced it, so its tool steps have that call's input and tools, and follow that call's steps. An assistant message no model call produced has tool steps without an input.
+
+-   A tool call that isn't in the transcript's messages, such as a sub-agent's, has no tool steps.
+
+-   A tool call whose id an earlier call in the messages already has is skipped, with a warning, since step ids are unique in a transcript. Replay takes an import's tool calls from its messages, which carry no execution id, so a later call can't be renamed by one as a repeated call id in an Inspect log is (see `metadata.step_id` in [Results](#results)).
+
+What a step holds otherwise depends on the source. Its tool steps have no `truncated` and no `view.context`, and its model calls hold what the importer recorded: for example, Claude Code's have no system prompt and no tools.
+
+A transcript imported by an earlier version of Scout replays from its messages.
+
 ### Transcripts From Messages
 
-A transcript Scout imported from another source, one with no model events, or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message becomes a model call whose input is every message before it. Each of its tool calls gives a `tool_call` step; a `tool_result` step is added only if an answering tool message follows it. The whole transcript is one conversation.
+A transcript with no model events, one Scout imported before it kept message ids (see [Imported Transcripts](#imported-transcripts)), or one from a log written by inspect_ai before 0.3.100 replays from its messages, with `metadata.turns` `"inferred"`. Each assistant message becomes a model call whose input is every message before it. Each of its tool calls gives a `tool_call` step; a `tool_result` step is added only if an answering tool message follows it. The whole transcript is one conversation.
 
 A step from messages holds less than one from an Inspect log:
 
