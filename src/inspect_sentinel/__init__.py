@@ -14,9 +14,11 @@ from ._preprocess import (
     LastTurns,
     NewSinceLastReport,
     StepPreprocessor,
+    Unrenderable,
     Window,
     preprocess_step,
     step_as_str,
+    unrenderable,
 )
 from ._protocols import (
     concurrent,
@@ -133,8 +135,10 @@ __all__ = [
     "LastTurns",
     "NewSinceLastReport",
     "StepPreprocessor",
+    "Unrenderable",
     "Window",
     "preprocess_step",
+    "unrenderable",
     "threshold",
     "tool_matches",
     "__version__",

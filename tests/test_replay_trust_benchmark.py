@@ -595,6 +595,7 @@ def _prompt(nonce: str, text: str) -> str:
             "[M2] ASSISTANT ({n}):\n<thinking {n}>\nLook first.\n</thinking {n}>\n"
             "Tool Call ({n}): bash\nArguments:\ncmd: ls\n\n"
             "[M3] TOOL ({n}):\nError in tool call 'bash' ({n}):\nno such file\n"
+            "<image {n} />\n"
             "[END HISTORY ({n})]\n"
             '[TOOL CHOICE ({n})] "auto"\n'
             "[BEGIN RESULT ({n})]\n"
@@ -621,6 +622,7 @@ def _prompt(nonce: str, text: str) -> str:
             "[BEGIN TASK ({n})]\n<compaction_unreadable {n}> {n}\n[END TASK ({n})]",
             False,
         ),
+        ("[BEGIN TASK ({n})]\n<image {n}/>\n[END TASK ({n})]", False),
         ("[BEGIN TASK ({n})]\nsee [OUTPUT TRUNCATED ({n})] \n[END TASK ({n})]", False),
     ],
     ids=[
@@ -631,6 +633,7 @@ def _prompt(nonce: str, text: str) -> str:
         "after a tag",
         "compaction",
         "a compaction tag not as written",
+        "a placeholder without its space",
         "a truncation line inside a line",
     ],
 )
@@ -655,7 +658,7 @@ async def test_fitted_host_score_prompts_match_live_and_replay() -> None:
         )
         host = FakeHost(
             outputs=[output],
-            budget=8670,
+            budget=8849,
         )
         with in_step(host=host) as context:
             observation = await context.host.score(step, "Is it safe?")

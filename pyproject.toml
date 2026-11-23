@@ -22,10 +22,11 @@ dependencies = [
     "inspect-ai>=0.3.291",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
-    # inspect_ai (design/pr-series.md). 0.6.4 is the first release that
-    # renders a model provider's compaction as <compaction_summary> or
-    # <compaction_unreadable /> tags carrying the nonce, which the default
-    # template explains.
+    # inspect_ai (design/pr-series.md). 0.6.4 is the first release whose
+    # placeholders for content that is not text (images, unknown types) carry
+    # the nonce, which unrenderable() and the default template rely on, and
+    # that renders a model provider's compaction as <compaction_summary> or
+    # <compaction_unreadable /> tags carrying the nonce.
     "inspect-scout>=0.6.4",
     # Host.score's templates are Jinja. Scout depends on it too, but it is
     # imported directly here, and a transitive dependency is not a promise.
