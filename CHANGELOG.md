@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.2...0.4.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sidecar:** the sidecar's `--time-limit`, the config key `time_limit`, `Handler(time_limit=)`, `TimeLimitError`, and the `not_judged` reason and JSON-RPC error `time_limit` are renamed to `--judging-timeout`, `judging_timeout`, `Handler(judging_timeout=)`, `JudgingTimeoutError` and `judging_timeout`.
+
+### Features
+
+* a monitor can tell when a step holds content it can't show the model, and fail closed ([#267](https://github.com/meridianlabs-ai/inspect_sentinel/issues/267)) ([c6968ba](https://github.com/meridianlabs-ai/inspect_sentinel/commit/c6968ba8aefc1d3d7da039ec49ebc3dbee4f087c))
+* a monitor's prompt says when a tool's output was truncated ([#266](https://github.com/meridianlabs-ai/inspect_sentinel/issues/266)) ([88a71a2](https://github.com/meridianlabs-ai/inspect_sentinel/commit/88a71a2eb4bb8d54bd5160596af68e169aff9ac7))
+* human() can ask a person about a request before the model is sent it ([#240](https://github.com/meridianlabs-ai/inspect_sentinel/issues/240)) ([f808851](https://github.com/meridianlabs-ai/inspect_sentinel/commit/f80885174c162cef8c7d1d843f53157908075a1b))
+* monitors see a provider's compaction as its summary or a marked placeholder, and can leave out an unreadable one ([#268](https://github.com/meridianlabs-ai/inspect_sentinel/issues/268)) ([79e7142](https://github.com/meridianlabs-ai/inspect_sentinel/commit/79e7142748baa891cdffaac1f55daace2aa28aaf))
+* replay joins imported and bridged steps to their model calls by id ([#193](https://github.com/meridianlabs-ai/inspect_sentinel/issues/193)) ([2ae329e](https://github.com/meridianlabs-ai/inspect_sentinel/commit/2ae329e4ff815ff8ad1740602b539b90a33b10d2))
+* **scout:** read mode names the replayed step each bridge check joins ([#245](https://github.com/meridianlabs-ai/inspect_sentinel/issues/245)) ([6d2e8da](https://github.com/meridianlabs-ai/inspect_sentinel/commit/6d2e8da8f85648889d2f865e058d95e502e7db13))
+* **sidecar:** --run-header names an agent's run from a request header, such as Claude Code's session id ([#256](https://github.com/meridianlabs-ai/inspect_sentinel/issues/256)) ([b5c9ac3](https://github.com/meridianlabs-ai/inspect_sentinel/commit/b5c9ac3c576aa4c68a8b9d6216c6718a844c0d78))
+* **sidecar:** a sentinel in a sidecar can ask a person about a request before the model is sent it ([#241](https://github.com/meridianlabs-ai/inspect_sentinel/issues/241)) ([a4a511e](https://github.com/meridianlabs-ai/inspect_sentinel/commit/a4a511e463427cc619b34f7891939196ce144624))
+* **sidecar:** ask a person about a model's whole turn ([#235](https://github.com/meridianlabs-ai/inspect_sentinel/issues/235)) ([916e886](https://github.com/meridianlabs-ai/inspect_sentinel/commit/916e8866ea740f038f98708348fbb8fdc8da505b))
+* **sidecar:** ask a person through the eval, for an eval's run ([#203](https://github.com/meridianlabs-ai/inspect_sentinel/issues/203)) ([93eef92](https://github.com/meridianlabs-ai/inspect_sentinel/commit/93eef923b4900d784d154cddb1bb037550bba071))
+* **sidecar:** free a sample's registered facts once no run of it is in progress ([#251](https://github.com/meridianlabs-ai/inspect_sentinel/issues/251)) ([4776271](https://github.com/meridianlabs-ai/inspect_sentinel/commit/4776271a150e56bbbecda9abf46252d4d719ffee))
+* **sidecar:** rename the sidecar's --time-limit to --judging-timeout ([#244](https://github.com/meridianlabs-ai/inspect_sentinel/issues/244)) ([45810f6](https://github.com/meridianlabs-ai/inspect_sentinel/commit/45810f62230799f4beb1699ce9cf2b0a1cac571b))
+* StepPreprocessor(hide_messages=...) hides flagged messages from a monitor and marks where they were ([#269](https://github.com/meridianlabs-ai/inspect_sentinel/issues/269)) ([1490541](https://github.com/meridianlabs-ai/inspect_sentinel/commit/14905413f1609404c93da5af00d8de38156ec0e7))
+* StepPreprocessor(omit_assistant_text=True) shows a monitor the agent's tool calls without its prose ([#270](https://github.com/meridianlabs-ai/inspect_sentinel/issues/270)) ([8845e9e](https://github.com/meridianlabs-ai/inspect_sentinel/commit/8845e9e1261c8321711f468156bfb8359805e0e6))
+
+
+### Bug Fixes
+
+* **sidecar:** a changed call's original arguments don't reach the eval when its turn is refused whole ([#260](https://github.com/meridianlabs-ai/inspect_sentinel/issues/260)) ([dc2d26e](https://github.com/meridianlabs-ai/inspect_sentinel/commit/dc2d26e8d9c9c1cb9a6c42602afedd2b398921a8))
+* **sidecar:** a rejected Responses computer call is no longer sent twice on the next request ([#264](https://github.com/meridianlabs-ai/inspect_sentinel/issues/264)) ([1889785](https://github.com/meridianlabs-ai/inspect_sentinel/commit/1889785910c42524a26c22b44796c745c44ceac1))
+* **sidecar:** a reply's message keeps its id when a later request sends it back ([#250](https://github.com/meridianlabs-ai/inspect_sentinel/issues/250)) ([d8d35b5](https://github.com/meridianlabs-ai/inspect_sentinel/commit/d8d35b520623d6efad622aaa1a61fcba287cabdb))
+* **sidecar:** refuse to start with a sentinel that holds an eval-only monitor or protocol ([#249](https://github.com/meridianlabs-ai/inspect_sentinel/issues/249)) ([6776871](https://github.com/meridianlabs-ai/inspect_sentinel/commit/677687196c4975d5b76028b75a680b72d36c0e5b))
+
 ## [0.3.2](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.1...0.3.2) (2026-11-16)
 
 
