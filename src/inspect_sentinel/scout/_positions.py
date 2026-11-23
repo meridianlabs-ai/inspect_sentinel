@@ -12,6 +12,7 @@ from inspect_ai.event import (
     SpanEndEvent,
     ToolEvent,
 )
+from inspect_ai.model import ChatMessageTool
 from inspect_ai.scorer import Reference
 
 from ._steps import Conversations
@@ -59,6 +60,12 @@ class Positions:
         proposals: dict[tuple[str, str], tuple[list[int], list[str | None]]] = {}
         # each bridge check's span, with the replayed step it was of, if any
         joins: dict[str, tuple[str, str, str | None]] = {}
+        # each conversation's calls its bridged model calls proposed under
+        # each call id, with one more for an id its starting history holds
+        proposed: Counter[tuple[str, str]] = Counter()
+        # each conversation's starting history ids, until it first proposes
+        history: dict[str, set[str]] = {}
+        proposing: set[str] = set()
         for index, event in enumerate(events):
             if isinstance(event, SpanBeginEvent):
                 self._begins[event.id] = index
@@ -84,6 +91,17 @@ class Positions:
                 self._attempt(event, retrying)
                 if event.output.choices and event.output.message.id:
                     self._outputs.add(event.output.message.id)
+                if (
+                    event.requested_model is not None
+                    and event.span_id not in self._sentinel_spans
+                ):
+                    _count(
+                        event,
+                        self._conversations.of(event.span_id),
+                        proposed,
+                        history,
+                        proposing,
+                    )
                 if event.requested_model is not None and event.output.choices:
                     _propose(
                         event, index, self._conversations.of(event.span_id), proposals
@@ -124,7 +142,7 @@ class Positions:
                     inputs.setdefault(event.span_id, event.conversation)
         self._generates = _preceded(inputs, models, self._begins, self._ends)
         self._renamed = _renamed(runs, checked)
-        self._joined = _one_to_one(joins)
+        self._joined = _one_to_one(_answerable(joins, proposed))
 
     def step_id(self, event: SentinelEvent) -> str:
         # the step a check was of, as replay keys it: the call id, except for a
@@ -146,8 +164,8 @@ class Positions:
     def replay_step_id(self, event: SentinelEvent) -> str | None:
         # the replayed step a check joins: a native check's own step; an agent
         # bridge's check, the step replay names by the model call that proposed
-        # the call and the call id, where that is one step only this check is
-        # of, else None
+        # the call and the call id, where replay built that step and it is one
+        # step only this check is of, else None
         span = event.span_id
         if span is not None and span in self._bridge_spans:
             return self._joined.get(self._sentinel_spans[span])
@@ -287,6 +305,60 @@ def _proposed(
     at, steps = found
     before = bisect_left(at, index) - 1
     return steps[before] if before >= 0 else None
+
+
+def _count(
+    event: ModelEvent,
+    conversation: str,
+    proposed: Counter[tuple[str, str]],
+    history: dict[str, set[str]],
+    proposing: set[str],
+) -> None:
+    # the calls a conversation's bridged model calls proposed under each id,
+    # counted as inspect_ai's replay counts them (`_bridged_tool_steps`):
+    # every call each output holds, by the model's id, and each tool message
+    # id the conversation's starting history holds, once. The starting
+    # history is the input of its first bridged request and of its first
+    # that proposed a call, as a side request with its own history can come
+    # first. The bridge hands a call under a starting history id over under a
+    # new one, which no proposal holds, so its checks name no step anyway; the
+    # history counts where a log's bridge kept the model's id
+    calls = (
+        event.output.message.tool_calls or []
+        if event.output.choices
+        and event.output.message.id
+        and event.role != "monitor"
+        and not event.pending
+        else []
+    )
+    if conversation not in proposing and (conversation not in history or calls):
+        held = history.setdefault(conversation, set())
+        for message in event.input:
+            if isinstance(message, ChatMessageTool) and message.tool_call_id:
+                if message.tool_call_id not in held:
+                    held.add(message.tool_call_id)
+                    proposed[(conversation, message.tool_call_id)] += 1
+    if calls:
+        proposing.add(conversation)
+    for call in calls:
+        proposed[(conversation, call.id)] += 1
+
+
+def _answerable(
+    joins: dict[str, tuple[str, str, str | None]],
+    proposed: Counter[tuple[str, str]],
+) -> dict[str, tuple[str, str, str | None]]:
+    # a bridge's result check names no step where its conversation proposed
+    # the call's id more than once: replay builds no result step for such an
+    # id, as the log does not record which call a result under it answers
+    return {
+        span: (conversation, stage, None)
+        if stage == "tool_result"
+        and step is not None
+        and proposed[(conversation, step.split("/", 1)[1])] > 1
+        else (conversation, stage, step)
+        for span, (conversation, stage, step) in joins.items()
+    }
 
 
 def _one_to_one(joins: dict[str, tuple[str, str, str | None]]) -> dict[str, str]:

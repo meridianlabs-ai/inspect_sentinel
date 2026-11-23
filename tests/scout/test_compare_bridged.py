@@ -256,15 +256,17 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", "1/c", "proceed"),
         ],
     ),
-    # once "a" is handed out twice, the bridge checks the first turn's result
-    # again beside the second's, and cannot say which check is whose: both
-    # name the second turn's step, so neither joins it
+    # the model proposes "a" in both turns, so a result under "a" could
+    # answer either call: replay builds no result step for "a", and none of
+    # its result checks joins, the first turn's included. (The bridge also
+    # checks the first turn's result again beside the second's.) Each call
+    # check still joins its own turn's call
     "reused id": (
         [calls("a", "b"), calls("a")],
         [
             ("tool_call", "0/a", "proceed"),
             ("tool_call", "0/b", "proceed"),
-            ("tool_result", "0/a", "proceed"),
+            ("tool_result", None, "proceed"),
             ("tool_result", "0/b", "proceed"),
             ("tool_call", "1/a", "proceed"),
             ("tool_result", None, "proceed"),
@@ -283,18 +285,19 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
         ],
     ),
     # the agent sends its first request twice and uses the second response,
-    # then the model reuses "a": each result is the one the agent used, so
-    # its check joins the latest proposal of the id, never the first response
+    # then the model reuses "a": every response proposes "a", so no result
+    # step is built for it and no result check joins. Each call check joins
+    # its own response's call, the discarded first response's included
     "retried request, reused id": (
         [calls("a"), calls("a"), calls("a"), calls("a")],
         [
             ("tool_call", "0/a", "proceed"),
             ("tool_call", "1/a", "proceed"),
-            ("tool_result", "1/a", "proceed"),
+            ("tool_result", None, "proceed"),
             ("tool_call", "2/a", "proceed"),
-            ("tool_result", "2/a", "proceed"),
+            ("tool_result", None, "proceed"),
             ("tool_call", "3/a", "proceed"),
-            ("tool_result", "3/a", "proceed"),
+            ("tool_result", None, "proceed"),
         ],
     ),
 }
@@ -343,16 +346,6 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def replayed_bridged_steps(frame: Any) -> None:
-    # replay rebuilds bridged agents' tool steps from the inspect_ai release
-    # with the follow-up to #6446 that replays them as the conversation;
-    # earlier releases skip them. The skip goes when this repository's
-    # inspect-ai floor is raised to that release, so that a regression that
-    # drops every bridged step fails rather than skips
-    if not any(r["metadata.stage"].startswith("tool") for r in records(frame)):
-        pytest.skip("this inspect_ai's replay skips bridged agents' tool steps")
-
-
 @pytest.mark.parametrize("case", list(CASES))
 def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
     tmp_path: Path, case: str
@@ -360,7 +353,6 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
     turns, expected = CASES[case]
     uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
     frames = scanned(tmp_path, replayed=as_scanner(judge()), recorded=as_reader())
-    replayed_bridged_steps(frames["replayed"])
 
     # the join the docs give (replay.qmd, "Bridged Agents")
     keys = ["transcript_id", "metadata.conversation", "metadata.stage"]
@@ -402,13 +394,37 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
     assert unchecked == {(s, joined(step, uuids)) for s, step in UNCHECKED[case]}
 
 
+@pytest.mark.parametrize("case", list(CASES))
+def test_read_mode_names_only_steps_replay_built(tmp_path: Path, case: str) -> None:
+    # read mode names a step for a check only where replay built that step, so
+    # the two views agree on which steps exist: where replay builds no step
+    # (a reused id's results, calls sharing an id in one response), the check
+    # names none rather than one no replayed row has
+    turns, expected = CASES[case]
+    uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
+    frames = scanned(tmp_path, replayed=as_scanner(judge()), recorded=as_reader())
+
+    built = {
+        (r["metadata.stage"], r["metadata.step_id"])
+        for r in records(frames["replayed"])
+    }
+    named = {
+        (r["metadata.stage"], r["metadata.replay_step_id"])
+        for r in records(frames["recorded"])
+        if _text(r["metadata.replay_step_id"]) is not None
+    }
+    assert named <= built
+    # and every step the case expects a check to join is one replay built
+    assert {(s, joined(step, uuids)) for s, step, _ in expected if step} <= built
+
+
 # the replayed steps no check joins: the results the model received after a
-# rejection, which the bridge never checked, and the reused id's second result,
-# which its two checks leave unjoined
+# rejection, which the bridge never checked. A reused id has no replayed result
+# step to leave unjoined
 UNCHECKED: dict[str, list[tuple[str, str]]] = {
     "plain": [],
     "rejection": [("tool_result", "0/ok"), ("tool_result", "0/bad")],
-    "reused id": [("tool_result", "1/a")],
+    "reused id": [],
     "duplicate ids": [],
     "retried request, reused id": [],
 }
@@ -429,7 +445,6 @@ def test_compare_decisions_pairs_a_new_protocols_decisions_with_a_bridges_checks
     frames = scanned(
         tmp_path, replayed=as_scanner(judge(bad="a")), recorded=as_reader()
     )
-    replayed_bridged_steps(frames["replayed"])
 
     compared = records(compare_decisions(frames["replayed"], frames["recorded"]))
 
@@ -462,7 +477,6 @@ def test_replay_check_matches_a_bridge_check_with_the_step_it_checked(
         replayed=as_scanner(replay_check()),
         recorded=as_reader("replay_check"),
     )
-    replayed_bridged_steps(frames["replayed"])
 
     differences: Any = replay_check_differences(frames["replayed"], frames["recorded"])
 
