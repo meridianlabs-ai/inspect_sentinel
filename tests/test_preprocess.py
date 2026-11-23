@@ -1471,6 +1471,46 @@ async def test_omit_unreadable_compaction_leaves_out_only_an_unreadable_one(
         assert "Continuing." in rendered
 
 
+@pytest.mark.parametrize(
+    "kind, lines, shown",
+    [
+        # Inspect's summary and OpenAI's compaction are user messages, so the
+        # marker stands where they were, even with omit_unreadable_compaction
+        # set, since hiding comes first and its marker is never left out
+        ("summary", ["[M1] USER:", "[1 message hidden]"], None),
+        (
+            "openai",
+            ["[M1] USER:", "[1 message hidden]", "[M2] ASSISTANT:"],
+            None,
+        ),
+        # Anthropic's is in an assistant message, which is never hidden, so it
+        # is shown as its summary
+        (
+            "anthropic",
+            ["[M1] USER:", "[M2] ASSISTANT:", "[M3] USER:"],
+            "<compaction_summary 3f9a1c7e>Listed.",
+        ),
+    ],
+)
+@pytest.mark.parametrize("omit", [False, True])
+@pytest.mark.anyio
+async def test_hide_messages_hides_a_compaction_only_in_a_message_it_can_hide(
+    kind: Compacted, lines: list[str], shown: str | None, omit: bool
+) -> None:
+    n = "3f9a1c7e"
+    rendered = await render(
+        tool_step(compacted(kind), None),
+        StepPreprocessor(
+            hide_messages=lambda m: m.id == "made", omit_unreadable_compaction=omit
+        ),
+        nonce=n,
+    )
+    assert input_lines(rendered, n) == [marked(line, n) for line in lines]
+    assert "COMPACTION SUMMARY" not in rendered
+    assert "compaction_unreadable" not in rendered
+    assert (shown is not None and shown in rendered) == (kind == "anthropic")
+
+
 @pytest.mark.anyio
 async def test_messages_are_numbered_in_block_order_and_cites_resolve() -> None:
     step = replace(tool_step([user("summary")], [user("task")]), history=[user("sent")])

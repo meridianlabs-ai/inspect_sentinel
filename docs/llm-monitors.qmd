@@ -474,7 +474,7 @@ How you mark a message depends on how the agent runs:
 
 In a replay from a log, a tool result that Inspect can't find among the logged messages has no metadata, so a predicate that matches only on metadata shows that result. Such a result keeps its text and the tool's name. If the hidden text comes from a tool of its own, also match on the tool's name (e.g. `m.role == "tool" and m.function == "side_task_briefing"`); otherwise, a metadata predicate can't keep that result hidden in replay.
 
-[Compaction](https://inspect.aisi.org.uk/compaction.html) can restate a hidden message in its summary, and Inspect doesn't record which messages a summary replaced. If a hidden message may be compacted, hide the summaries too: Inspect marks its summary messages with `metadata={"summary": True}`.
+[Compaction](https://inspect.aisi.org.uk/compaction.html) can restate a hidden message in its summary, and Inspect doesn't record which messages a summary replaced. If a hidden message may be compacted, hide the summaries too: Inspect marks its summary messages with `metadata={"summary": True}`. A provider's own compaction is different: Anthropic's is in an assistant message, which `hide_messages` never hides, so it is shown as its summary (see [After a Compaction](#after-a-compaction)); to keep it from the monitor model, leave it out with a `transform`.
 
 ### Showing Only the Agent's Own Messages
 
