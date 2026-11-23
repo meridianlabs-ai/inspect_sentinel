@@ -250,11 +250,14 @@ async def score_step(
     )
     # what the prompt shows only as a placeholder, leaving out the messages
     # the cut dropped
+    starts = {
+        where: cut_start(getattr(pstep, where) or [], left_out, where)
+        for where in ("history", "agent_messages", "input")
+    }
     hidden = [
         u
         for u in unrenderable(pstep)
-        if u.where in ("call", "reply", "result")
-        or u.index >= cut_start(getattr(pstep, u.where) or [], left_out, u.where)
+        if u.where in ("call", "reply", "result") or u.index >= starts[u.where]
     ]
     metadata: dict[str, Any] = {
         **({"left_out": dict(left_out)} if left_out else {}),

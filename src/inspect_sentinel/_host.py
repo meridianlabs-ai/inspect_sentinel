@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Generator,
+    Mapping,
+    Sequence,
+)
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -9,6 +16,7 @@ from typing import (
     Any,
     Literal,
     NamedTuple,
+    TypeAlias,
     TypeVar,
     cast,
     runtime_checkable,
@@ -38,10 +46,37 @@ class HumanAnswer:
     """The choice the person picked, one of the `choices` they were offered (`approve`, `reject`, `terminate` or `modify`), or, when the person ended the prompt without one of them, `reject` if it was offered and `terminate` otherwise."""
 
     reason: str | None = None
-    """The reason the surface gives for the answer, if any: the person's typed reason, or fixed text such as "Human operator rejected the tool call."."""
+    """The reason the channel gives for the answer, if any: the person's typed reason, or fixed text such as "Human operator rejected the tool call."."""
 
     modified: ToolCall | None = None
     """The replacement call, when the person chose `modify` at a tool stage."""
+
+
+@dataclass(frozen=True)
+class HumanQuestion:
+    """What `human()` hands a `HumanChannel`: the step to decide about, with everything the person needs to decide it."""
+
+    stage: Literal["tool_call", "tool_result", "model_input", "model_output"]
+    """The stage being asked about, as `SentinelEvent.stage` records it: `"tool_call"` (before a tool call), `"tool_result"` (after it), `"model_input"` (before a generate) or `"model_output"` (after a generate)."""
+
+    step: Step
+    """The step itself, by stage: a `BeforeToolCall` with the call, an `AfterToolCall` with the call and its result, a `BeforeGenerate` with the request about to be sent, or an `AfterGenerate` with the whole assistant turn. Its fields are the ones a monitor reads, including the conversation and `human_decisions`."""
+
+    escalations: Escalations
+    """The escalations the asking `human()` was handed, from the links before it in a `sequential()`, in order; empty when nothing escalated. Each is the escalating protocol's full report: its `name` and `path`, and its decision with `explanation`, `references` and `metadata`. A `threshold()` escalation lists every monitor's score and explanation in `metadata["observations"]`."""
+
+    choices: tuple[str, ...]
+    """What the person may pick, from `approve`, `reject` and `terminate`, in the order to present them."""
+
+    eval: EvalContext | None
+    """The task and sample being run, as `Context.eval` holds it, so a channel can say which sample is waiting. None outside an eval, for example beside a proxy with no eval named."""
+
+    proxy: ProxyContext | None
+    """What a proxy says about the model request the step was found in, as `Context.proxy` holds it. None in an eval's own process."""
+
+
+HumanChannel: TypeAlias = Callable[[HumanQuestion], Awaitable[HumanAnswer]]
+"""Where `human(channel=)` asks a person instead of the host: an `async` function that hands the question to a team's own review tool and returns the person's answer. It answers one of the question's `choices`, or `terminate` when it cannot reach anyone."""
 
 
 class HostNative(TypingProtocol):
@@ -205,7 +240,7 @@ class Host(HostNative):
 
         The prompt is fitted to the monitor model's context window. The host reads the model's input budget (its context window minus the output reserve; an unknown model falls back to 128k) through `input_budget`, and counts the prompt through `count_tokens`; a prompt fits when the count is within 95% of the budget. A prompt that fits is sent unchanged. One that does not has the oldest shown messages cut from its message lists, HISTORY first, then AGENT MESSAGES, then INPUT, until it fits. At `BeforeGenerate`, the cut never removes the newest INPUT message, because that message is the request being judged. Each list that loses messages gains one marker line in its place (`[N earlier messages left out to fit the context window (nonce)]`); the marker takes no message number, so the render renumbers the kept messages from `[M1]`, and each cite still resolves to the kept message it names. When messages are cut, `Observation.metadata` records the count per list, as `{"left_out": {"history": 3, "input": 2}}`. When the fixed part of the prompt (the instructions, policy, task, dimensions, the step's own blocks, at `BeforeGenerate` the newest INPUT message, and the answer tool) does not fit even with every other shown message cut, `score` raises: it does not score a step that the model was not shown. A head cut keeps the last message of each list it does not empty, so an incremental `NewSinceLastReport` window stays correct: a message the cut removed is not shown at a later step either. When the model's reply stops on `model_length`, `score` raises at once, naming the stop reason: the request exceeded the model's context window although the prompt fit the input budget as counted (the count leaves out the answer tool, and a provider can count more tokens than `count_tokens`), and a correction would only lengthen it.
 
-        Content the prompt can show only as a placeholder naming its type, such as `<image 3f9a1c7e />` for an image, is what `unrenderable()` finds in the preprocessed step, less any message the cut left out. By default (`on_unrenderable="score"`) the model scores the step anyway, and `Observation.metadata` counts that content per part of the step, as `{"unrenderable": {"input": {"image": 2}}}`. To fail closed instead, pass `on_unrenderable="flag"`, which returns suspicion 1.0 for every dimension without asking the model, or `on_unrenderable="raise"`, which raises so the runner records the monitor as failed. A flagged observation carries the same metadata.
+        Content the prompt can show only as a placeholder naming its type, such as `<image 3f9a1c7e />` for an image, is what `unrenderable()` finds in the preprocessed step, less any message the cut left out. By default (`on_unrenderable="score"`) the model scores the step anyway, and `Observation.metadata` counts that content per part of the step, as `{"unrenderable": {"input": {"image": 2}}}`. To fail closed instead, pass `on_unrenderable="flag"`, which returns suspicion 1.0 for every dimension without asking the model, or `on_unrenderable="raise"`, which raises so the runner records the monitor as failed. A flagged observation carries the same metadata. The TASK block is the exception: content in the sample's input that is not text is dropped from it without a placeholder and is not counted, so neither option fails closed on it.
 
         The default template opens with `instructions` and paragraphs on the nonce and on placeholders, then shows the model `policy`, the task and the step, asks it to score the step from 0.0 to 1.0 against `dimensions`, and asks for an explanation. Templates are Jinja templates. A custom one uses the same variables, and must include `{{ step }}` and `{{ answer_format }}`:
 
@@ -233,7 +268,7 @@ class Host(HostNative):
             role: A model role, as for `generate`.
             config: Generation configuration.
             retry_refusals: How many times to ask again when the provider refuses to answer.
-            on_unrenderable: What to do when the prompt would show content only as a placeholder, such as an image (see `unrenderable()`): `"score"` scores the step as usual, `"flag"` returns suspicion 1.0 for every dimension without asking the model, and `"raise"` raises, so the runner records the monitor as failed.
+            on_unrenderable: What to do when the prompt would show content only as a placeholder, such as an image (see `unrenderable()`): `"score"` scores the step as usual, `"flag"` returns suspicion 1.0 for every dimension without asking the model, and `"raise"` raises, so the runner records the monitor as failed. Content in the TASK block (the sample's input) that is not text is not counted.
         """
         return await score_step(
             self,
@@ -268,6 +303,47 @@ class Host(HostNative):
             choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
         """
         return await self._native.ask_human(step, escalations, choices)
+
+
+class AnswersFromRecord:
+    # a host whose `ask_human` gives the answers recorded when the run was
+    # recorded, as a replay does, and never asks a person; human() asks it in
+    # place of a channel of its own
+    pass
+
+
+def answers_from_record(host: Host) -> bool:
+    return isinstance(host._native, AnswersFromRecord)  # pyright: ignore[reportPrivateUsage]
+
+
+# What a host that must know while human() waits on a channel sets around
+# run_sentinel: the sidecar, which cancels such a wait when the eval ends the
+# sample or a sentinel ends the run, as it cancels its own questions to a
+# person. human() enters it around each call to a channel.
+ChannelWait: TypeAlias = Callable[[], AbstractAsyncContextManager[None]]
+
+_channel_wait: ContextVar[ChannelWait | None] = ContextVar(
+    "inspect_sentinel_channel_wait", default=None
+)
+
+
+@contextmanager
+def watching_channels(wait: ChannelWait) -> Generator[None]:
+    token = _channel_wait.set(wait)
+    try:
+        yield
+    finally:
+        _channel_wait.reset(token)
+
+
+@asynccontextmanager
+async def channel_wait() -> AsyncGenerator[None]:
+    wait = _channel_wait.get()
+    if wait is None:
+        yield
+        return
+    async with wait():
+        yield
 
 
 @runtime_checkable

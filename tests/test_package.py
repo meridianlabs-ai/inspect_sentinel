@@ -124,6 +124,7 @@ def test_integration_module_exports_the_host_surface() -> None:
         "supersedes",
         "watched_stages",
         "run_sentinel",
+        "source_fallback",
         "HostNative",
     }
 

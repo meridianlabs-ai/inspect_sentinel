@@ -19,7 +19,7 @@ from inspect_ai.util import Store
 
 from ._context import Context, EvalContext
 from ._decorators import watched_stages
-from ._host import HostContext, HumanAnswer
+from ._host import AnswersFromRecord, HostContext, HumanAnswer
 from ._protocols import observe_only
 from ._replay_step import ReplayStep
 from ._report import Decision, Escalations, Failed, Report, Reported
@@ -232,9 +232,10 @@ class _Recorder:
         self.supersessions.append(reported)
 
 
-class _ReplayHost:
+class _ReplayHost(AnswersFromRecord):
     # one per transcript, whose steps run one at a time, so the step being
-    # replayed is the one begin() was last given
+    # replayed is the one begin() was last given; it answers human() even
+    # where human() names a channel, since nobody can be asked in a replay
     def __init__(self, eval: EvalContext | None, human: HumanFallback) -> None:
         self._eval = eval
         self._human = human

@@ -984,6 +984,39 @@ async def test_an_image_the_cut_drops_after_a_hidden_message_is_not_counted() ->
 
 
 @pytest.mark.anyio
+async def test_an_image_in_the_first_message_the_cut_keeps_is_counted() -> None:
+    # the cut drops M0 to M3 and the hidden message among them; M4, the
+    # first message kept, holds the image
+    secret = ChatMessageUser(content="secret", id="secret", metadata={"red_team": True})
+    image = ChatMessageUser(
+        content=[
+            ContentText(text=f"M4 {PAD}"),
+            ContentImage(image="data:image/png;base64,abc"),
+        ],
+        id="M4",
+    )
+    m = messages("M", 5)
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        input=[m[0], secret, m[1], m[2], m[3], image],
+    )
+    host = FakeHost(budget=8600)
+    observation = await score(
+        host,
+        step,
+        "Safe?",
+        preprocessor=StepPreprocessor(hide_messages=red_team),
+        on_unrenderable="flag",
+    )
+    assert observation.suspicion == 1.0
+    assert observation.metadata == {
+        "left_out": {"input": 4},
+        "unrenderable": {"input": {"image": 1}},
+    }
+    assert host.inputs == []
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "stage", [before_tool_call("bash", cmd="ls"), after_tool_call("bash", cmd="ls")]
 )
