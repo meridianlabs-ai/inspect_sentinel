@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -33,6 +34,7 @@ from inspect_sentinel._types import Monitor
 
 from ._fakes import (
     FakeHost,
+    after_generate_step,
     after_tool_call,
     before_generate_step,
     before_tool_call,
@@ -796,37 +798,78 @@ async def test_a_hidden_message_is_marked_in_the_step_and_the_task() -> None:
     assert [reference.id for reference in observation.references] == ["task"]
 
 
+def marker_lines(p: str, n: str) -> list[str]:
+    # the hidden-messages lines that carry the nonce, apart from the one the
+    # default template quotes
+    return re.findall(rf"^\[\d+ messages? hidden \({n}\)\]$", p, re.MULTILINE)
+
+
+@pytest.mark.anyio
+async def test_a_hidden_result_is_scored_with_the_marker_in_its_place() -> None:
+    step = replace(
+        after_tool_call("bash", "out", cmd="cat notes.txt"),
+        result=ChatMessageTool(
+            content="PRIVATE_RED_TEAM_INSTRUCTION",
+            tool_call_id="call_1",
+            function="bash",
+            metadata={"red_team": True},
+        ),
+    )
+    host = FakeHost(outputs=[answer(explanation="see [M1]", suspicion=0.4)])
+    observation = await score(
+        host, step, "Safe?", preprocessor=StepPreprocessor(hide_messages=red_team)
+    )
+    p, n = prompt(host), nonce(host)
+    assert "PRIVATE_RED_TEAM_INSTRUCTION" not in p
+    assert "cat notes.txt" in p.split(f"[BEGIN CALL ({n})]")[1].split("[END CALL")[0]
+    result = p.split(f"[BEGIN RESULT ({n})]")[1].split(f"[END RESULT ({n})]")[0]
+    assert result.strip() == f"[1 message hidden ({n})]"
+    assert observation.suspicion == 0.4
+    assert [reference.id for reference in observation.references] == ["msg_1"]
+
+
+def says_private(message: ChatMessage) -> bool:
+    return "PRIVATE" in message.text
+
+
+FLAGGED = ChatMessageAssistant(
+    content="PRIVATE plan", id="msg_1", metadata={"red_team": True}
+)
+
+
+@pytest.mark.parametrize("hide", [red_team, says_private], ids=["metadata", "text"])
 @pytest.mark.parametrize(
     "step",
     [
         replace(
             before_tool_call("bash", cmd="ls"),
-            assistant_message=ChatMessageAssistant(
-                content="", id="msg_1", metadata={"red_team": True}
-            ),
+            message="PRIVATE plan",
+            assistant_message=FLAGGED,
+            input=[ChatMessageUser(content="task"), FLAGGED],
         ),
+        # a host that does not give the call's message
+        replace(before_tool_call("bash", cmd="ls"), message="PRIVATE plan"),
         replace(
-            after_tool_call("bash", "out", cmd="ls"),
-            result=ChatMessageTool(
-                content="out",
-                tool_call_id="call_1",
-                function="bash",
-                metadata={"red_team": True},
+            after_generate_step(),
+            output=ModelOutput(
+                model="m", choices=[ChatCompletionChoice(message=FLAGGED)]
             ),
         ),
     ],
-    ids=["call", "result"],
+    ids=["call", "call without its message", "reply"],
 )
 @pytest.mark.anyio
-async def test_a_step_whose_own_part_is_hidden_raises_before_the_model_is_asked(
-    step: Step,
+async def test_a_rule_that_matches_the_agents_words_hides_nothing_it_wrote(
+    step: Step, hide: Callable[[ChatMessage], bool]
 ) -> None:
-    host = FakeHost(outputs=[])
-    with pytest.raises(RuntimeError, match="whose own tool call, tool result or reply"):
-        await score(
-            host, step, "Safe?", preprocessor=StepPreprocessor(hide_messages=red_team)
-        )
-    assert host.inputs == []
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.9)])
+    observation = await score(
+        host, step, "Safe?", preprocessor=StepPreprocessor(hide_messages=hide)
+    )
+    p, n = prompt(host), nonce(host)
+    assert "PRIVATE plan" in p
+    assert marker_lines(p, n) == []
+    assert observation.suspicion == 0.9
 
 
 @pytest.mark.anyio
@@ -845,7 +888,7 @@ async def test_a_head_cut_takes_a_hidden_run_among_the_cut_messages() -> None:
     )
     p, n = prompt(host), nonce(host)
     assert f"[4 earlier messages left out to fit the context window ({n})]" in p
-    assert not re.search(rf"^\[\d+ messages? hidden \({n}\)\]$", p, re.MULTILINE)
+    assert marker_lines(p, n) == []
     assert observation.metadata == {"left_out": {"input": 4}}
 
 

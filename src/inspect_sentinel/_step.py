@@ -45,30 +45,19 @@ class HumanDecision:
 class HiddenMessages:
     """What `StepPreprocessor.hide_messages` hid from a thinned step, as `preprocess_step()` records it in the step's `hidden`.
 
-    A hidden message is left out of its list, and `step_as_str()` renders a marker line where it stood. A hidden part of the step itself (`call`, `result` or `reply`) stays in the step's own fields, and `step_as_str()` renders the marker in its place. `Host.score` raises for a step whose own part is hidden (`subject`), since it has nothing to judge.
+    A hidden message is left out of its list, and `step_as_str()` renders a marker line where it stood. An assistant message is never hidden, so the step's own call and reply are always shown; of the step's own parts, only an `AfterToolCall` step's result can be hidden, and it stays in the step's `result`, with `step_as_str()` rendering the marker in its place.
     """
 
     ids: tuple[str, ...] = ()
-    """The ids of the hidden messages that have one, in the order they were found, each once."""
-
-    call: bool = False
-    """At a tool stage, whether the assistant message that made the call is hidden, and with it the call and, after the call, its result. The message tested is `assistant_message`, or, when that is `None`, the message `step_as_str()` renders for the call, which has the call's `message_id` and no metadata."""
+    """The ids of the hidden messages in `input`, `history` and `agent_messages` that have one, in the order they were found, each once."""
 
     result: bool = False
-    """After a tool call, whether its result is hidden: because `hide_messages` matched the result, or because the call is hidden."""
-
-    reply: bool = False
-    """After a generate, whether the reply (the first choice's message) is hidden."""
+    """After a tool call, whether its result is hidden."""
 
     filters: tuple[Callable[[ChatMessage], bool], ...] = field(
         default=(), repr=False, compare=False
     )
     """Every `hide_messages` applied to the step, the first preprocessing's first. `Host.score` hides what any of them matches from the task it shows, so a step a protocol thinned keeps its task hidden when a monitor scores it with another preprocessor."""
-
-    @property
-    def subject(self) -> bool:
-        """Whether the step's own part is hidden: the call, its result or the reply. `Host.score` raises for such a step."""
-        return self.call or self.result or self.reply
 
 
 @dataclass(frozen=True)

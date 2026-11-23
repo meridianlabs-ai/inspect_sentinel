@@ -1387,12 +1387,6 @@ def marked(line: str, nonce: str | None) -> str:
             ["[2 messages hidden]", "[M1] USER:", "[1 message hidden]"],
             ("s1", "s2", "s3"),
         ),
-        # a hidden call hides its result too, and one marker stands for both
-        (
-            [user("task"), red_asks("reply 1", call("a")), result("a", "out a")],
-            ["[M1] USER:", "[2 messages hidden]"],
-            ("reply 1", "out a"),
-        ),
         # a hidden result hides only itself: its call stays
         (
             [
@@ -1405,7 +1399,7 @@ def marked(line: str, nonce: str | None) -> str:
             ("out a",),
         ),
     ],
-    ids=["one", "consecutive", "call with its result", "result alone"],
+    ids=["one", "consecutive", "result alone"],
 )
 @pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])
 @pytest.mark.anyio
@@ -1451,7 +1445,7 @@ async def test_numbering_runs_on_across_a_marker_and_cites_resolve() -> None:
 @pytest.mark.parametrize(
     "window, kept",
     [
-        # the hidden turn is not counted, so the window reaches the turn before
+        # the hidden message is not counted, so the window reaches past it
         (LastTurns(1), ["reply 1", "result a", "[1 message hidden]"]),
         (LastMessages(2), ["reply 1", "result a", "[1 message hidden]"]),
         (LastMessages(3), ["reply 0", "reply 1", "result a", "[1 message hidden]"]),
@@ -1466,7 +1460,7 @@ async def test_a_hidden_message_does_not_count_toward_a_window(
         asks("reply 0"),
         asks("reply 1", call("a")),
         result("a", "result a"),
-        red_asks("reply 2"),
+        red("secret"),
     ]
     thinned = await preprocess_step(
         tool_step(conversation, None),
@@ -1488,23 +1482,10 @@ async def test_a_hidden_message_before_the_window_leaves_no_marker() -> None:
 
 
 @pytest.mark.anyio
-async def test_a_result_is_hidden_with_its_call_outside_the_window() -> None:
-    conversation = [user("task"), red_asks("reply 1", call("a")), result("a", "out")]
-    thinned = await preprocess_step(
-        tool_step(conversation, None),
-        StepPreprocessor(input_window=LastMessages(1), hide_messages=red_team),
-    )
-    # LastMessages(1) keeps the last shown message, the task; the result after
-    # it is hidden with its call
-    assert texts(thinned.input) == ["task", "[2 messages hidden]"]
-
-
-@pytest.mark.anyio
-async def test_new_since_last_report_hides_a_result_whose_call_was_shown_before() -> (
+async def test_new_since_last_report_shows_a_hidden_run_that_grew_as_one_marker() -> (
     None
 ):
-    secret = asks("PRIVATE", call("hidden"))
-    history: list[ChatMessage] = [user("task"), secret]
+    history: list[ChatMessage] = [user("task"), user("PRIVATE")]
     seen: list[str] = []
 
     @monitor
@@ -1525,7 +1506,7 @@ async def test_new_since_last_report_hides_a_result_whose_call_was_shown_before(
 
     store = Store()
     instance = watch()
-    for messages in [history, [*history, result("hidden", "PRIVATE_RESULT")]]:
+    for messages in [history, [*history, result("call", "PRIVATE_RESULT")]]:
         with in_step(store=store) as context:
             observations = await run_monitors(
                 {"watch": instance},
@@ -1580,75 +1561,109 @@ async def test_agent_text_that_imitates_a_marker_is_message_content(
     ]
 
 
+def says_private(message: ChatMessage) -> bool:
+    return "PRIVATE" in message.text
+
+
+# rules that match what the agent wrote: by metadata, or by repeating a phrase
+AGENT_RULES = pytest.mark.parametrize(
+    "hide", [red_team, says_private], ids=["metadata", "text"]
+)
+
+
+@AGENT_RULES
+@pytest.mark.anyio
+async def test_an_assistant_message_is_never_hidden(
+    hide: Callable[[ChatMessage], bool],
+) -> None:
+    conversation = [
+        user("task"),
+        red_asks("PRIVATE reply", call("a")),
+        result("a", "out a"),
+    ]
+    thinned = await preprocess_step(
+        all_lists(conversation), replace(ALL, hide_messages=hide)
+    )
+    # the agent's reply is shown in every list, and so is its call's result
+    for name in LISTS:
+        assert texts(getattr(thinned, name)) == ["task", "PRIVATE reply", "out a"]
+    assert thinned.hidden == HiddenMessages()
+
+
+FLAGGED = ChatMessageAssistant(
+    content="PRIVATE plan", id="msg_1", metadata={"red_team": True}
+)
+
+
+@AGENT_RULES
 @pytest.mark.parametrize(
-    "step, blocks",
+    "step",
     [
-        (
-            replace(
-                before_tool_call("bash", cmd="ls"), assistant_message=red_asks("do it")
-            ),
-            {"CALL": True},
+        replace(
+            before_tool_call("bash", cmd="ls"),
+            message="PRIVATE plan",
+            assistant_message=FLAGGED,
         ),
-        (
-            replace(
-                after_tool_call("bash", "out", cmd="ls"),
-                assistant_message=red_asks("do it"),
-            ),
-            {"CALL": True, "RESULT": True},
+        # a host that does not give the call's message
+        replace(before_tool_call("bash", cmd="ls"), message="PRIVATE plan"),
+        replace(
+            after_tool_call("bash", "out", cmd="ls"),
+            message="PRIVATE plan",
+            assistant_message=FLAGGED,
         ),
-        (
-            replace(
-                after_tool_call("bash", "out", cmd="ls"),
-                result=red_result("call_1", "out"),
+        replace(
+            after_generate_step(),
+            output=ModelOutput(
+                model="m", choices=[ChatCompletionChoice(message=FLAGGED)]
             ),
-            {"CALL": False, "RESULT": True},
-        ),
-        (
-            replace(
-                after_generate_step(),
-                output=ModelOutput(
-                    model="m",
-                    choices=[ChatCompletionChoice(message=red_asks("reply"))],
-                ),
-            ),
-            {"REPLY": True},
         ),
     ],
-    ids=["call", "call and its result", "result alone", "reply"],
+    ids=["call", "call without its message", "call and its result", "reply"],
 )
 @pytest.mark.anyio
-async def test_a_hidden_part_of_the_step_itself_is_its_marker(
-    step: Step, blocks: dict[str, bool]
+async def test_the_steps_own_call_and_reply_are_never_hidden(
+    step: Step, hide: Callable[[ChatMessage], bool]
 ) -> None:
-    thinned = await preprocess_step(step, HIDE)
-    assert thinned.hidden is not None and thinned.hidden.subject
-    rendered = await render(step, HIDE, nonce="3f9a1c7e")
-    for name, hidden in blocks.items():
-        body = rendered.split(f"[BEGIN {name} (3f9a1c7e)]\n")[1].split("\n[END")[0]
-        assert (body.strip() == "[1 message hidden (3f9a1c7e)]") is hidden, name
+    preprocessor = StepPreprocessor(hide_messages=hide)
+    assert (await preprocess_step(step, preprocessor)).hidden == HiddenMessages()
+    rendered = await render(step, preprocessor, nonce="3f9a1c7e")
+    assert "PRIVATE plan" in rendered
+    assert "hidden" not in rendered
 
 
+@pytest.mark.parametrize("truncated", [False, True])
+@pytest.mark.parametrize("nonce", [None, "3f9a1c7e"])
 @pytest.mark.anyio
-async def test_a_call_whose_message_is_not_known_is_matched_by_its_id() -> None:
-    step = replace(before_tool_call("bash", cmd="ls"), message_id="secret")
-    thinned = await preprocess_step(
-        step, StepPreprocessor(hide_messages=lambda m: m.id == "secret")
+async def test_a_hidden_result_is_its_marker_after_the_call(
+    nonce: str | None, truncated: bool
+) -> None:
+    # the agent can bring the hidden text back, as by reading a file it wrote
+    step = replace(
+        after_tool_call("bash", "out", cmd="cat notes.txt"),
+        result=red_result("call_1", "PRIVATE out"),
+        truncated=CUT if truncated else False,
     )
-    assert thinned.hidden is not None and thinned.hidden.call
+    assert (await preprocess_step(step, HIDE)).hidden == HiddenMessages(result=True)
+    rendered = await render(step, HIDE, nonce=nonce)
+    mark = "" if nonce is None else f" ({nonce})"
+    # the call is shown, and the result block is the marker alone
+    assert "cat notes.txt" in rendered.split(f"[BEGIN CALL{mark}]")[1]
+    assert result_block(rendered, mark).strip() == f"[1 message hidden{mark}]"
+    assert "PRIVATE" not in rendered
 
 
 @pytest.mark.anyio
 async def test_a_step_thinned_twice_keeps_what_was_hidden_first() -> None:
     # a protocol hides messages from the step it passes its children, and a
     # child preprocesses that step again, with its own window and filter
-    conversation = [user("task"), red("secret"), asks("reply 1"), asks("reply 2")]
+    conversation = [user("task"), red("secret"), asks("reply 1"), user("note")]
     once = await preprocess_step(tool_step(conversation, None), HIDE)
     windowed = await preprocess_step(
         once, StepPreprocessor(input_window=LastMessages(2))
     )
-    assert texts(windowed.input) == ["reply 1", "reply 2"]
+    assert texts(windowed.input) == ["reply 1", "note"]
     whole = await preprocess_step(
-        once, StepPreprocessor(hide_messages=lambda m: m.text == "reply 2")
+        once, StepPreprocessor(hide_messages=lambda m: m.text == "note")
     )
     # the child's hidden message joins no run: a shown message is between
     assert texts(whole.input) == [
@@ -1658,7 +1673,7 @@ async def test_a_step_thinned_twice_keeps_what_was_hidden_first() -> None:
         "[1 message hidden]",
     ]
     assert whole.hidden is not None
-    assert whole.hidden.ids == ("secret", "reply 2")
+    assert whole.hidden.ids == ("secret", "note")
     assert len(whole.hidden.filters) == 2
 
 

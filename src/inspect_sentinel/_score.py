@@ -189,11 +189,6 @@ async def score_step(
     nonce = store.get(_NONCE, secrets.token_hex(4))
     p = preprocessor or StepPreprocessor()
     pstep = await preprocess_step(step, p)
-    # a step whose own part is hidden leaves the model nothing to judge
-    if pstep.hidden is not None and pstep.hidden.subject:
-        raise RuntimeError(
-            "score() cannot score a step whose own tool call, tool result or reply is hidden: the preprocessor's hide_messages matched it. A monitor that should abstain instead can call preprocess_step() first and return None when the step's `hidden.subject` is true."
-        )
     eval = host.eval
     # the task is the sample's input, which can hold the messages hidden from
     # the step, so what any preprocessing of it hid is hidden from the task
