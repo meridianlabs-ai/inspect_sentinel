@@ -3,7 +3,7 @@ import importlib.metadata
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, cast
@@ -36,7 +36,7 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._host import HostContext
 from inspect_sentinel._human_decisions import kept_human_decision
-from inspect_sentinel._integration import Sentinels, resolve_sentinel
+from inspect_sentinel._integration import Sentinels, resolve_sentinel, source_fallback
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel.config import sentinel_config, sentinel_from_config
@@ -401,6 +401,55 @@ async def test_a_configuration_names_a_channel_in_a_python_file(
     assert file.with_suffix(".runs").read_text() == "ran\n"
 
 
+def _answer_file(reason: str) -> str:
+    return f"from inspect_sentinel import HumanAnswer\n\n\nasync def ask(question):\n    return HumanAnswer('terminate', {reason!r})\n"
+
+
+# a retry rebuilds a logged sentinel in the task file's directory and opens
+# `source_fallback()` with the directory the retry runs in
+@pytest.mark.parametrize(
+    ("in_task_dir", "in_retry_dir", "fallback", "found"),
+    [
+        (True, False, True, "task"),
+        (False, True, True, "retry"),
+        # a file in the working directory always wins
+        (True, True, True, "task"),
+        (False, False, True, None),
+        (False, True, False, None),
+    ],
+)
+@pytest.mark.anyio
+async def test_a_relative_channel_file_is_looked_for_in_the_fallback_when_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    in_task_dir: bool,
+    in_retry_dir: bool,
+    fallback: bool,
+    found: str | None,
+) -> None:
+    task_dir, retry_dir = tmp_path / "task", tmp_path / "retry"
+    for directory, present in [(task_dir, in_task_dir), (retry_dir, in_retry_dir)]:
+        directory.mkdir()
+        if present:
+            (directory / "review.py").write_text(_answer_file(directory.name))
+    monkeypatch.chdir(task_dir)
+    raw: Any = {
+        "name": "human",
+        "params": {"stages": ["tool_call"], "channel": "review.py:ask"},
+    }
+
+    with source_fallback(str(retry_dir)) if fallback else nullcontext():
+        if found is None:
+            with pytest.raises(ValueError, match=str(task_dir / "review.py")):
+                sentinel_from_config(raw)
+            return
+        configured = sentinel_from_config(raw)
+    decision, _, _ = await _run(configured)
+
+    assert decision == Decision.terminate(found)
+    assert sentinel_config(configured) == SentinelConfig.model_validate(raw)
+
+
 def retried(
     ask: Callable[[HumanQuestion], Awaitable[HumanAnswer]],
 ) -> Callable[[HumanQuestion], Awaitable[HumanAnswer]]:
@@ -561,6 +610,58 @@ def test_a_channel_named_relative_to_a_task_file_in_a_subdirectory_is_found_on_r
     )
     assert retried_log.status == "success", retried_log.error
     assert retried_log.eval.config.sentinel == log.eval.config.sentinel
+    assert retried_log.samples is not None
+    assert reason in retried_log.samples[0].model_dump_json()
+
+
+# the same task file with no sentinel of its own
+PLAIN_SUBDIRECTORY_TASK_FILE = SUBDIRECTORY_TASK_FILE.replace(
+    '        sentinel=human(["model_input"], channel=CHANNEL),\n', ""
+)
+
+
+@pytest.mark.skipif(
+    _inspect_ai_version() < Version("0.3.293"),
+    reason="before inspect-ai 0.3.293, eval_retry() rebuilds the logged sentinel where the retry runs, so a file beside the task file is never looked at",
+)
+@pytest.mark.parametrize(
+    ("beside_task_file", "reason"),
+    [
+        (False, "approved beside the eval"),
+        # a file of the same name beside the task file wins
+        (True, "approved beside the task file"),
+    ],
+)
+def test_an_evals_own_channel_file_is_found_where_the_retry_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, beside_task_file: bool, reason: str
+) -> None:
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "plain_task.py").write_text(PLAIN_SUBDIRECTORY_TASK_FILE)
+    (tmp_path / "review.py").write_text(
+        BESIDE_FILE.replace(
+            "approved by the channel beside the task file", "approved beside the eval"
+        )
+    )
+    if beside_task_file:
+        (tasks / "review.py").write_text(
+            BESIDE_FILE.replace(
+                "approved by the channel beside the task file",
+                "approved beside the task file",
+            )
+        )
+    monkeypatch.chdir(tmp_path)
+
+    log = eval(
+        "tasks/plain_task.py",
+        model="mockllm/model",
+        sentinel=human(["model_input"], channel="review.py:ask"),
+        log_dir="logs",
+    )[0]
+    retried_log = eval_retry(log, log_dir="logs")[0]
+
+    assert log.status == "error"
+    assert retried_log.status == "success", retried_log.error
     assert retried_log.samples is not None
     assert reason in retried_log.samples[0].model_dump_json()
 

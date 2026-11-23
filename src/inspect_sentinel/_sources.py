@@ -4,11 +4,20 @@ import hashlib
 import importlib
 import importlib.util
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from types import ModuleType
 
 # the prefix of the name a module loaded from its file gets
 _FROM_FILE = "_sentinel_source_"
+
+# where a relative source file is looked for when the working directory has
+# no file of that name, while `source_fallback()` is open
+_fallback: ContextVar[Path | None] = ContextVar(
+    "inspect_sentinel_source_fallback", default=None
+)
 
 
 def source_file(module: str) -> str | None:
@@ -63,6 +72,22 @@ def import_source(module: str, file: str | None) -> ModuleType | None:
         return _import_file(path)
 
 
+@contextmanager
+def source_fallback(directory: str) -> Generator[None]:
+    """Look for a relative source file in `directory` when the working directory has no file of that name, while the context is open.
+
+    A configuration names a function by a source file's path, relative to the working directory where it was recorded. inspect_ai's `eval_retry()` rebuilds the logged sentinel in the task file's directory, where a sentinel made in the task file was recorded, and opens this with the directory the retry runs in, where an eval's own sentinel was. A file in the working directory always wins: whether it exists is all that is checked.
+
+    Args:
+        directory: The directory to look in second.
+    """
+    token = _fallback.set(Path(directory).resolve())
+    try:
+        yield
+    finally:
+        _fallback.reset(token)
+
+
 def _import_file(path: Path) -> ModuleType:
     # under a name of its own, so it never stands in for a module of the
     # same name, nor runs twice
@@ -93,4 +118,9 @@ def _relative(file: str) -> str:
 
 
 def _absolute(file: str) -> Path:
-    return (Path.cwd() / file).resolve()
+    path = (Path.cwd() / file).resolve()
+    fallback = _fallback.get()
+    if fallback is None or path.exists():
+        return path
+    second = (fallback / file).resolve()
+    return second if second.exists() else path
