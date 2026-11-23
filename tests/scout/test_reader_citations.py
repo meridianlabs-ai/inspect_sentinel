@@ -1,6 +1,7 @@
 from typing import Any
 
 import pytest
+from inspect_ai._sentinel._integration import EvalInfo, steps_from_events
 from inspect_ai.event import (
     Event,
     ModelEvent,
@@ -9,7 +10,13 @@ from inspect_ai.event import (
     SpanEndEvent,
     ToolEvent,
 )
-from inspect_ai.model import ChatMessage, ChatMessageUser, GenerateConfig, ModelOutput
+from inspect_ai.model import (
+    ChatMessage,
+    ChatMessageTool,
+    ChatMessageUser,
+    GenerateConfig,
+    ModelOutput,
+)
 from inspect_ai.tool import ToolCall, ToolCallError
 from inspect_scout import Result, Transcript
 
@@ -585,3 +592,83 @@ async def test_a_decision_with_no_action_is_a_malformed_log() -> None:
 
     with pytest.raises(MalformedLogError, match="has no action"):
         await scan(transcript)
+
+
+def bridged_turn(case: str) -> list[Event]:
+    # a bridged model call proposing "a", the bridge's checks of its call and
+    # result, and the next bridged request carrying the result, with the
+    # proposal changed as `case` says
+    first = proposal("out", "a")
+    first.origin = "agent"
+    first.requested_model = "inspect"
+    native: list[Event] = []
+    if case == "monitor role":
+        first.role = "monitor"
+    elif case == "pending":
+        first.pending = True
+    elif case == "scorer origin":
+        first.origin = "scorer"
+    elif case == "no output message id":
+        first.output.message.id = None
+    elif case == "handed over under another id":
+        first.agent_tool_call_ids = ["fresh"]
+    elif case == "run by a native tool":
+        run = tool("native", None, "a")
+        run.call_message_id = "out"
+        native.append(run)
+    later = generate("later", None)
+    later.origin = "agent"
+    later.requested_model = "inspect"
+    later.input = [
+        *first.input,
+        first.output.message,
+        ChatMessageTool(
+            id="answer", content="2", tool_call_id="a", function="addition"
+        ),
+    ]
+    return [
+        first,
+        *checked("call", "tool_call", "a", None, "execution", bridge=True),
+        *native,
+        *checked("result", "tool_result", "a", None, "execution", bridge=True),
+        later,
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "plain",
+        "monitor role",
+        "pending",
+        "scorer origin",
+        "no output message id",
+        "handed over under another id",
+        "run by a native tool",
+    ],
+)
+async def test_a_bridge_check_names_only_a_step_replay_builds(case: str) -> None:
+    # read mode names a bridge check's step only where inspect_ai's replay
+    # builds it: none for a model call replay builds no tool steps for, or for
+    # a call it names by another id or leaves to its native run
+    events = bridged_turn(case)
+    later = events[-1]
+    assert isinstance(later, ModelEvent)
+    steps = steps_from_events(
+        later.input,
+        events,
+        [],
+        sample_uuid=SAMPLE,
+        eval_info=EvalInfo("0.3.292", True),
+    )
+    built = {(s.stage, s.id) for s in steps if s.stage.startswith("tool")}
+    named = {
+        (stage, joined)
+        for stage in ("tool_call", "tool_result")
+        for row in await read(stage, events)
+        if (joined := (row.metadata or {}).get("replay_step_id")) is not None
+    }
+    assert named <= built
+    if case == "plain":
+        assert named == built == {("tool_call", "gout/a"), ("tool_result", "gout/a")}

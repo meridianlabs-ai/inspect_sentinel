@@ -10,10 +10,13 @@ from inspect_ai.event import ModelEvent
 from inspect_ai.model import (
     ChatCompletionChoice,
     ChatMessageAssistant,
+    ChatMessageUser,
+    GenerateConfig,
+    Model,
     ModelOutput,
     get_model,
 )
-from inspect_ai.tool import ToolCall
+from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_scout import scan, scan_results_df, transcripts_from
 
 from inspect_sentinel import (
@@ -37,6 +40,7 @@ from inspect_sentinel.scout import (
 
 Row = dict[str, Any]
 Client = Literal["openai", "anthropic"]
+Filter = Literal["candidates", "monitor"]
 READ_FILE = "Read a file."
 PATH = {"type": "object", "properties": {"path": {"type": "string"}}}
 
@@ -47,8 +51,8 @@ PATH = {"type": "object", "properties": {"path": {"type": "string"}}}
 # inspect_ai's replay names a bridged call's steps.
 
 
-def calls(*ids: str) -> ModelOutput:
-    # one turn whose response reads the file named by each call id
+def calls(*ids: str, path: str | None = None) -> ModelOutput:
+    # one turn whose response reads the file named by each call id, or `path`
     return ModelOutput(
         model="mockllm/model",
         choices=[
@@ -56,7 +60,9 @@ def calls(*ids: str) -> ModelOutput:
                 message=ChatMessageAssistant(
                     content="",
                     tool_calls=[
-                        ToolCall(id=i, function="read_file", arguments={"path": i})
+                        ToolCall(
+                            id=i, function="read_file", arguments={"path": path or i}
+                        )
                         for i in ids
                     ],
                 ),
@@ -67,14 +73,42 @@ def calls(*ids: str) -> ModelOutput:
 
 
 @agent(name="scaffold")
-def scaffold(client: Client, retry: bool = False) -> Agent:
+def scaffold(
+    client: Client, retry: bool = False, filter: Filter | None = None
+) -> Agent:
     """A tool loop over the `client` SDK that runs its tools itself, as Claude Code does.
 
-    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does.
+    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does. With `filter`, the bridge's requests go through a request filter: `"candidates"` generates a second candidate for the first request and hands over the first, and `"monitor"` generates with the model for the monitor role.
     """
+    first = True
+
+    async def choose(
+        model: Model,
+        input: list[Any],
+        tools: list[ToolInfo],
+        tool_choice: ToolChoice | None,
+        config: GenerateConfig,
+    ) -> ModelOutput:
+        nonlocal first
+        if filter == "monitor":
+            model = get_model(role="monitor", default=model)
+        chosen = await model.generate(
+            input=input, tools=tools, tool_choice=tool_choice, config=config
+        )
+        if filter == "candidates" and first:
+            first = False
+            await model.generate(
+                input=[ChatMessageUser(content="another candidate")],
+                tools=tools,
+                tool_choice=tool_choice,
+                config=config,
+            )
+        return chosen
 
     async def execute(state: AgentState) -> AgentState:
-        async with agent_bridge(state) as bridge:
+        async with agent_bridge(
+            state, filter=choose if filter is not None else None
+        ) as bridge:
             if client == "openai":
                 await _openai_loop(state.messages[0].text, retry)
             else:
@@ -181,13 +215,14 @@ def run(
     client: Client,
     sentinel: Any,
     retry: bool = False,
+    filter: Filter | None = None,
 ) -> list[str]:
     # the eval's log, in tmp_path / "logs", and the uuids of the model calls
     # the bridge made, in order
     [log] = eval(
         Task(
             dataset=[Sample(input="Read the files.")],
-            solver=as_solver(scaffold(client, retry)),
+            solver=as_solver(scaffold(client, retry, filter)),
             sentinel=sentinel,
         ),
         model=get_model(
@@ -300,10 +335,35 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", None, "proceed"),
         ],
     ),
+    # a request filter generates two candidates under "a" and hands over the
+    # first: replay builds both calls' steps, and the log doesn't say which
+    # one the bridge checked, so the check joins neither. Nor does its result,
+    # under an id proposed twice
+    "filter hands over one of two candidates": (
+        [calls("a", path="first"), calls("a", path="second")],
+        [
+            ("tool_call", None, "proceed"),
+            ("tool_result", None, "proceed"),
+        ],
+    ),
+    # a request filter generates with the monitor role's model, whose calls
+    # replay builds no steps for, so the bridge's checks of them join none
+    "filter generates as the monitor": (
+        [calls("a")],
+        [
+            ("tool_call", None, "proceed"),
+            ("tool_result", None, "proceed"),
+        ],
+    ),
 }
 
 # the cases whose agent sends its first request twice
 RETRIED = {"retried request, reused id"}
+# the cases whose bridge requests go through a request filter
+FILTERED: dict[str, Filter] = {
+    "filter hands over one of two candidates": "candidates",
+    "filter generates as the monitor": "monitor",
+}
 
 
 def ordered(rows: list[tuple[str, str | None, str]]) -> list[tuple[str, str, str]]:
@@ -318,7 +378,14 @@ def test_a_bridge_check_names_the_replayed_step_of_the_call_it_checked(
     tmp_path: Path, case: str, client: Client
 ) -> None:
     turns, expected = CASES[case]
-    uuids = run(tmp_path, turns, client, judge(), retry=case in RETRIED)
+    uuids = run(
+        tmp_path,
+        turns,
+        client,
+        judge(),
+        retry=case in RETRIED,
+        filter=FILTERED.get(case),
+    )
 
     read = records(scanned(tmp_path, recorded=as_reader())["recorded"])
 
@@ -351,7 +418,14 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
     tmp_path: Path, case: str
 ) -> None:
     turns, expected = CASES[case]
-    uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
+    uuids = run(
+        tmp_path,
+        turns,
+        "openai",
+        judge(),
+        retry=case in RETRIED,
+        filter=FILTERED.get(case),
+    )
     frames = scanned(tmp_path, replayed=as_scanner(judge()), recorded=as_reader())
 
     # the join the docs give (replay.qmd, "Bridged Agents")
@@ -398,10 +472,17 @@ def test_replayed_and_recorded_bridge_decisions_join_side_by_side(
 def test_read_mode_names_only_steps_replay_built(tmp_path: Path, case: str) -> None:
     # read mode names a step for a check only where replay built that step, so
     # the two views agree on which steps exist: where replay builds no step
-    # (a reused id's results, calls sharing an id in one response), the check
-    # names none rather than one no replayed row has
+    # (a reused id's results, calls sharing an id in one response, a monitor
+    # role's calls), the check names none rather than one no replayed row has
     turns, expected = CASES[case]
-    uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
+    uuids = run(
+        tmp_path,
+        turns,
+        "openai",
+        judge(),
+        retry=case in RETRIED,
+        filter=FILTERED.get(case),
+    )
     frames = scanned(tmp_path, replayed=as_scanner(judge()), recorded=as_reader())
 
     built = {
@@ -427,6 +508,11 @@ UNCHECKED: dict[str, list[tuple[str, str]]] = {
     "reused id": [],
     "duplicate ids": [],
     "retried request, reused id": [],
+    "filter hands over one of two candidates": [
+        ("tool_call", "0/a"),
+        ("tool_call", "1/a"),
+    ],
+    "filter generates as the monitor": [],
 }
 
 
@@ -440,7 +526,14 @@ def test_compare_decisions_pairs_a_new_protocols_decisions_with_a_bridges_checks
     tmp_path: Path, case: str
 ) -> None:
     turns, expected = CASES[case]
-    uuids = run(tmp_path, turns, "openai", judge(), retry=case in RETRIED)
+    uuids = run(
+        tmp_path,
+        turns,
+        "openai",
+        judge(),
+        retry=case in RETRIED,
+        filter=FILTERED.get(case),
+    )
     # a new protocol that rejects reading `a` rather than `bad`
     frames = scanned(
         tmp_path, replayed=as_scanner(judge(bad="a")), recorded=as_reader()
