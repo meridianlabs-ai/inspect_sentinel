@@ -7,7 +7,7 @@ import pytest
 from inspect_ai import Task, eval
 from inspect_ai.agent import Agent, AgentState, agent, agent_bridge, as_solver
 from inspect_ai.dataset import Sample
-from inspect_ai.event import ModelEvent
+from inspect_ai.event import ModelEvent, SentinelEvent
 from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_ai.model import (
     ChatCompletionChoice,
@@ -747,11 +747,22 @@ def test_replay_gives_a_renamed_call_the_assistant_message_the_bridge_handed_ove
             ("tool_result", f"{second}/{fresh}"),
         ]
     )
-    # its two steps have the message the bridge handed over, under the fresh
-    # id, not the model's message as logged, and the live checks had it too
-    [handed] = {digest for _, step, digest in replayed if step == f"{second}/{fresh}"}
-    assert handed != _hash(renamed.output.message)
-    assert [digest for stage, _, digest in recorded if stage == "tool_call"].count(
-        handed
-    ) == 1
-    assert handed in {digest for stage, _, digest in recorded if stage == "tool_result"}
+    # the message the bridge handed over: the second model call's output with
+    # the fresh id in place of the model's (the digest leaves out message ids)
+    handed = renamed.output.message.model_copy(deep=True)
+    assert handed.tool_calls is not None
+    handed.tool_calls[0].id = fresh
+    expected = _hash(handed)
+    assert expected != _hash(renamed.output.message)
+    # the live checks of the renamed call, by the execution their sentinel
+    # events record for its fresh id
+    [execution] = {
+        e.execution_id
+        for e in sample[0].events
+        if isinstance(e, SentinelEvent) and e.step_id == fresh
+    }
+    replayed_by_step = {(stage, step): digest for stage, step, digest in replayed}
+    recorded_by_step = {(stage, step): digest for stage, step, digest in recorded}
+    for stage in ("tool_call", "tool_result"):
+        assert replayed_by_step[(stage, f"{second}/{fresh}")] == expected
+        assert recorded_by_step[(stage, str(execution))] == expected
