@@ -896,7 +896,7 @@ async def test_an_image_in_a_message_the_cut_drops_is_not_counted() -> None:
     ids=["anthropic", "openai"],
 )
 async def test_flag_fails_closed_only_on_a_compaction_the_model_cannot_read(
-    metadata: dict[str, str], flagged: bool
+    metadata: dict[str, Any], flagged: bool
 ) -> None:
     compacted = ChatMessageAssistant(
         id="compacted",
