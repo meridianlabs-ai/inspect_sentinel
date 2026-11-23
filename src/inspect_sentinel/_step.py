@@ -220,7 +220,7 @@ class AfterToolCall:
 
     They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
 
-    Under an agent bridge, the call ids in `assistant_message` are the ones the bridge handed the agent (a new id where the model's id names another call), so `call.id` finds the call in it. When the bridge can't tell which call a result answers (two calls handed over under one id, or one call handed over more than once under the same id, in this conversation or another of the same bridge), or no longer holds the model call (the result comes after many later calls were handed over, which inspect_ai warns about, or the sample resumed from a checkpoint after the call was handed over), the four fields are `None`. Where the bridge no longer held the model call, or the same call was handed over in another conversation, a replay from a log fills them in.
+    Under an agent bridge, the call ids in `assistant_message` are the ones the bridge handed the agent (a new id where the model's id names another call), so `call.id` finds the call in it. When the bridge can't tell which call a result answers (two calls handed over under one id, or one call handed over more than once under the same id, in this conversation or another of the same bridge), or no longer holds the model call (the result comes after many later calls were handed over, which inspect_ai warns about, or the sample resumed from a checkpoint after the call was handed over), the four fields are `None`. Where the bridge no longer held the model call, or the same call was handed over in another conversation, a replay from a log fills them in, along with `message` and `message_id`, which are empty live.
 
     `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
     """
@@ -232,7 +232,7 @@ class AfterToolCall:
     """Assistant text alongside the call."""
 
     message_id: str
-    """Id of the assistant message that made the call, so a monitor model can cite it."""
+    """Id of the assistant message that made the call, so a monitor model can cite it. Empty, as is `message`, for a bridged result whose `assistant_message` is `None` (see `AfterToolCall`)."""
 
     assistant_message: ChatMessageAssistant | None = field(default=None, kw_only=True)
     """The assistant message that made the call, as the model returned it: its text, its reasoning and all of its tool calls, this one among them (find it by `call.id`). It is set for a solver that calls `generate()` in its own loop.
