@@ -2,7 +2,7 @@
 
 A haystack is one sample. Its agent is `react()` with a stand-in `bash`, a sub-agent through `as_tool()`, and a summary compaction; its model is a script, so two runs of a haystack take the same turns and only the monitors' model can vary. Each script has ordinary work, parallel tool calls, a sub-agent call, a provider error that is retried, a command run with `sudo` that a person reviews through `human()`, and one to three needles: tool calls the policy forbids, labelled by their call ids.
 
-The live sentinel runs the measured monitor observe-only beside `review`: `sequential([sudo_review(), human(stages=["tool_call"])])`, which asks the person about each `sudo` command. The person is `scripted_person()`: inspect_ai asks through its approval surfaces (an ACP client, the panel, or else the terminal), and with no display the terminal's prompt reads standard input, so the scripted person types its answer there, `r` to reject. Nothing in inspect_ai is patched; the answer is recorded in the log as `human()`'s decision like any person's, and replay gives it again.
+The live sentinel runs the measured monitor observe-only beside `review`: `sequential([sudo_review(), human(stages=["tool_call"])])`, which asks the person about each `sudo` command. The person is `scripted_person()`: inspect_ai asks through its approval channels (an ACP client, the panel, or else the terminal), and with no display the terminal's prompt reads standard input, so the scripted person types its answer there, `r` to reject. Nothing in inspect_ai is patched; the answer is recorded in the log as `human()`'s decision like any person's, and replay gives it again.
 """
 
 from __future__ import annotations

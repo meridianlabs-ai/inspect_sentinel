@@ -483,6 +483,33 @@ def test_a_lone_instance_is_recorded_as_a_lone_entry() -> None:
     )
 
 
+def cfg_allow() -> Decision:
+    return Decision.proceed("allowed")
+
+
+@protocol(portable=False)
+def cfg_named_callback(callback: Callable[[], Decision] | str) -> Protocol:
+    # a factory that finds a callback by the bare name the log records
+    resolved = (
+        {"cfg_allow": cfg_allow}[callback] if isinstance(callback, str) else callback
+    )
+
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision:
+        return resolved()
+
+    return decide
+
+
+def test_a_function_param_is_recorded_by_its_bare_name_and_rebuilt() -> None:
+    config = sentinel_config(cfg_named_callback(cfg_allow))
+    assert config == SentinelConfig.model_validate(
+        {"name": "cfg_named_callback", "params": {"callback": "cfg_allow"}}
+    )
+    assert sentinel_config(sentinel_from_config(config)) == config
+
+
 @pytest.mark.anyio
 async def test_a_lone_protocol_records_the_same_paths_once_rebuilt() -> None:
     original = threshold(cfg_suspicion(), reject_at=0.5)

@@ -18,6 +18,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from typing import Any, Literal
 
 import anyio
@@ -34,7 +35,7 @@ from inspect_ai.util import Store
 from pydantic import JsonValue
 
 from .._context import EvalContext, InspectSample, ProxyContext
-from .._host import HostNative, HumanAnswer
+from .._host import HostNative, HumanAnswer, watching_channels
 from .._integration import HostContext, resolve_sentinel, run_sentinel
 from .._report import Decision, Escalations
 from .._step import (
@@ -359,6 +360,8 @@ class _Judging:
     """The cancel scope of the judging timeout. The time a question is open for a person doesn't count against the limit."""
     questions_waiting: int = 0
     """How many questions the judging is waiting on now."""
+    channels_waiting: int = 0
+    """How many `human()` channels, a team's own review tools, the judging is waiting on now. Like a question, such a wait is for a person, so ending the sample or the run cancels it."""
     time_left: float | None = None
     """How much of the judging timeout was left when the judging began to wait on a person."""
     answered_pending: bool = False
@@ -377,6 +380,26 @@ class _Judging:
 
 # the judging that the current task belongs to, if the request is an eval's
 _JUDGING: ContextVar[_Judging | None] = ContextVar("sidecar_judging", default=None)
+
+
+@dataclass(eq=False)
+class _RunJudging:
+    """The judging in progress of one request or reply that no eval follows, such as an ordinary proxy client's. A `human()` channel it waits on is cancelled when a sentinel ends its run at another exchange."""
+
+    scope: anyio.CancelScope
+    """Cancelled to stop the judging with nothing decided."""
+    run: str | None = None
+    """The run the exchange is of, set when its judging is about to wait on a channel."""
+    channels_waiting: int = 0
+    """How many `human()` channels the judging is waiting on now."""
+    refusal: Refuse | None = None
+    """What the exchange is refused with when its judging is stopped at a channel because its run ended."""
+
+
+# the judging that the current task belongs to, if no eval follows the request
+_RUN_JUDGING: ContextVar[_RunJudging | None] = ContextVar(
+    "sidecar_run_judging", default=None
+)
 
 
 @dataclass(eq=False)
@@ -472,6 +495,7 @@ class Handler:
         self._run_header = run_header.strip().lower() or None if run_header else None
         self._reviews = Reviews(review_timeout)
         self._judgings_in_progress: set[_Judging] = set()
+        self._run_judgings: set[_RunJudging] = set()
         # The model calls that a sentinel asked a person about, by eval id and x-irid.
         # Each is kept until its sample ends, or for the state's expiry after the call
         # ended.
@@ -684,7 +708,7 @@ class Handler:
             return answer
 
         if attempt is None or signed is None:
-            return await judge()
+            return await self._in_run(judge)
         return await self._exchange(
             judge, attempt, signed.sample, signed.request_id, binding
         )
@@ -766,7 +790,7 @@ class Handler:
         sample = held.proxy.inspect if held is not None else None
         request_id = held.proxy.headers.get(REQUEST_ID) if held is not None else None
         if attempt is None or held is None or sample is None or request_id is None:
-            return await judge()
+            return await self._in_run(judge)
         return await self._exchange(
             judge, attempt, sample, request_id, held.binding, held
         )
@@ -1116,7 +1140,11 @@ class Handler:
             current = _JUDGING.set(judging)
             self._judgings_in_progress.add(judging)
             try:
-                return await judge()
+                with judging.scope:
+                    return await judge()
+                # stopped while it waited on a channel, with nothing decided
+                _settle_stopped(attempt)
+                return _stopped_answer(attempt)
             finally:
                 self._judgings_in_progress.discard(judging)
                 _JUDGING.reset(current)
@@ -1191,6 +1219,34 @@ class Handler:
             raise judging.error
         assert judging.answer is not None
         return judging.answer
+
+    async def _in_run(self, judge: Callable[[], Awaitable[Answer]]) -> Answer:
+        # Judge an exchange that no eval follows. If a sentinel ends its run at
+        # another exchange while a `human()` channel waits here, the wait is
+        # cancelled (`_end_run_judgings`), nothing is decided here, and the
+        # exchange is refused as the run was.
+        in_run = _RunJudging(anyio.CancelScope())
+        current = _RUN_JUDGING.set(in_run)
+        self._run_judgings.add(in_run)
+        try:
+            with in_run.scope:
+                return await judge()
+        finally:
+            self._run_judgings.discard(in_run)
+            _RUN_JUDGING.reset(current)
+        return in_run.refusal or _RUN_OVER
+
+    def _end_run_judgings(self, run: str, refusal: Refuse) -> None:
+        # A sentinel ended the run at one of its exchanges. Each other exchange
+        # of the run that no eval follows and waits on a `human()` channel now
+        # is cancelled, and refused as the run was. One that reaches a channel
+        # later finds the run ended there (`_channel_waiting`), and one that
+        # asks nobody finishes as before.
+        current = _RUN_JUDGING.get()
+        for in_run in list(self._run_judgings):
+            if in_run.run == run and in_run is not current and in_run.channels_waiting:
+                in_run.refusal = refusal
+                in_run.scope.cancel()
 
     def _abandoned(self, judging: _Judging) -> None:
         # The judging was cancelled because its exchange's caller went away before
@@ -1623,7 +1679,7 @@ class Handler:
                 continue
             if attempt.stop_cause is None:
                 attempt.stop_cause = cause
-            if self._operation_of(attempt) is not None:
+            if self._operation_of(attempt) is not None or judging.channels_waiting:
                 judging.scope.cancel()
         for operation in list(self._operations.values()):
             attempt = operation.attempt
@@ -2484,16 +2540,17 @@ class Handler:
         ) as models:
             started = time.monotonic()
             try:
-                decision = await run_sentinel(
-                    self._protocol,
-                    HostContext(
-                        host=RunHost(self._host, run.eval, self._asker(held, run)),
-                        recorder=held.recorder,
-                        store=held.store,
-                        proxy=held.proxy,
-                    ),
-                    step,
-                )
+                with watching_channels(partial(_channel_waiting, held, run)):
+                    decision = await run_sentinel(
+                        self._protocol,
+                        HostContext(
+                            host=RunHost(self._host, run.eval, self._asker(held, run)),
+                            recorder=held.recorder,
+                            store=held.store,
+                            proxy=held.proxy,
+                        ),
+                        step,
+                    )
             finally:
                 # The client waited on its model call while the step was judged, whether
                 # or not the judging failed, until the call was answered "pending
@@ -2771,6 +2828,7 @@ class Handler:
             if held.sample_attempt != run.attempt:
                 return refusal
             run.refusal = refusal
+            self._end_run_judgings(held.run, refusal)
             ended = held.proxy.inspect
             if ended is not None:
                 self._stop(
@@ -2790,6 +2848,7 @@ class Handler:
             # a run a header names ends whole too: every conversation of it,
             # such as a subagent's, or one compacted to a new opening
             run.refusal = refusal
+            self._end_run_judgings(held.run, refusal)
             for conversation in run.conversations.values():
                 conversation.rejected.clear()
                 conversation.edited.clear()
@@ -2872,6 +2931,63 @@ def _run_key(named: bool, key: str) -> str:
     # opening can work out, so the eval endpoint, which takes a sample's uuid,
     # must never reach one.
     return f"{'sample' if named else 'opening'}:{key}"
+
+
+@asynccontextmanager
+async def _channel_waiting(held: Held, run: Run) -> AsyncGenerator[None]:
+    # `human()` is about to wait on its own channel, a team's review tool: the
+    # judging waits on a person. One check, made here with nothing awaited
+    # before the wait is counted, decides whether the channel is asked: not if
+    # the exchange's run has ended (`run.refusal`, which `_end` and the state's
+    # `end_run` set on the run every judging of it holds), its attempt at an
+    # eval's sample was replaced, or its eval attempt was stopped. A wait that
+    # is counted here is one every later end finds: `_stop` by the eval
+    # attempt's judging, `_end_run_judgings` by the run's key. So whatever
+    # order an end and the judging's own awaits come in, no channel is asked,
+    # or left waiting, once its run, sample or attempt has ended.
+    judging = _JUDGING.get()
+    in_run = _RUN_JUDGING.get()
+    ended = _run_over(held, run)
+    if judging is not None:
+        attempt = judging.attempt
+        if ended and attempt.stop_cause is None:
+            attempt.stop_cause = (
+                "replaced_attempt"
+                if held.sample_attempt != run.attempt
+                else "sample_ended"
+                if run.closed
+                else "run_ended"
+            )
+        if attempt.stop_cause is not None:
+            judging.scope.cancel()
+            await anyio.lowlevel.checkpoint()
+        judging.channels_waiting += 1
+        try:
+            yield
+        finally:
+            judging.channels_waiting -= 1
+        return
+    if in_run is None:
+        yield
+        return
+    in_run.run = held.run
+    if ended:
+        in_run.refusal = run.refusal or _RUN_OVER
+        in_run.scope.cancel()
+        await anyio.lowlevel.checkpoint()
+    in_run.channels_waiting += 1
+    try:
+        yield
+    finally:
+        in_run.channels_waiting -= 1
+
+
+def _run_over(held: Held, run: Run) -> bool:
+    # whether nothing waits for the exchange any more: a sentinel ended its
+    # run, the eval ended its sample, or a later attempt at the sample began
+    return run.refusal is not None or (
+        held.named and held.sample_attempt != run.attempt
+    )
 
 
 def _stopped_answer(attempt: Attempt) -> Refuse:

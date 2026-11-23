@@ -359,6 +359,19 @@ def _register(
                 f"{registered_name} cannot have a parameter named {param.name!r}, since a configuration entry uses {', '.join(repr(f) for f in ENTRY_FIELDS)} as its own keys; rename it."
             )
     params = list(signature.keys())
+    recorded_as: dict[str, Callable[[object], object]] = getattr(
+        factory, _RECORDED_AS, {}
+    )
+    for name in recorded_as:
+        if name not in signature:
+            raise TypeError(
+                f"{registered_name} records {name!r} through recorded_as(), but has no parameter of that name."
+            )
+    positional = [
+        p.name
+        for p in signature.values()
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
     info = RegistryInfo(
         type=kind,
         name=registered_name,
@@ -416,13 +429,48 @@ def _register(
         outer = _BUILT.get()
         if outer is not None:
             outer.update(eval_only)
+        if recorded_as:
+            # what the configuration records for the params the factory opted
+            # in with `recorded_as()`; every other param as given
+            recorded_args = (
+                tuple(
+                    recorded_as[name](arg) if name in recorded_as else arg
+                    for name, arg in zip(positional, plain_args, strict=False)
+                )
+                + plain_args[len(positional) :]
+            )
+            recorded_kwargs = {
+                key: recorded_as[key](value) if key in recorded_as else value
+                for key, value in plain_kwargs.items()
+            }
+        else:
+            recorded_args, recorded_kwargs = plain_args, plain_kwargs
         registry_tag(
-            factory, instance, info.model_copy(deep=True), *plain_args, **plain_kwargs
+            factory,
+            instance,
+            info.model_copy(deep=True),
+            *recorded_args,
+            **recorded_kwargs,
         )
         return instance
 
     registry_add(wrapper, info)
     return wrapper
+
+
+_RECORDED_AS = "__inspect_sentinel_recorded_as__"
+
+
+def recorded_as(**converters: Callable[[object], object]) -> Callable[[F], F]:
+    # A factory's opt-in to record the named params through a converter, for
+    # a param whose argument the registry cannot record so that a
+    # configuration rebuilds it: human(channel=) records a function by the
+    # name it finds it by again. Applied below `@monitor` or `@protocol`.
+    def decorate(factory: F) -> F:
+        setattr(factory, _RECORDED_AS, converters)
+        return factory
+
+    return decorate
 
 
 def _plain(value: object) -> object:

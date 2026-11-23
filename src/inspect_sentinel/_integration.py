@@ -12,6 +12,7 @@ from ._host import HostContext, HostNative, Recorder
 from ._human_decisions import kept_human_decision, supersedes
 from ._resolve import resolve_sentinel
 from ._runner import run_sentinel
+from ._sources import source_fallback
 from ._types import Sentinels
 
 # the name inspect_ai records the eval log's configuration through, until it
@@ -29,6 +30,7 @@ __all__ = [
     "validate_instance_name",
     "resolve_sentinel",
     "run_sentinel",
+    "source_fallback",
     "step_types",
     "supersedes",
     "watched_stages",

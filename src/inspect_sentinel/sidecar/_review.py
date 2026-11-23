@@ -7,7 +7,7 @@ A person may take days to answer, so no connection waits on a question. The hand
 This first way of asking has two temporary exceptions to the sidecar's rules, both in `design/sidecar-plan.md`, step 13:
 
 - The eval signs the answer with its own key, the token it signs every call with. The sidecar accepts an answer only for a question from one of that eval's own runs. Later, reviewers are to answer with credentials of their own, which the sidecar checks.
-- The question gives the eval's process the call's arguments, the whole turn, or the messages of the request that were not sent before, even if the person then rejects the call or ends the run. Later, a reviewer surface outside the eval's process is to show the arguments instead.
+- The question gives the eval's process the call's arguments, the whole turn, or the messages of the request that were not sent before, even if the person then rejects the call or ends the run. Later, a reviewer channel outside the eval's process is to show the arguments instead.
 
 A question belongs to one model call. A `Review` records what happened to the question. The handler keeps the `Review` with the try of the call that asked, whether or not the step reached a decision.
 """
