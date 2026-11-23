@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
@@ -42,6 +42,25 @@ class HumanDecision:
 
 
 @dataclass(frozen=True)
+class HiddenMessages:
+    """What `StepPreprocessor.hide_messages` hid from a thinned step, as `preprocess_step()` records it in the step's `hidden`.
+
+    A hidden message is left out of its list, and `step_as_str()` renders a marker line where it stood. An assistant message is never hidden, so the step's own call and reply are always shown; of the step's own parts, only an `AfterToolCall` step's result can be hidden, and it stays in the step's `result`, with `step_as_str()` rendering the marker in its place.
+    """
+
+    ids: tuple[str, ...] = ()
+    """The ids of the hidden messages in `input`, `history` and `agent_messages` that have one, in the order they were found, each once."""
+
+    result: bool = False
+    """After a tool call, whether its result is hidden."""
+
+    filters: tuple[Callable[[ChatMessage], bool], ...] = field(
+        default=(), repr=False, compare=False
+    )
+    """Every `hide_messages` applied to the step, the first preprocessing's first. `Host.score` hides what any of them matches from the task it shows, so a step a protocol thinned keeps its task hidden when a monitor scores it with another preprocessor."""
+
+
+@dataclass(frozen=True)
 class BeforeGenerate:
     """A generate by the agent's model, before the request is sent and before the cache lookup.
 
@@ -80,6 +99,9 @@ class BeforeGenerate:
     config: GenerateConfig
     """The generation configuration the model is sent, with the task's and the model's settings merged in. In-process this is the host's own object; monitors must not mutate it. Behind a proxy it is read from the request, so it holds what the model was sent, the provider's defaults included, and settings that govern only Inspect's own client, such as `max_retries`, `timeout` and `max_connections`, are None."""
 
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns whenever a `hide_messages` was applied, even if it matched nothing. `None` on a step a host gives a monitor and on one preprocessed without `hide_messages`."""
+
 
 @dataclass(frozen=True)
 class AfterGenerate:
@@ -117,6 +139,9 @@ class AfterGenerate:
 
     output: ModelOutput
     """What the model returned; the first choice's message is what the agent receives. Some providers return an output with no choices, so check `output.choices` before reading `output.message`. In-process this is the host's own output, which the agent receives; monitors must not mutate it."""
+
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns whenever a `hide_messages` was applied, even if it matched nothing. `None` on a step a host gives a monitor and on one preprocessed without `hide_messages`."""
 
 
 @dataclass(frozen=True)
@@ -183,6 +208,9 @@ class BeforeToolCall:
     tool_choice: ToolChoice | None = None
     """The tool choice of the model call that produced the call, as the transcript's `ModelEvent` recorded it. `None` when that model call is not available (see `BeforeToolCall`)."""
 
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns whenever a `hide_messages` was applied, even if it matched nothing. `None` on a step a host gives a monitor and on one preprocessed without `hide_messages`."""
+
 
 @dataclass(frozen=True)
 class AfterToolCall:
@@ -245,6 +273,9 @@ class AfterToolCall:
 
     truncated: Truncation | Literal[False] | None = None
     """Whether the host cut the tool's output before the model saw it in `result`. A `Truncation` when it did; `False` when it did not, which is always so for structured content; `None` when this host cannot tell (a proxy, a replay from messages alone, or a log older than the record of cuts). `if step.truncated:` is true only for a cut. It is built from the value the transcript's `ToolEvent.truncated` records (`Truncation(*event.truncated)` when that is set), so a monitor reads the same answer live and from a log. A cut made before the host's limit applies, by a sandbox output limit or a timeout, is not reported here: `result.error` reports it, with type `"limit"` or `"timeout"`. Use this field, not the "output was too long" notice in `result`, to tell whether the host cut the result: that notice is text a tool's output can contain, so it can be forged."""
+
+    hidden: HiddenMessages | None = field(default=None, kw_only=True)
+    """What `StepPreprocessor.hide_messages` hid from this step, recorded by `preprocess_step()` on the step it returns whenever a `hide_messages` was applied, even if it matched nothing. `None` on a step a host gives a monitor and on one preprocessed without `hide_messages`."""
 
 
 Step: TypeAlias = BeforeGenerate | AfterGenerate | BeforeToolCall | AfterToolCall

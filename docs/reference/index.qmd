@@ -13,6 +13,7 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### BeforeToolCall
 ### AfterToolCall
 ### Truncation
+### HiddenMessages
 ### HumanDecision
 ### human_decision_for
 ### Step
@@ -85,7 +86,7 @@ Pure functions for rules that check tool calls, and builders of steps for testin
 
 ## Replay
 
-Running a sentinel over steps rebuilt from stored transcripts is done through Inspect Scout: `as_scanner()`, `as_reader()`, `replay_check()` and `replay_check_differences()` are in `inspect_sentinel.scout`, with `StepTable` and `StepSelector`, the types `as_scanner(steps=)` takes; see [Replay](../replay.qmd). A stand-in for the person `human()` asks has this type, and is handed a `ReplayStep`. A sentinel's configuration and the stages it watches are in [`inspect_sentinel.config`](config.qmd).
+Running a sentinel over steps rebuilt from stored transcripts is done through Inspect Scout: `as_scanner()`, `as_reader()`, `compare_decisions()`, `replay_check()` and `replay_check_differences()` are in `inspect_sentinel.scout`, with `StepTable` and `StepSelector`, the types `as_scanner(steps=)` takes; see [Replay](../replay.qmd). A stand-in for the person `human()` asks has this type, and is handed a `ReplayStep`. A sentinel's configuration and the stages it watches are in [`inspect_sentinel.config`](config.qmd).
 
 ### HumanStandIn
 

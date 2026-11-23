@@ -200,9 +200,9 @@ __marimo__/
 # Dynamic version
 src/inspect_sentinel/_version.py
 
-# Inspect logs and scans
-/logs/
-/logs-*/
+# Inspect logs and scans, including those an example's run writes beside it
+logs/
+logs-*/
 /scans/
 
 # MacOS

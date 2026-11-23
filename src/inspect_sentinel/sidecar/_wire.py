@@ -215,6 +215,10 @@ class Amendment:
     """For a call taken out, its rejection: a `tool_result` block, a tool message, or an output item, and for a Responses computer call the message that says why. Empty for a changed call."""
     after: tuple[object, int] | None = None
     """What came just before the call in the model's turn, as `block_key` names it, with how many blocks of that name came before it, or None if the call came first. A call taken out goes back right after it, so that it parts what it parted: Anthropic takes thinking blocks that were apart as they came, and not run together. A turn can say the same text twice, so the count tells which one."""
+    plain: Any = None
+    """The call as inspect_ai writes it from its own message alone, with no item of the provider's for it, as an eval does for a call of a turn it was refused. It is of another kind or name than the model's own for some calls: a Responses custom tool's call is written as a function call."""
+    plain_result: tuple[Any, ...] = ()
+    """The rejection of a call taken out, as inspect_ai writes it for the call as `plain` holds it. Empty for a changed call."""
 
 
 @dataclass(frozen=True)
@@ -272,6 +276,10 @@ async def amendments(
 
     api = _api_of(format)
     calls = {call.id: call for call in message.tool_calls or []}
+    with noting():
+        plain = await api.rejected_turn(
+            message, [rejection(calls[id], why) for id, why in taken_out.items()]
+        )
     written: dict[str, Amendment] = {}
     for id in [*taken_out, *changed]:
         results = [rejection(calls[id], taken_out[id])] if id in taken_out else []
@@ -288,7 +296,9 @@ async def amendments(
         if place > 0:
             keys = [block_key(api, element) for element in elements[:place]]
             after = (keys[-1], keys[:-1].count(keys[-1]))
-        written[id] = Amendment(call, result if id in taken_out else (), after)
+        written[id] = Amendment(
+            call, result if id in taken_out else (), after, *api.pick(plain, id)
+        )
     return written
 
 
@@ -399,40 +409,58 @@ async def amend_request(
 def unredacted(
     provider: str,
     body: bytes,
-    originals: Mapping[str, Any],
+    originals: Mapping[str, Amendment],
     format: Format | None = None,
+    *,
+    refused: Mapping[str, Amendment] | None = None,
 ) -> bytes | None:
     """A request with the model's own call put back in place of each call an eval holds redacted, or None if it holds none.
 
-    An eval is never handed the arguments of a call a decision acted on. It holds such a call with its id and function and no arguments, so the call is put back as the model made it before anything else reads the request, and the provider is sent the model's own turn. Nothing else in the request is changed, though the body is written out again.
+    An eval is never handed the arguments of a call a decision acted on. It holds such a call with its id and function and no arguments, so the call is put back as the model made it before anything else reads the request, and the provider is sent the model's own turn.
+
+    An eval was never handed the provider's item for a call of a turn it was refused, so inspect_ai writes the call from its own message, as a call of another kind or name than the model's own for some. Such a call is put back as the model made it too, with its result as a result of the model's call: the rejection the sidecar wrote for it, where the eval holds that rejection. Nothing else in the request is changed, though the body is written out again.
 
     Args:
         provider: Whose API the body is written for.
         body: The request body.
-        originals: The model's own calls, each as the request's format writes it, by call id.
+        originals: The model's own calls that the eval holds redacted, by call id.
         format: Which API the body is written in, if the proxy said.
+        refused: The model's own calls of the turns the eval was refused, by call id.
+
+    Raises:
+        UnreadableError: If what the eval holds as the result of its copy of a call, or its holding none, can't be written as a result of the model's own.
     """
-    if not originals:
+    refused = refused or {}
+    if not originals and not refused:
         return None
     request = json_object(body, "request")
     api = _api(provider, request, format)
     entries = _conversation(request, api)
     restored = list(entries)
     changed = False
+    # the model's own calls put back, by call id
+    put_back: dict[str, Amendment] = {}
     for index, entry in enumerate(entries):
-        if not set(api.call_ids(entry)) & set(originals):
+        if not set(api.call_ids(entry)) & (originals.keys() | refused.keys()):
             continue
         if api.call_of(entry)[0] is not None:
             # a Responses call is an entry of its own
+            id = api.call_of(entry)[0] or ""
             if _held_redacted(api, entry, originals):
-                restored[index] = originals[api.call_of(entry)[0] or ""]
-                changed = True
+                own = originals[id]
+            elif id in refused and _held_plain(api, entry, refused[id]):
+                own = refused[id]
+            else:
+                continue
+            restored[index] = own.call
+            put_back[id] = own
+            changed = True
             continue
         found = api.turn_at(entries, index)
         if found is None:
             continue
         calls = [
-            originals[api.call_of(element)[0] or ""]
+            originals[api.call_of(element)[0] or ""].call
             if _held_redacted(api, element, originals)
             else element
             for element in found.calls
@@ -443,17 +471,91 @@ def unredacted(
             changed = True
     if not changed:
         return None
-    request[api.conversation] = restored
+    # Each result of a call put back goes where the eval holds it. What more
+    # a rejection holds, as a computer call's holds a message that says why,
+    # follows the turn's results.
+    sent: list[Any] = []
+    follows: list[Any] = []
+    answered: set[str] = set()
+    for entry in restored:
+        id = api.result_of(entry)[0]
+        if id is None:
+            sent += follows
+            follows = []
+        written = [entry]
+        if id in put_back:
+            if id in answered and _only_rejection_answers(api, put_back[id]):
+                raise UnreadableError(
+                    "The request holds more than one result for a call that never ran."
+                )
+            written = _result_as(api, entry, put_back[id])
+            answered.add(id)
+        sent.append(written[0])
+        follows += written[1:]
+    for id in put_back.keys() - answered:
+        _result_as(api, None, put_back[id])
+    request[api.conversation] = [*sent, *follows]
     return json.dumps(request).encode()
 
 
-def _held_redacted(api: _Api, element: object, originals: Mapping[str, Any]) -> bool:
+def _only_rejection_answers(api: _Api, own: Amendment) -> bool:
+    # whether a call goes on only with the rejection the sidecar wrote for it,
+    # held once, as a computer call does
+    return api.result_as is not None and api.result_as(None, own.call) is None
+
+
+def _result_as(api: _Api, held: object | None, own: Amendment) -> list[Any]:
+    # What an eval holds as a result of its copy of a call, or None if it
+    # holds none, as a result of the model's own. The rejection the sidecar
+    # wrote goes in place of the eval's writing of it.
+    if own.result and any(
+        api.result_of(held) == api.result_of(element) for element in own.plain_result
+    ):
+        return list(own.result)
+    if api.result_as is None:
+        return [] if held is None else [held]
+    written = api.result_as(held, own.call)
+    if written is None:
+        raise UnreadableError(
+            "The request holds a call that never ran other than with the rejection this sidecar wrote for it."
+        )
+    return written
+
+
+def _held_redacted(
+    api: _Api, element: object, originals: Mapping[str, Amendment]
+) -> bool:
     # a call the eval holds as it was handed: its id, and no arguments
     id, kind, name, arguments = api.call_of(element)
     if id is None or id not in originals:
         return False
-    original = api.call_of(originals[id])
-    return (kind, name) == original[1:3] and arguments in ({}, None)
+    _, made, function, proposed = api.call_of(originals[id].call)
+    if (kind, name) == (made, function):
+        # a custom tool's call takes text, which is empty where it has none
+        return arguments in ({}, None) or (
+            arguments == "" and isinstance(proposed, str)
+        )
+    # written from the eval's message alone, and only as inspect_ai writes it
+    return (
+        _put_back_from_plain(api, originals[id])
+        and (kind, name) == api.call_of(originals[id].plain)[1:3]
+        and arguments == {}
+    )
+
+
+def _held_plain(api: _Api, element: object, own: Amendment) -> bool:
+    # a call the eval holds with its arguments, written from its message
+    # alone as a call of another kind or name than the model's own
+    held = api.call_of(element)
+    return (
+        _put_back_from_plain(api, own)
+        and held != api.call_of(own.call)
+        and held == api.call_of(own.plain)
+    )
+
+
+def _put_back_from_plain(api: _Api, own: Amendment) -> bool:
+    return api.put_back_from_plain is not None and api.put_back_from_plain(own.call)
 
 
 @dataclass(frozen=True)
@@ -1137,6 +1239,14 @@ class _Api:
     # the results an entry of the conversation holds
     results_in: Callable[[object], list[object]]
     pick: Callable[[list[Any], str], tuple[Any, tuple[Any, ...]]]
+    # For an API where inspect_ai writes an eval's copy of some calls, from
+    # its message alone, as calls of another kind or name than the model's
+    # own: whether a call of the model's is put back in place of such a copy,
+    # and what the eval holds as the copy's result, or None if it holds none,
+    # as the result of the model's: empty where there is none, and None if it
+    # can't be written as one.
+    put_back_from_plain: Callable[[object], bool] | None = None
+    result_as: Callable[[object | None, object], list[object] | None] | None = None
 
 
 def _api(provider: str, request: dict[str, Any], format: Format | None) -> _Api:
@@ -1194,6 +1304,8 @@ def _api_of(format: Format) -> _Api:
                 _openai.responses_result_of,
                 _openai.responses_results_in,
                 _openai.responses_pick,
+                _openai.responses_put_back_from_plain,
+                _openai.responses_result_as,
             )
 
 

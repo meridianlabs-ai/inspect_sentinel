@@ -1,8 +1,9 @@
 """Replay and read monitors and protocols over stored transcripts with Inspect Scout.
 
-`as_scanner()` replays a monitor or protocol over each transcript a scan reads, with one result per step; `as_reader()` reads what one reported in the runs it was attached to. Their results join on transcript, conversation, step id and stage, without the conversation where a replay took its conversations from a stored timeline or the messages, and `replay_check()` with `replay_check_differences()` checks that replay hands a monitor what it was handed live. Needs the `scout` extra: `pip install inspect-sentinel[scout]`.
+`as_scanner()` replays a monitor or protocol over each transcript a scan reads, with one result per step; `as_reader()` reads what one reported in the runs it was attached to. Their results join on transcript, conversation, stage and step id (a read row's `replay_step_id`), without the conversation where a replay took its conversations from a stored timeline or the messages: `compare_decisions()` puts the two modes' decisions side by side, and `replay_check()` with `replay_check_differences()` checks that replay hands a monitor what it was handed live. Needs the `scout` extra: `pip install inspect-sentinel[scout]`.
 """
 
+from ._decisions import compare_decisions
 from ._probe import replay_check, replay_check_differences
 from ._reader import as_reader
 from ._scanner import Stage, as_scanner
@@ -14,6 +15,7 @@ __all__ = [
     "StepTable",
     "as_reader",
     "as_scanner",
+    "compare_decisions",
     "replay_check",
     "replay_check_differences",
 ]

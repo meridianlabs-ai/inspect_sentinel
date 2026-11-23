@@ -135,9 +135,13 @@ class RegisterTaskResult(BaseModel):
 
 
 class CompleteRegistrationParams(SampleFacts, EvalCall):
-    """Parameters of `complete_registration`: one sample of a registered task, sent before the sample's first epoch."""
+    """Parameters of `complete_registration`: one sample of a registered task, sent before each run of the sample makes its first request."""
 
     task: str = Field(description="The task's name, as `register_task` gave it.")
+    sample_uuid: str | None = Field(
+        default=None,
+        description="The uuid of the run completing the registration, as its requests' `x-inspect-context` gives it. The sidecar holds the sample's facts while a run that named itself here is in progress, and frees them when the last one has ended (`end_sample`), so each epoch and each retry of a sample sends them again. Where a registration of the sample names no run, its facts are kept until the task's registration expires.",
+    )
 
 
 class CompleteRegistrationResult(BaseModel):
@@ -327,6 +331,10 @@ class EndSampleParams(EvalCall):
     sample_uuid: str = Field(
         description="The sample's uuid, as `x-inspect-context` gives it."
     )
+    task: str | None = Field(
+        default=None,
+        description="The sample's task, as `register_task` gave it. It finds the task's registration, where the run stops counting as one in progress of its sample (`complete_registration`). The sample is ended whatever it names.",
+    )
 
 
 class EndSampleResult(BaseModel):
@@ -334,7 +342,7 @@ class EndSampleResult(BaseModel):
 
     sample_uuid: str
     state: Literal["ended", "unknown"] = Field(
-        description="`ended`, or `unknown` for a sample the sidecar never saw."
+        description="`ended`, or `unknown` for a sample that neither made a request nor completed a registration naming it."
     )
 
 
@@ -734,7 +742,7 @@ async def _answered(
         )
         try:
             fixed = await handler.complete_registration(
-                given.eval_id, given.task, sample
+                given.eval_id, given.task, sample, given.sample_uuid
             )
         except UnknownTaskError as ex:
             raise RpcError(UNKNOWN_TASK, str(ex)) from None
@@ -837,7 +845,7 @@ async def _answered(
         return EndSampleResult(
             sample_uuid=given.sample_uuid,
             state=(
-                await handler.end_sample(given.sample_uuid, given.eval_id)
+                await handler.end_sample(given.sample_uuid, given.eval_id, given.task)
                 if holds
                 else "unknown"
             ),

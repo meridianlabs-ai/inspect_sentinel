@@ -192,7 +192,7 @@ def test_provider_left_out_has_no_routes() -> None:
 
 
 _EXAMPLES = Path(__file__).parents[2] / "examples"
-_ENVOY_EXAMPLES = ["always_sunny_envoy"]
+_ENVOY_EXAMPLES = ["always_sunny_envoy", "secrets_guard_envoy"]
 
 
 @pytest.mark.parametrize("example", _ENVOY_EXAMPLES)

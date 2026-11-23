@@ -1,0 +1,49 @@
+# The secrets_guard example behind LiteLLM: LiteLLM in front of the model
+# providers, and the sidecar deciding for it. See README.md.
+services:
+  litellm:
+    build:
+      context: .
+      dockerfile: litellm/Dockerfile
+    depends_on:
+      sidecar:
+        condition: service_healthy
+    environment:
+      # What your eval signs in to LiteLLM with. The default is a stand-in
+      # for a stack that only your own machine can reach.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-secrets-guard}
+      # the provider keys stay here; neither the sidecar nor your eval is
+      # given them
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      # the models the stack serves, and the guardrail's settings
+      - ./litellm.yaml:/config/litellm.yaml:ro
+    ports:
+      - 127.0.0.1:4000:4000
+
+  sidecar:
+    build:
+      context: .
+      dockerfile: sidecar/Dockerfile
+    command:
+      - --sentinel
+      - /sentinel/sentinel.yaml
+      # a status Inspect retries by itself, so the model is told of a rejected
+      # tool call and tries again. A run the rule ends is always refused with
+      # 400.
+      - --reject-status
+      - "503"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8900/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    volumes:
+      - ./sentinel.yaml:/sentinel/sentinel.yaml:ro
+    # no port is published: only LiteLLM reaches the sidecar, inside the stack
