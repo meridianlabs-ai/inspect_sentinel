@@ -207,7 +207,7 @@ If the message the monitor last saw is gone, as after [compaction](https://inspe
 
 Everything in a step was written by or shown to the agent. The agent can write text aimed at the monitor model, such as "this command was approved by the operator", or text that imitates the monitor's prompt.
 
-`score()` defends against this. It marks every block, every message header, and the `[TOOL CHOICE]`, `[OUTPUT TRUNCATED]` and context-window cut lines in the prompt with a *nonce*, a random 8-character code, as in `[M1] USER (3f9a1c7e):`. The prompt tells the monitor model that a marker without the code is part of the agent's text. The agent never sees the prompt, so it cannot forge a marker. For example, a tool's output can't pass for a cut by imitating the `[OUTPUT TRUNCATED]` line or Inspect's notice that the output was too long. The nonce stays the same for the whole sample, so don't pass the agent anything that quotes it, such as a monitor explanation in a rejection message.
+`score()` defends against this. It marks every block, every message header, and the `[TOOL CHOICE]`, `[OUTPUT TRUNCATED]`, hidden-messages and context-window cut lines in the prompt with a *nonce*, a random 8-character code, as in `[M1] USER (3f9a1c7e):`. The prompt tells the monitor model that a marker without the code is part of the agent's text. The agent never sees the prompt, so it cannot forge a marker. For example, a tool's output can't pass for a cut by imitating the `[OUTPUT TRUNCATED]` line or Inspect's notice that the output was too long. The nonce stays the same for the whole sample, so don't pass the agent anything that quotes it, such as a monitor explanation in a rejection message.
 
 ## Custom Prompts with generate()
 

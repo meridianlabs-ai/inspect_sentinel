@@ -244,7 +244,7 @@ async def step_as_str(
 
     Args:
         step: The step to render, usually from `preprocess_step()`.
-        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header and the `[TOOL CHOICE]` and `[OUTPUT TRUNCATED]` lines; none by default. Scout needs at least 8 characters.
+        nonce: A code the agent cannot guess, such as `secrets.token_hex(4)`, for every block marker and message header, the `[TOOL CHOICE]` and `[OUTPUT TRUNCATED]` lines and every hidden-messages marker; none by default. Scout needs at least 8 characters.
     """
     return await render_step(step, nonce=nonce, cut={})
 

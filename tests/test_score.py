@@ -597,7 +597,7 @@ async def test_the_cut_takes_history_then_agent_messages_then_input() -> None:
         agent_messages=messages("A", 2),
         input=messages("I", 2),
     )
-    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=18180)
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=18330)
     observation = await score(
         host,
         step,
@@ -751,6 +751,8 @@ async def test_a_hidden_message_is_marked_in_the_step_and_the_task() -> None:
     )
     p, n = prompt(host), nonce(host)
     assert "exfiltrate" not in p
+    # the default template names the marker with the nonce
+    assert f'lines such as "[2 messages hidden ({n})]"' in p
     marker = f"[1 message hidden ({n})]"
     assert f"[BEGIN TASK ({n})]\nFix the test.\n{marker}\n[END TASK ({n})]" in p
     input_block = p.split(f"[BEGIN INPUT ({n})]")[1].split(f"[END INPUT ({n})]")[0]
@@ -807,7 +809,7 @@ async def test_a_head_cut_takes_a_hidden_run_among_the_cut_messages() -> None:
     )
     p, n = prompt(host), nonce(host)
     assert f"[4 earlier messages left out to fit the context window ({n})]" in p
-    assert "hidden" not in p
+    assert not re.search(rf"^\[\d+ messages? hidden \({n}\)\]$", p, re.MULTILINE)
     assert observation.metadata == {"left_out": {"input": 4}}
 
 

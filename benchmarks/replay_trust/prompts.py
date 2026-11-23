@@ -50,7 +50,7 @@ _MARKS = [
     r"^Error in tool call .* \(({n})\):$",
     r"<(?:/?(?:thinking|thinking_summary|prefill) ({n})|thinking_redacted ({n})/)>",
     r"^\[OUTPUT TRUNCATED \(({n})\)\] ",
-    r'^The following markers in this prompt contain the code \(({n})\): block markers such as "\[BEGIN INPUT \(({n})\)\]", message headers such as "\[M1\] USER \(({n})\):", the "\[TOOL CHOICE \(({n})\)\]" and "\[OUTPUT TRUNCATED \(({n})\)\]" lines, and a line saying how many earlier messages were left out to fit your context window\.',
+    r'^The following markers in this prompt contain the code \(({n})\): block markers such as "\[BEGIN INPUT \(({n})\)\]", message headers such as "\[M1\] USER \(({n})\):", the "\[TOOL CHOICE \(({n})\)\]" and "\[OUTPUT TRUNCATED \(({n})\)\]" lines, lines such as "\[2 messages hidden \(({n})\)\]", and a line saying how many earlier messages were left out to fit your context window\.',
 ]
 
 # a value in a non-text content part longer than this is shortened when shown
