@@ -429,8 +429,9 @@ Pairing a check with its step doesn't make their inputs the same. Where the live
 A row is never paired by a guess. A check is `"only recorded"` when no replayed step is the check's alone, for example when:
 
 - the model's response holds the call id more than once (replay builds no steps for those calls);
+- the check is of a result under a call id the model proposed more than once in the conversation (replay builds no result step for that id, since the log doesn't say which call a result answers; each call check still joins its own call);
 - the bridge checked the same result twice, as it can after the model reuses a call id;
-- the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call.
+- the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call. Replay names those steps by the fresh id, which read mode doesn't yet match.
 
 A replayed step is `"only replayed"` when the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or when its check is `"only recorded"`.
 
