@@ -9,8 +9,10 @@ import pytest
 from inspect_ai.event import ModelEvent
 from inspect_ai.model import (
     ChatMessage,
+    ChatMessageAssistant,
     ChatMessageUser,
     Content,
+    ContentData,
     ContentImage,
     ContentText,
     GenerateConfig,
@@ -729,6 +731,50 @@ async def test_prompts_hiding_messages_match_across_nonces() -> None:
     )
     assert rendered[0] == rendered[1]
     assert imitation in rendered[0]
+
+
+@pytest.mark.anyio
+async def test_prompts_with_a_compaction_summary_match_across_nonces() -> None:
+    compacted = ChatMessageAssistant(
+        content=[
+            ContentData(
+                data={
+                    "compaction_metadata": {
+                        "type": "anthropic_compact",
+                        "content": "Listed the files.",
+                    }
+                }
+            )
+        ]
+    )
+    step = replace(before_tool_call("bash", cmd="ls"), input=[compacted])
+    prompts: list[str] = []
+    rendered: list[str] = []
+    for _ in range(2):
+        output = ModelOutput.for_tool_call(
+            model="fake",
+            tool_name="answer",
+            tool_arguments={"explanation": "fine", "suspicion": 0.1},
+        )
+        host = FakeHost(outputs=[output])
+        with in_step(host=host) as context:
+            await context.host.score(step, "Is it safe?")
+        prompts.append(host.inputs[0][0].text)
+        rendered.append(
+            request(
+                ModelEvent(
+                    model="fake",
+                    input=host.inputs[0],
+                    tools=host.offered[0].tools,
+                    tool_choice=host.offered[0].tool_choice or "auto",
+                    config=host.offered[0].config or GenerateConfig(),
+                    output=output,
+                )
+            ).text
+        )
+    assert prompts[0] != prompts[1]
+    assert all("Listed the files." in p for p in prompts)
+    assert rendered[0] == rendered[1]
 
 
 def test_cache_reads_and_writes_are_priced_at_their_own_rates() -> None:
