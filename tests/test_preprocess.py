@@ -1413,6 +1413,33 @@ async def test_unrenderable_counts_only_what_the_preprocessor_shows() -> None:
 
 
 @pytest.mark.anyio
+async def test_unrenderable_leaves_out_what_hide_messages_hides() -> None:
+    # a hidden message, and a hidden result of the step's own call, render as
+    # the marker, so an image in them is not shown as a placeholder; the
+    # placeholder for hidden messages keeps its position in the list
+    secret = ChatMessageUser(
+        content=[ContentText(text="secret"), IMAGE],
+        id="secret",
+        metadata={"red_team": True},
+    )
+    step = replace(
+        after_tool_call("bash", cmd="screenshot"),
+        input=[secret, holding("shown", IMAGE)],
+        result=ChatMessageTool(
+            content=[ContentText(text="taken"), IMAGE],
+            id="r",
+            function="bash",
+            metadata={"red_team": True},
+        ),
+    )
+    shown = await preprocess_step(step, HIDE)
+    assert unrenderable(shown) == [Unrenderable("input", 1, "shown", "image")]
+    rendered, _ = await step_as_str(shown, nonce="3f9a1c7e")
+    assert rendered.count("<image 3f9a1c7e />") == 1
+    assert rendered.count("[1 message hidden (3f9a1c7e)]") == 2
+
+
+@pytest.mark.anyio
 async def test_text_reasoning_and_tool_use_are_not_unrenderable() -> None:
     reasoning = ChatMessageAssistant(
         content=[

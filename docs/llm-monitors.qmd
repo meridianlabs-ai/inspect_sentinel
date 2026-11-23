@@ -345,7 +345,7 @@ For example, this monitor fails closed on any step it can't fully show:
 return await context.host.score(step, DIMENSIONS, on_unrenderable="flag")
 ```
 
-When the step is scored or flagged, the observation records what was shown as a placeholder in its `metadata`, counted by type for each part of the step, as `{"unrenderable": {"input": {"image": 2}, "result": {"image": 1}}}`. Only what the model would be shown counts: content in messages that the preprocessor's windows, omissions or `transform` leave out is not counted, nor is content in messages cut to fit the context window. Reasoning that the provider redacted is not counted either, since it is the agent's model's own hidden reasoning rather than content the agent was shown.
+When the step is scored or flagged, the observation records what was shown as a placeholder in its `metadata`, counted by type for each part of the step, as `{"unrenderable": {"input": {"image": 2}, "result": {"image": 1}}}`. Only what the model would be shown counts: content in messages that the preprocessor's windows, omissions or `transform` leave out is not counted, nor is content in messages that `hide_messages` hides (including a hidden tool result), which the model sees only as the [hidden-messages marker](#hiding-side-task-instructions), nor content in messages cut to fit the context window. Reasoning that the provider redacted is not counted either, since it is the agent's model's own hidden reasoning rather than content the agent was shown.
 
 A monitor that writes its own prompt can make the same test with `unrenderable()`, which lists each piece of such content in a preprocessed step, with the part of the step and the message that holds it:
 

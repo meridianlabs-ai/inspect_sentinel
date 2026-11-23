@@ -886,6 +886,39 @@ async def test_an_image_in_a_message_the_cut_drops_is_not_counted() -> None:
 
 
 @pytest.mark.anyio
+async def test_an_image_the_cut_drops_after_a_hidden_message_is_not_counted() -> None:
+    # the placeholder for the hidden message is a list position the cut's
+    # count of shown messages leaves out: the image is in the last message
+    # the cut drops, M3, the fifth position
+    secret = ChatMessageUser(content="secret", id="secret", metadata={"red_team": True})
+    image = ChatMessageUser(
+        content=[
+            ContentText(text=f"M3 {PAD}"),
+            ContentImage(image="data:image/png;base64,abc"),
+        ],
+        id="M3",
+    )
+    m = messages("M", 5)
+    step = replace(
+        before_tool_call("bash", cmd="ls"),
+        input=[m[0], secret, m[1], m[2], image, m[4]],
+    )
+    host = FakeHost(outputs=[answer(explanation="fine", suspicion=0.0)], budget=8600)
+    observation = await score(
+        host,
+        step,
+        "Safe?",
+        preprocessor=StepPreprocessor(hide_messages=red_team),
+        on_unrenderable="flag",
+    )
+    assert observation.metadata == {"left_out": {"input": 4}}
+    assert len(host.inputs) == 1
+    p, n = prompt(host), nonce(host)
+    input_block = p.split(f"[BEGIN INPUT ({n})]\n")[1].split(f"[END INPUT ({n})]")[0]
+    assert "<image" not in input_block and "[1 message hidden" not in input_block
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "stage", [before_tool_call("bash", cmd="ls"), after_tool_call("bash", cmd="ls")]
 )

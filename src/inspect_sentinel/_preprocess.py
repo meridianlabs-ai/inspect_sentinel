@@ -254,7 +254,7 @@ class Unrenderable:
     """The part of the step that holds it: one of its message lists, the assistant message that made the call at a tool stage, the reply after a generate, or the result after a tool call."""
 
     index: int
-    """The position of the message that holds it in that list; 0 for `call`, `reply` and `result`."""
+    """The position of the message that holds it in that list, where the placeholder message for each run of hidden messages (`StepPreprocessor.hide_messages`) takes one position; 0 for `call`, `reply` and `result`."""
 
     message_id: str | None
     """The id of the message that holds it."""
@@ -268,7 +268,7 @@ def unrenderable(step: Step) -> list[Unrenderable]:
 
     Images, audio, video, documents and provider data are rendered as a placeholder naming their type, such as `<image 3f9a1c7e />`, and so is a content type the renderer does not know. The monitor model sees that the content was there, but not what it holds. A monitor that must not judge a step it cannot fully show can test for this content, and fail closed when it finds some (`Host.score` does this with `on_unrenderable=`).
 
-    Count what the model is shown: pass the step as `preprocess_step()` returns it, so that content the windows, omissions or `transform` leave out is not counted. Reasoning the provider redacted is not counted: it renders as a `<thinking_redacted>` tag, or as its summary.
+    Count what the model is shown: pass the step as `preprocess_step()` returns it, so that content the windows, omissions or `transform` leave out is not counted, and neither is content in a message `hide_messages` hid or in a hidden result of the step's own call, which render as the hidden-messages marker. Reasoning the provider redacted is not counted: it renders as a `<thinking_redacted>` tag, or as its summary.
 
     Args:
         step: The step to check, usually from `preprocess_step()`.
@@ -288,7 +288,10 @@ def unrenderable(step: Step) -> list[Unrenderable]:
         found.extend(_unrenderable_in("reply", 0, reply))
     elif isinstance(step, BeforeToolCall | AfterToolCall):
         found.extend(_unrenderable_in("call", 0, _call(step)))
-        if isinstance(step, AfterToolCall):
+        # a hidden result renders as the hidden-messages marker
+        if isinstance(step, AfterToolCall) and not (
+            step.hidden is not None and step.hidden.result
+        ):
             found.extend(_unrenderable_in("result", 0, step.result))
     return found
 
@@ -352,6 +355,19 @@ def head_cut(step: Step, k: int) -> dict[_Source, int]:
     return counts
 
 
+def cut_start(messages: Sequence[ChatMessage], cut: HeadCut, source: _Source) -> int:
+    """The position in `messages`, the step's `source` list, of the first message a head cut keeps. The placeholders for hidden messages among the dropped messages, and those just after them, go with them, so the position can exceed the count the cut drops."""
+    dropped = cut.get(source, 0)
+    start = 0
+    while dropped and start < len(messages):
+        dropped -= not isinstance(messages[start], _Hidden)
+        start += 1
+    if start:
+        while start < len(messages) and isinstance(messages[start], _Hidden):
+            start += 1
+    return start
+
+
 async def render_step(
     step: Step, *, nonce: str | None, cut: HeadCut
 ) -> tuple[str, ExtractReferences]:
@@ -405,19 +421,9 @@ async def render_step(
         # top, and each cite still resolves to the kept message it names
         if messages is None:
             return unknown
-        dropped = cut.get(source, 0)
-        if not dropped:
+        if not cut.get(source, 0):
             return await text(messages, unknown)
-        # the placeholders among the dropped messages, and those just after
-        # them, go with them
-        messages = list(messages)
-        start = 0
-        while dropped and start < len(messages):
-            dropped -= not isinstance(messages[start], _Hidden)
-            start += 1
-        while start < len(messages) and isinstance(messages[start], _Hidden):
-            start += 1
-        kept = await text(messages[start:], unknown)
+        kept = await text(messages[cut_start(messages, cut, source) :], unknown)
         marker = (
             f"[{cut[source]} earlier messages left out to fit the context window{mark}]"
         )
