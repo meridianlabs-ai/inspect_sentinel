@@ -242,7 +242,9 @@ A file's path is recorded relative to the working directory when `human()` is cr
 human(stages=["tool_call"], channel="review_tools:ask_review_desk")
 ```
 
-A function you pass from such a module is recorded by the module's name in the same way. Naming it by module also suits a sentinel passed to `eval()` or `--sentinel` rather than made in the task file, whose file paths are relative to where you ran the eval, not to the task file.
+A function you pass from such a module is recorded by the module's name in the same way.
+
+From inspect_ai 0.3.293, a retry looks for a relative file next to the task file first, and then in the directory the retry runs in. So a sentinel passed to `eval()` or `--sentinel`, whose file paths are relative to where you ran the eval, is found too when you retry from there. If both places have a file with that name, the one next to the task file is used. Naming the function by module avoids any ambiguity.
 
 In a [configuration file](configuration.qmd), name the function as `module:function`, where the module can also be the path of a `.py` file:
 
