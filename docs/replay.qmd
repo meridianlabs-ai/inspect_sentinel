@@ -381,9 +381,9 @@ Logs written by older versions of inspect_ai, and transcripts from other sources
 
 ### Bridged Agents
 
-Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools, and replay doesn't yet rebuild their tool steps. Replay skips them, both for a tool the bridge runs on the host for the agent (a `bridged_tools` tool) and for one the agent runs itself. A warning names the skipped calls the log shows: those the bridge ran on the host, and those it checked. A tool the agent runs itself that the bridge didn't check leaves no trace in the log, so no warning names it. The bridge's model calls replay like any other agent's, and a person's decision at a skipped step still reaches the later steps of the conversation.
+Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-bridge.html) (such as Claude Code or Codex in a sandbox) run their own tools. Replay rebuilds their tool steps from the bridge's model calls (inspect_ai 0.3.292 and later), both for a tool the bridge runs on the host for the agent (a `bridged_tools` tool) and for one the agent runs itself. Each call is shown as the model wrote it, and each result as the model next received it, and both steps are named `<model call uuid>/<call id>`. Where a conversation's model calls proposed a call id more than once, replay can't tell which call a result answers, so it builds no `tool_result` step for that id. Calls sharing an id in one response get no steps, with a warning.
 
-In read mode, the bridge's checks of tool calls have rows of their own, keyed so they never match a replayed step of another call under the same id (see `metadata.step_id` in [Results](#results)).
+In read mode, the bridge's checks of tool calls have rows of their own, keyed by the check's execution, so they join no replayed row, not even the rebuilt step of the call they checked (see `metadata.step_id` in [Results](#results)).
 
 ### Sub-agents and Timelines
 

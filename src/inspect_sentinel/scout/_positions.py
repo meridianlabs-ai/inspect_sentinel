@@ -110,8 +110,8 @@ class Positions:
         span = event.span_id
         if span is not None and span in self._bridge_spans:
             # an agent bridge's check, of a call it handed to the agent or ran
-            # on the host: replay builds no step for it, so its key is never
-            # the bare call id, which a native call's steps can hold. It is the
+            # on the host: replay names its step by model call, so its key is
+            # never the bare call id, which a native call's steps can hold. It is the
             # execution the check names, else, for a result checked under an id
             # handed out more than once, the id of the sentinel span it was
             # reported in, which every report of the check shares
@@ -220,8 +220,8 @@ def _renamed(runs: list[tuple[str, str | None, bool]], checked: set[str]) -> set
 
 
 def _bridged(event: ToolEvent) -> bool:
-    # a host call a sandbox agent bridge ran, which replay builds no step for
-    # (inspect_ai's `_bridged`)
+    # a host call a sandbox agent bridge ran, whose steps replay builds from
+    # the bridge's model call, not from this event (inspect_ai's `_bridged`)
     return event.metadata is not None and "bridge" in event.metadata
 
 
