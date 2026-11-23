@@ -1,4 +1,5 @@
 import functools
+import importlib.metadata
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Generator
@@ -13,6 +14,7 @@ from inspect_ai import eval, eval_retry
 from inspect_ai.log import SentinelConfig
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
+from packaging.version import Version
 
 from inspect_sentinel import (
     Context,
@@ -452,6 +454,115 @@ def test_a_decorated_channel_in_a_task_file_is_found_again_on_retry(
         }
     )
     assert retried_log.status == "success", retried_log.error
+
+
+# a task file in a subdirectory whose channel is the task file's own function,
+# or a file beside it named by its relative path; the sample fails once, so
+# the retry runs it and asks the channel
+SUBDIRECTORY_TASK_FILE = """\
+from pathlib import Path
+
+from inspect_ai import Task, task
+from inspect_ai.dataset import Sample
+from inspect_ai.solver import generate, solver
+
+from inspect_sentinel import HumanAnswer, human
+
+FAILED_ONCE = Path(__file__).parent / "failed_once"
+
+
+async def ask(question):
+    return HumanAnswer("approve", "approved by the task file's channel")
+
+
+@solver
+def fail_once():
+    async def solve(state, generate):
+        if not FAILED_ONCE.exists():
+            FAILED_ONCE.touch()
+            raise RuntimeError("the first attempt fails")
+        return state
+
+    return solve
+
+
+@task
+def plain():
+    return Task(
+        dataset=[Sample(input="hello")],
+        solver=[fail_once(), generate()],
+        sentinel=human(["model_input"], channel=CHANNEL),
+    )
+"""
+
+BESIDE_FILE = """\
+from inspect_sentinel import HumanAnswer
+
+
+async def ask(question):
+    return HumanAnswer("approve", "approved by the channel beside the task file")
+"""
+
+
+def _inspect_ai_version() -> Version:
+    return Version(importlib.metadata.version("inspect-ai"))
+
+
+@pytest.mark.skipif(
+    _inspect_ai_version() < Version("0.3.293"),
+    reason="before inspect-ai 0.3.293, eval_retry() rebuilds the logged sentinel outside the task file's directory, so a channel named by a path relative to it is not found",
+)
+@pytest.mark.parametrize(
+    ("channel", "recorded", "reason"),
+    [
+        ("ask", "plain_task.py:ask", "approved by the task file's channel"),
+        (
+            '"review.py:ask"',
+            "review.py:ask",
+            "approved by the channel beside the task file",
+        ),
+    ],
+)
+@pytest.mark.parametrize("retry_from", ["parent", "elsewhere"])
+def test_a_channel_named_relative_to_a_task_file_in_a_subdirectory_is_found_on_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    recorded: str,
+    reason: str,
+    retry_from: str,
+) -> None:
+    tasks = tmp_path / "project" / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / "plain_task.py").write_text(
+        SUBDIRECTORY_TASK_FILE.replace("CHANNEL", channel)
+    )
+    (tasks / "review.py").write_text(BESIDE_FILE)
+    if retry_from == "parent":
+        monkeypatch.chdir(tmp_path / "project")
+        task = "tasks/plain_task.py"
+    else:
+        # outside the project the log records the task file by its absolute
+        # path; the retry runs from yet another directory
+        (tmp_path / "run").mkdir()
+        (tmp_path / "retry").mkdir()
+        monkeypatch.chdir(tmp_path / "run")
+        task = str(tasks / "plain_task.py")
+
+    log = eval(task, model="mockllm/model", log_dir=str(tmp_path / "logs"))[0]
+    if retry_from == "elsewhere":
+        monkeypatch.chdir(tmp_path / "retry")
+    retried_log = eval_retry(log, log_dir=str(tmp_path / "logs"))[0]
+
+    assert log.status == "error"
+    # recorded relative to the task file's directory, where the task was made
+    assert log.eval.config.sentinel == SentinelConfig.model_validate(
+        {"name": "human", "params": {"stages": ["model_input"], "channel": recorded}}
+    )
+    assert retried_log.status == "success", retried_log.error
+    assert retried_log.eval.config.sentinel == log.eval.config.sentinel
+    assert retried_log.samples is not None
+    assert reason in retried_log.samples[0].model_dump_json()
 
 
 SCRIPT = """\

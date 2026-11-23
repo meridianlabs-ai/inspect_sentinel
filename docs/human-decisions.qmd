@@ -218,7 +218,7 @@ async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
     return HumanAnswer("terminate", "Nobody answered within 30 minutes.")
 ```
 
-The wait is cancelled if the sample is cancelled or reaches its time limit, or if another protocol in the same `concurrent()` ends the sample first. Nothing is decided then. Withdraw the question from your tool when that happens, so nobody answers a question that is no longer waiting. Cleanup that awaits needs a shielded cancel scope:
+The wait is cancelled if the sample is cancelled or reaches its time limit, or if another protocol in the same `concurrent()` ends the sample first. Nothing is decided then. Withdraw the question from your tool when that happens, so nobody spends time on a question that no longer matters. Cleanup that awaits needs a shielded cancel scope:
 
 ```python
 async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
@@ -235,6 +235,8 @@ async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
 ### Naming the Tool in a Configuration File
 
 The function must be defined at module level in a module or a `.py` file, because the log records it by name and `eval_retry()` and replays find it again by that name. A function defined inside another function, or typed into a REPL, a notebook or `python -c`, raises an error when `human()` is created. A function in a script you run with `python` is recorded by the script's path, and a retry or a replay in another process runs the script's top-level code again to find it, so keep the code that runs the eval under `if __name__ == "__main__":`.
+
+A file's path is recorded relative to the working directory when `human()` is created. For a sentinel made in a task file, that is the task file's directory, since Inspect changes into it while it loads the task, and a retry looks for the file from there again. Until inspect_ai 0.3.293, `eval_retry()` and `inspect eval-retry` look for it from the directory you run the retry in instead: a task file in another directory (`inspect eval tasks/review_task.py`) whose channel is a function in it, or a file beside it named by its path, is not found when you retry from where you ran the eval. Run the retry from the task file's directory, or name the function by its module (`review_tools:ask_review_desk`) rather than by a file's path. Naming it by module also suits a sentinel passed to `eval()` or `--sentinel` rather than made in the task file, whose file paths are relative to where you ran the eval, not to the task file.
 
 In a [configuration file](configuration.qmd), name the function as `module:function`, where the module can also be the path of a `.py` file:
 
@@ -253,7 +255,7 @@ sentinel:
 
 Your tool is never asked during a [replay](replay.qmd#human-decisions-in-replay). A replay gives the answer recorded when the eval ran, or the fixed answer or stand-in you pass to `as_scanner()`, as it does for any `human()`. The module that defines the function must still be importable where you run the scan, because the replay builds the sentinel from its configuration. Your tool cannot be offered `"modify"` yet.
 
-When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead. The wait is cancelled when the eval ends the sample, or when a sentinel ends the agent's run (for example its session, when the sidecar names runs by a header). If your tool raises an error in the sidecar, the call isn't judged, and the proxy's own setting decides whether it goes ahead, as for any error in the sentinel.
+When the sentinel runs in a sentinel sidecar beside a proxy, the agent's model call stays open while your tool waits, and the wait counts toward the sidecar's judging timeout. For long waits there, let the sidecar ask through the eval instead. The wait is cancelled when the eval ends the sample, or when a sentinel ends the agent's run (for example its session, when the sidecar names runs by a header). Otherwise a person could spend time on a question that no longer matters, and since the sidecar runs for a long time, a wait whose run had ended would never end, and one more would pile up for every run that ends mid-question. If your tool raises an error in the sidecar, the call isn't judged, and the proxy's own setting decides whether it goes ahead, as for any error in the sentinel.
 
 ## A Person Beside Other Protocols
 
