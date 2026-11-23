@@ -22,8 +22,11 @@ dependencies = [
     "inspect-ai>=0.3.291",
     # step_as_str, and so Host.score, renders with Scout's messages_as_str and
     # message_numbering, until message rendering moves from Scout into
-    # inspect_ai (design/pr-series.md).
-    "inspect-scout>=0.6.2",
+    # inspect_ai (design/pr-series.md). 0.6.4 is the first release that
+    # renders a model provider's compaction as <compaction_summary> or
+    # <compaction_unreadable /> tags carrying the nonce, which the default
+    # template explains.
+    "inspect-scout>=0.6.4",
     # Host.score's templates are Jinja. Scout depends on it too, but it is
     # imported directly here, and a transitive dependency is not a promise.
     "jinja2>=3.0",
@@ -71,8 +74,8 @@ anthropic = ["anthropic>=2.0.0"]
 # dependency already, for step_as_str; this extra names the first Scout
 # release that loads a scanner's timelines only when it asks for them, which
 # as_scanner(timeline=) does, and reads back a scan whose resultsets are all
-# empty (0.6.2).
-scout = ["inspect-scout>=0.6.2"]
+# empty (0.6.2). The runtime floor above is higher, so the extra names it too.
+scout = ["inspect-scout>=0.6.4"]
 openai = ["openai>=3.4.0"]
 # The docs tools are in `doc`, which `dev` leaves out: CI installs `dev` and
 # never builds the docs, and quarto-cli has no wheel, so installing it builds it
