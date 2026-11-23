@@ -37,8 +37,9 @@ _NONCE = re.compile(r"^\[BEGIN .* \(([0-9a-f]{8})\)\]$", re.MULTILINE)
 # where Host.score and Scout write the nonce, with `{n}` for it: block markers,
 # the left-out and hidden-messages marker lines, the tool choice line, message
 # headers (an uppercased role label), tool call, tool use and tool error lines,
-# reasoning and prefill tags, and the default template's sentence naming it. Each nonce is a group, and only those are
-# replaced, so the same characters elsewhere stay as they were
+# reasoning and prefill tags, and the default template's sentence naming it.
+# Each nonce is a group, and only those are replaced, so the same characters
+# elsewhere stay as they were
 _MARKS = [
     r"^\[(?:BEGIN|END) .* \(({n})\)\]$",
     r"^\[\d+ earlier messages left out to fit the context window \(({n})\)\]$",
