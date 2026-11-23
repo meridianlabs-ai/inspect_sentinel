@@ -236,7 +236,13 @@ async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
 
 The function must be defined at module level in a module or a `.py` file, because the log records it by name and `eval_retry()` and replays find it again by that name. A function defined inside another function, or typed into a REPL, a notebook or `python -c`, raises an error when `human()` is created. A function in a script you run with `python` is recorded by the script's path, and a retry or a replay in another process runs the script's top-level code again to find it, so keep the code that runs the eval under `if __name__ == "__main__":`.
 
-A file's path is recorded relative to the working directory when `human()` is created. For a sentinel made in a task file, that is the task file's directory, since Inspect changes into it while it loads the task, and a retry looks for the file from there again. Until inspect_ai 0.3.293, `eval_retry()` and `inspect eval-retry` look for it from the directory you run the retry in instead: a task file in another directory (`inspect eval tasks/review_task.py`) whose channel is a function in it, or a file beside it named by its path, is not found when you retry from where you ran the eval. Run the retry from the task file's directory, or name the function by its module (`review_tools:ask_review_desk`) rather than by a file's path. Naming it by module also suits a sentinel passed to `eval()` or `--sentinel` rather than made in the task file, whose file paths are relative to where you ran the eval, not to the task file.
+A file's path is recorded relative to the working directory when `human()` is created. For a sentinel made in a task file, that is the task file's directory, since Inspect changes into it while it loads the task, and a retry looks for the file from there again. Until inspect_ai 0.3.293, `eval_retry()` and `inspect eval-retry` look for it from the directory you run the retry in instead: a task file in another directory (`inspect eval tasks/review_task.py`) whose channel is a function in it, or a file beside it named by its path, is not found on retry. To avoid it, name the function by a module that imports where the retry runs (an installed package, or one on the Python path), rather than by a file's path:
+
+```python
+human(stages=["tool_call"], channel="review_tools:ask_review_desk")
+```
+
+A function you pass from such a module is recorded by the module's name in the same way. Naming it by module also suits a sentinel passed to `eval()` or `--sentinel` rather than made in the task file, whose file paths are relative to where you ran the eval, not to the task file.
 
 In a [configuration file](configuration.qmd), name the function as `module:function`, where the module can also be the path of a `.py` file:
 
