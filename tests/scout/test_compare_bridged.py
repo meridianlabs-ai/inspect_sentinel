@@ -1,3 +1,4 @@
+import json
 from itertools import count
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -7,6 +8,7 @@ from inspect_ai import Task, eval
 from inspect_ai.agent import Agent, AgentState, agent, agent_bridge, as_solver
 from inspect_ai.dataset import Sample
 from inspect_ai.event import ModelEvent
+from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_ai.model import (
     ChatCompletionChoice,
     ChatMessageAssistant,
@@ -37,6 +39,7 @@ from inspect_sentinel.scout import (
     replay_check,
     replay_check_differences,
 )
+from inspect_sentinel.scout._probe import _hash
 
 Row = dict[str, Any]
 Client = Literal["openai", "anthropic"]
@@ -687,3 +690,68 @@ def test_replay_check_matches_a_bridge_check_with_the_step_it_checked(
 
     # replay hands a monitor the call and result a live bridge check saw
     assert differences.empty
+
+
+def assistant_messages(frame: Any) -> list[tuple[str, str, str]]:
+    # each tool step's stage, step id and assistant_message digest, from
+    # replay_check() rows
+    found: list[tuple[str, str, str]] = []
+    for row in records(frame):
+        stage = str(row["metadata.stage"])
+        if not stage.startswith("tool"):
+            continue
+        metadata = row["metadata.metadata"]
+        metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+        found.append(
+            (stage, str(row["metadata.step_id"]), metadata["step"]["assistant_message"])
+        )
+    return found
+
+
+def test_replay_gives_a_renamed_call_the_assistant_message_the_bridge_handed_over(
+    tmp_path: Path,
+) -> None:
+    # the second turn reuses "a" for another call, so the bridge hands it over
+    # under a fresh id, which it records on the model call
+    first, second, _ = run(
+        tmp_path,
+        [calls("a"), calls("a", path="other")],
+        "openai",
+        observe_only(replay_check()),
+    )
+    [log] = list_eval_logs(str(tmp_path / "logs"))
+    sample = read_eval_log(log).samples
+    assert sample is not None
+    [renamed] = [
+        e
+        for e in sample[0].events
+        if isinstance(e, ModelEvent) and str(e.uuid) == second
+    ]
+    assert renamed.agent_tool_call_ids is not None
+    [fresh] = renamed.agent_tool_call_ids
+    assert fresh != "a"
+    frames = scanned(
+        tmp_path,
+        replayed=as_scanner(replay_check()),
+        recorded=as_reader("replay_check"),
+    )
+    replayed = assistant_messages(frames["replayed"])
+    recorded = assistant_messages(frames["recorded"])
+
+    # replay names the renamed call's steps by its fresh id, and builds no
+    # result step for "a", which the conversation proposed twice
+    assert sorted((stage, step) for stage, step, _ in replayed) == sorted(
+        [
+            ("tool_call", f"{first}/a"),
+            ("tool_call", f"{second}/{fresh}"),
+            ("tool_result", f"{second}/{fresh}"),
+        ]
+    )
+    # its two steps have the message the bridge handed over, under the fresh
+    # id, not the model's message as logged, and the live checks had it too
+    [handed] = {digest for _, step, digest in replayed if step == f"{second}/{fresh}"}
+    assert handed != _hash(renamed.output.message)
+    assert [digest for stage, _, digest in recorded if stage == "tool_call"].count(
+        handed
+    ) == 1
+    assert handed in {digest for stage, _, digest in recorded if stage == "tool_result"}
