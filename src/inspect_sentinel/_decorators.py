@@ -464,7 +464,7 @@ _RECORDED_AS = "__inspect_sentinel_recorded_as__"
 def recorded_as(**converters: Callable[[object], object]) -> Callable[[F], F]:
     # A factory's opt-in to record the named params through a converter, for
     # a param whose argument the registry cannot record so that a
-    # configuration rebuilds it: human(surface=) records a function by the
+    # configuration rebuilds it: human(channel=) records a function by the
     # name it finds it by again. Applied below `@monitor` or `@protocol`.
     def decorate(factory: F) -> F:
         setattr(factory, _RECORDED_AS, converters)

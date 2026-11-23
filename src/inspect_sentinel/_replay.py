@@ -235,7 +235,7 @@ class _Recorder:
 class _ReplayHost(AnswersFromRecord):
     # one per transcript, whose steps run one at a time, so the step being
     # replayed is the one begin() was last given; it answers human() even
-    # where human() names a surface, since nobody can be asked in a replay
+    # where human() names a channel, since nobody can be asked in a replay
     def __init__(self, eval: EvalContext | None, human: HumanFallback) -> None:
         self._eval = eval
         self._human = human

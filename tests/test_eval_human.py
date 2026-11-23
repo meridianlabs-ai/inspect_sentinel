@@ -614,13 +614,13 @@ def _decisions_seen(seen: list[Seen]) -> list[tuple[Any, ...]]:
     ]
 
 
-def test_a_surfaces_answer_is_recorded_and_seen_later_as_a_panel_answer(
+def test_a_channels_answer_is_recorded_and_seen_later_as_a_panel_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     panel = Panel("approve", "approved at the team's desk")
     panel.install(monkeypatch)
     by_panel: list[Seen] = []
-    by_surface: list[Seen] = []
+    by_channel: list[Seen] = []
 
     panel_log = run(
         [
@@ -628,20 +628,20 @@ def test_a_surfaces_answer_is_recorded_and_seen_later_as_a_panel_answer(
             observe_only([h_spy(by_panel)]),
         ]
     )
-    surface_log = run(
+    channel_log = run(
         [
             sequential(
-                [h_escalate(), human(stages=["tool_call"], surface=h_desk_approves)]
+                [h_escalate(), human(stages=["tool_call"], channel=h_desk_approves)]
             ),
-            observe_only([h_spy(by_surface)]),
+            observe_only([h_spy(by_channel)]),
         ]
     )
 
-    assert panel_log.status == surface_log.status == "success", surface_log.error
+    assert panel_log.status == channel_log.status == "success", channel_log.error
     # only the first run asked through the panel
     assert len(panel.choices) == 1
-    assert _human_events(surface_log) == _human_events(panel_log)
-    assert _human_events(surface_log) == [
+    assert _human_events(channel_log) == _human_events(panel_log)
+    assert _human_events(channel_log) == [
         (
             "sequential/human",
             "tool_call",
@@ -653,22 +653,22 @@ def test_a_surfaces_answer_is_recorded_and_seen_later_as_a_panel_answer(
             None,
         )
     ]
-    assert _decisions_seen(by_surface) == _decisions_seen(by_panel)
+    assert _decisions_seen(by_channel) == _decisions_seen(by_panel)
     assert (
         "tool_result",
         [("tool_call", "human", "proceed", "approved at the team's desk")],
-    ) in _decisions_seen(by_surface)
-    assert [m.text for m in tool_messages(surface_log)] == ["2"]
+    ) in _decisions_seen(by_channel)
+    assert [m.text for m in tool_messages(channel_log)] == ["2"]
 
 
-def test_a_surface_that_raises_fails_the_sample_before_the_call_runs(
+def test_a_channel_that_raises_fails_the_sample_before_the_call_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     panel = Panel("approve")
     panel.install(monkeypatch)
 
     log = run(
-        sequential([h_escalate(), human(stages=["tool_call"], surface=h_desk_down)])
+        sequential([h_escalate(), human(stages=["tool_call"], channel=h_desk_down)])
     )
 
     assert log.status == "error"

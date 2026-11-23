@@ -46,7 +46,7 @@ class HumanAnswer:
     """The choice the person picked, one of the `choices` they were offered (`approve`, `reject`, `terminate` or `modify`), or, when the person ended the prompt without one of them, `reject` if it was offered and `terminate` otherwise."""
 
     reason: str | None = None
-    """The reason the surface gives for the answer, if any: the person's typed reason, or fixed text such as "Human operator rejected the tool call."."""
+    """The reason the channel gives for the answer, if any: the person's typed reason, or fixed text such as "Human operator rejected the tool call."."""
 
     modified: ToolCall | None = None
     """The replacement call, when the person chose `modify` at a tool stage."""
@@ -54,7 +54,7 @@ class HumanAnswer:
 
 @dataclass(frozen=True)
 class HumanQuestion:
-    """What `human()` hands a `HumanSurface`: the step to decide about, with everything the person needs to decide it."""
+    """What `human()` hands a `HumanChannel`: the step to decide about, with everything the person needs to decide it."""
 
     stage: Literal["tool_call", "tool_result", "model_input", "model_output"]
     """The stage being asked about, as `SentinelEvent.stage` records it: `"tool_call"` (before a tool call), `"tool_result"` (after it), `"model_input"` (before a generate) or `"model_output"` (after a generate)."""
@@ -69,14 +69,14 @@ class HumanQuestion:
     """What the person may pick, from `approve`, `reject` and `terminate`, in the order to present them."""
 
     eval: EvalContext | None
-    """The task and sample being run, as `Context.eval` holds it, so a surface can say which sample is waiting. None outside an eval, for example beside a proxy with no eval named."""
+    """The task and sample being run, as `Context.eval` holds it, so a channel can say which sample is waiting. None outside an eval, for example beside a proxy with no eval named."""
 
     proxy: ProxyContext | None
     """What a proxy says about the model request the step was found in, as `Context.proxy` holds it. None in an eval's own process."""
 
 
-HumanSurface: TypeAlias = Callable[[HumanQuestion], Awaitable[HumanAnswer]]
-"""Where `human(surface=)` asks a person instead of the host: an `async` function that hands the question to a team's own review tool and returns the person's answer. It answers one of the question's `choices`, or `terminate` when it cannot reach anyone."""
+HumanChannel: TypeAlias = Callable[[HumanQuestion], Awaitable[HumanAnswer]]
+"""Where `human(channel=)` asks a person instead of the host: an `async` function that hands the question to a team's own review tool and returns the person's answer. It answers one of the question's `choices`, or `terminate` when it cannot reach anyone."""
 
 
 class HostNative(TypingProtocol):
@@ -303,7 +303,7 @@ class Host(HostNative):
 class AnswersFromRecord:
     # a host whose `ask_human` gives the answers recorded when the run was
     # recorded, as a replay does, and never asks a person; human() asks it in
-    # place of a surface of its own
+    # place of a channel of its own
     pass
 
 
@@ -311,29 +311,29 @@ def answers_from_record(host: Host) -> bool:
     return isinstance(host._native, AnswersFromRecord)  # pyright: ignore[reportPrivateUsage]
 
 
-# What a host that must know while human() waits on a surface sets around
+# What a host that must know while human() waits on a channel sets around
 # run_sentinel: the sidecar, which cancels such a wait when the eval ends the
 # sample or a sentinel ends the run, as it cancels its own questions to a
-# person. human() enters it around each call to a surface.
-SurfaceWait: TypeAlias = Callable[[], AbstractAsyncContextManager[None]]
+# person. human() enters it around each call to a channel.
+ChannelWait: TypeAlias = Callable[[], AbstractAsyncContextManager[None]]
 
-_surface_wait: ContextVar[SurfaceWait | None] = ContextVar(
-    "inspect_sentinel_surface_wait", default=None
+_channel_wait: ContextVar[ChannelWait | None] = ContextVar(
+    "inspect_sentinel_channel_wait", default=None
 )
 
 
 @contextmanager
-def watching_surfaces(wait: SurfaceWait) -> Generator[None]:
-    token = _surface_wait.set(wait)
+def watching_channels(wait: ChannelWait) -> Generator[None]:
+    token = _channel_wait.set(wait)
     try:
         yield
     finally:
-        _surface_wait.reset(token)
+        _channel_wait.reset(token)
 
 
 @asynccontextmanager
-async def surface_wait() -> AsyncGenerator[None]:
-    wait = _surface_wait.get()
+async def channel_wait() -> AsyncGenerator[None]:
+    wait = _channel_wait.get()
     if wait is None:
         yield
         return

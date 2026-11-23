@@ -1,7 +1,7 @@
 ---
 title: "Human Decisions"
 description: "Asking a person to decide about a step with human(), and handling escalations with handle_escalation()."
-llms-description: "human() and its stages (tool_call, tool_result, model_input, model_output) and choices, escalating to a person in a sequential(), whole-turn review, reviewing a model request, what the person sees, asking through your own review tool with human(surface=) and HumanQuestion, a person beside other protocols in concurrent(), step.human_decisions, handle_escalation(), and unhandled escalations."
+llms-description: "human() and its stages (tool_call, tool_result, model_input, model_output) and choices, escalating to a person in a sequential(), whole-turn review, reviewing a model request, what the person sees, asking through your own review tool with human(channel=) and HumanQuestion, a person beside other protocols in concurrent(), step.human_decisions, handle_escalation(), and unhandled escalations."
 ---
 
 ## Overview
@@ -106,7 +106,7 @@ When the agent tries to delete files, the eval pauses and asks you to approve, r
 | `"model_input"` | `approve`, `terminate` |
 | `"model_output"` | `approve`, `terminate` |
 
-`reject` is offered only before a tool call (see [Actions](protocols.qmd#actions)), and rejecting a request or a whole turn is not supported. Offering a choice a stage doesn't allow raises an error when `human()` is created. `"modify"` is accepted before a tool call, but Inspect's approval surfaces cannot edit a tool call, so offering it raises an error when the person is asked. [Your own review tool](#your-own-review-tool) cannot be offered `"modify"` yet either.
+`reject` is offered only before a tool call (see [Actions](protocols.qmd#actions)), and rejecting a request or a whole turn is not supported. Offering a choice a stage doesn't allow raises an error when `human()` is created. `"modify"` is accepted before a tool call, but Inspect's approval channels cannot edit a tool call, so offering it raises an error when the person is asked. [Your own review tool](#your-own-review-tool) cannot be offered `"modify"` yet either.
 
 The answer maps to a decision: `approve` to `proceed`, `reject` to `reject`, and `terminate` to `terminate`. The reason recorded with the answer becomes the decision's explanation, and on a reject it is also the message the agent receives. The person doesn't enter a reason: the approval panel and console record a fixed text, such as "Human operator rejected the tool call.", and an ACP client (an editor or tool that speaks the [Agent Client Protocol](https://inspect.aisi.org.uk/intervention.html)) records none, so the agent is told "Tool call not approved."
 
@@ -142,19 +142,19 @@ Here `request_triage()` stands for a rule of your own at `BeforeGenerate`: it re
 
 ## What the Person Sees
 
-The person is asked through Inspect's human approval surfaces: an attached ACP client, the approval panel in the full-screen display, or the console otherwise (for example, with `--display plain`). The prompt shows the tool call, the escalations that led to it, and, after a tool call, its result. At `"model_output"` it shows the turn's text, the escalations, and each tool call as a numbered code block. At `"model_input"` it shows the escalations, the tools offered, and each message not sent before as a numbered code block.
+The person is asked through Inspect's human approval channels: an attached ACP client, the approval panel in the full-screen display, or the console otherwise (for example, with `--display plain`). The prompt shows the tool call, the escalations that led to it, and, after a tool call, its result. At `"model_output"` it shows the turn's text, the escalations, and each tool call as a numbered code block. At `"model_input"` it shows the escalations, the tools offered, and each message not sent before as a numbered code block.
 
 Characters that change how text displays, such as terminal escape sequences and zero-width characters, appear in the prompt as a marker of their code point, such as `‹U+001B›`.
 
 ## Your Own Review Tool
 
-If your team already has a tool for reviewing agent actions, such as a web app or a chat bot, `human()` can ask through it instead of Inspect's approval surfaces. For example, you might want to:
+If your team already has a tool for reviewing agent actions, such as a web app or a chat bot, `human()` can ask through it instead of Inspect's approval channels. For example, you might want to:
 
 1.  Keep using the review interface your team already knows.
 2.  Show reviewers every monitor's score, or your own rendering of a turn.
 3.  Let reviewers type the reason the agent is told on a reject.
 
-Pass the tool as `surface`, an `async` function that takes a `HumanQuestion` and returns the person's `HumanAnswer`. Here `review_desk` stands for your team's client for its review tool:
+Pass the tool as `channel`, an `async` function that takes a `HumanQuestion` and returns the person's `HumanAnswer`. Here `review_desk` stands for your team's client for its review tool:
 
 ```python
 from inspect_sentinel import HumanAnswer, HumanQuestion, human, sequential
@@ -175,7 +175,7 @@ async def ask_review_desk(question: HumanQuestion) -> HumanAnswer:
 Task(
     ...,
     sentinel=sequential(
-        [triage(), human(stages=["tool_call"], surface=ask_review_desk)]
+        [triage(), human(stages=["tool_call"], channel=ask_review_desk)]
     ),
 )
 ```
@@ -246,7 +246,7 @@ sentinel:
     - name: human
       params:
         stages: [tool_call]
-        surface: review_tools:ask_review_desk
+        channel: review_tools:ask_review_desk
 ```
 
 ### Limits

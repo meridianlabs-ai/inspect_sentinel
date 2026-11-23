@@ -3226,11 +3226,11 @@ async def desk_approves(question: HumanQuestion) -> HumanAnswer:
 
 
 @pytest.mark.anyio
-async def test_a_human_with_a_surface_asks_it_instead_of_the_evals_approval_ui() -> (
+async def test_a_human_with_a_channel_asks_it_instead_of_the_evals_approval_ui() -> (
     None
 ):
     handler = Handler(
-        sequential([escalates(), human(stages=["tool_call"], surface=desk_approves)])
+        sequential([escalates(), human(stages=["tool_call"], channel=desk_approves)])
     )
     async with _serving(handler):
         await handler.request(_from_eval())
@@ -3270,7 +3270,7 @@ def _waits_at_desk(**options: Any) -> tuple[Handler, _Desk]:
     desk = _Desk()
     _desk.set(desk)
     handler = Handler(
-        sequential([escalates(), human(stages=["tool_call"], surface=desk_waits)]),
+        sequential([escalates(), human(stages=["tool_call"], channel=desk_waits)]),
         **options,
     )
     return handler, desk
@@ -3278,7 +3278,7 @@ def _waits_at_desk(**options: Any) -> tuple[Handler, _Desk]:
 
 @pytest.mark.parametrize("eval_results", [True, False])
 @pytest.mark.anyio
-async def test_ending_the_sample_withdraws_a_surfaces_question(
+async def test_ending_the_sample_withdraws_a_channels_question(
     eval_results: bool,
 ) -> None:
     # with eval results the judging runs in the handler's own task; without,
@@ -3320,17 +3320,17 @@ def _in_session(asked: Request, session: str) -> Request:
 
 @pytest.mark.parametrize("late", [False, True], ids=["waiting", "not_yet_asked"])
 @pytest.mark.anyio
-async def test_ending_a_proxy_session_withdraws_its_surfaces_question(
+async def test_ending_a_proxy_session_withdraws_its_channels_question(
     late: bool,
 ) -> None:
     # An ordinary proxy client, whose run a header names: the session ends at
     # its Bergen lookup while its Oslo lookup waits for a person, or before the
-    # Oslo lookup's judging reaches the surface. Another session goes on.
+    # Oslo lookup's judging reaches the channel. Another session goes on.
     reached, go = anyio.Event(), anyio.Event()
     links: list[Sentinel] = [ends_at_bergen()]
     if late:
         links.append(waits_at("toolu_1", reached, go))
-    links.append(human(stages=["tool_call"], surface=desk_waits))
+    links.append(human(stages=["tool_call"], channel=desk_waits))
     handler = Handler(sequential(links), run_header=_SESSION)
     first, other = _Desk(), _Desk()
     answers: dict[str, Answer] = {}
@@ -3347,7 +3347,7 @@ async def test_ending_a_proxy_session_withdraws_its_surfaces_question(
             group.start_soon(judge, "a", first)
             group.start_soon(judge, "o", other)
             if late:
-                # both lookups wait in the link before the surface
+                # both lookups wait in the link before the channel
                 await reached.wait()
             else:
                 await first.asked.wait()
@@ -3409,7 +3409,7 @@ def stops_when_told() -> Protocol:
 def _asks_before_each_request(state: MemoryState, **options: Any) -> Handler:
     return Handler(
         sequential(
-            [stops_when_told(), human(stages=["model_input"], surface=desk_waits)]
+            [stops_when_told(), human(stages=["model_input"], channel=desk_waits)]
         ),
         state=state,
         **options,
@@ -3417,12 +3417,12 @@ def _asks_before_each_request(state: MemoryState, **options: Any) -> Handler:
 
 
 @pytest.mark.anyio
-async def test_a_proxy_session_ended_while_a_request_is_prepared_asks_no_surface() -> (
+async def test_a_proxy_session_ended_while_a_request_is_prepared_asks_no_channel() -> (
     None
 ):
     # The request passes the check that its session hasn't ended, then waits
     # on the state while it is prepared; meanwhile another request ends the
-    # session. Its judging then reaches the surface, which isn't asked.
+    # session. Its judging then reaches the channel, which isn't asked.
     state = _PausingState("a", pause_at=1)
     handler = _asks_before_each_request(state, run_header=_SESSION)
     desk = _Desk()
@@ -3449,7 +3449,7 @@ async def test_a_proxy_session_ended_while_a_request_is_prepared_asks_no_surface
 
 @pytest.mark.parametrize("eval_results", [True, False])
 @pytest.mark.anyio
-async def test_a_sample_ended_while_a_request_is_prepared_asks_no_surface(
+async def test_a_sample_ended_while_a_request_is_prepared_asks_no_channel(
     eval_results: bool,
 ) -> None:
     # The same for an eval's request, paused at the recorder's second call,
@@ -3476,7 +3476,7 @@ async def test_a_sample_ended_while_a_request_is_prepared_asks_no_surface(
 
 
 @pytest.mark.anyio
-async def test_the_judging_timeout_withdraws_a_surfaces_question() -> None:
+async def test_the_judging_timeout_withdraws_a_channels_question() -> None:
     handler, desk = _waits_at_desk(judging_timeout=0.05)
     await handler.request(request())
 

@@ -19,8 +19,8 @@ from inspect_sentinel import (
     Decision,
     Escalations,
     HumanAnswer,
+    HumanChannel,
     HumanQuestion,
-    HumanSurface,
     Monitor,
     Observation,
     Protocol,
@@ -95,9 +95,9 @@ def not_async(question: HumanQuestion) -> HumanAnswer:
     return HumanAnswer("approve")
 
 
-def desk_for(channel: str) -> HumanSurface:
+def desk_for(room: str) -> HumanChannel:
     async def ask(question: HumanQuestion) -> HumanAnswer:
-        return HumanAnswer("approve", f"approved in {channel}")
+        return HumanAnswer("approve", f"approved in {room}")
 
     return ask
 
@@ -159,12 +159,12 @@ async def _run(
     ],
 )
 @pytest.mark.anyio
-async def test_the_surface_is_asked_at_each_stage_in_place_of_the_host(
+async def test_the_channel_is_asked_at_each_stage_in_place_of_the_host(
     stage: str, step: Step, choices: tuple[str, ...]
 ) -> None:
     with desk(HumanAnswer("approve")) as asked:
         decision, host, _ = await _run(
-            human(stages=[stage], surface=ask_desk), step=step
+            human(stages=[stage], channel=ask_desk), step=step
         )
 
     assert decision == Decision.proceed()
@@ -175,11 +175,11 @@ async def test_the_surface_is_asked_at_each_stage_in_place_of_the_host(
 
 
 @pytest.mark.anyio
-async def test_the_surface_gets_every_escalations_full_report_and_the_sample() -> None:
+async def test_the_channel_gets_every_escalations_full_report_and_the_sample() -> None:
     sentinel = sequential(
         [
             threshold([loud(), quiet()], escalate_at=0.5),
-            human(["tool_call"], surface=ask_desk),
+            human(["tool_call"], channel=ask_desk),
         ]
     )
     with desk(HumanAnswer("approve")) as asked:
@@ -222,7 +222,7 @@ MODIFIED = ToolCall(id="call_1", function="bash", arguments={"cmd": "ls -a"})
     ],
 )
 @pytest.mark.anyio
-async def test_a_surfaces_answer_is_decided_and_recorded_as_the_hosts_is(
+async def test_a_channels_answer_is_decided_and_recorded_as_the_hosts_is(
     answer: HumanAnswer,
 ) -> None:
     choices = ["approve", "reject"] if answer.decision != "terminate" else ["approve"]
@@ -230,19 +230,19 @@ async def test_a_surfaces_answer_is_decided_and_recorded_as_the_hosts_is(
         human(["tool_call"], choices=choices), host=FakeHost(answer)
     )
     with desk(answer):
-        from_surface, _, surface_recorder = await _run(
-            human(["tool_call"], choices=choices, surface=ask_desk)
+        from_channel, _, channel_recorder = await _run(
+            human(["tool_call"], choices=choices, channel=ask_desk)
         )
 
-    assert from_surface == from_host
+    assert from_channel == from_host
     [by_host] = host_recorder.records
-    [by_surface] = surface_recorder.records
-    assert by_surface.factory == by_host.factory == "inspect_sentinel/human"
-    assert by_surface.reported == by_host.reported
+    [by_channel] = channel_recorder.records
+    assert by_channel.factory == by_host.factory == "inspect_sentinel/human"
+    assert by_channel.reported == by_host.reported
     # what later steps see in human_decisions
     kept = [
         kept_human_decision(r.factory, r.step, "step_1", r.reported)
-        for r in (by_host, by_surface)
+        for r in (by_host, by_channel)
     ]
     assert kept[0] is not None and kept[0] == kept[1]
 
@@ -252,7 +252,7 @@ async def test_a_surfaces_answer_is_decided_and_recorded_as_the_hosts_is(
     [
         (
             HumanAnswer("reject"),
-            "surface tests.test_human_surface:ask_desk answered 'reject', which is not one of the choices offered",
+            "channel tests.test_human_channel:ask_desk answered 'reject', which is not one of the choices offered",
         ),
         (HumanAnswer("approved"), "answered 'approved', which is not one of"),
         (HumanAnswer("modify", modified=MODIFIED), "answered 'modify'"),
@@ -260,30 +260,30 @@ async def test_a_surfaces_answer_is_decided_and_recorded_as_the_hosts_is(
     ],
 )
 @pytest.mark.anyio
-async def test_an_answer_the_surface_was_not_offered_fails_the_step(
+async def test_an_answer_the_channel_was_not_offered_fails_the_step(
     answer: HumanAnswer, match: str
 ) -> None:
     with desk(answer), pytest.raises(ValueError, match=match):
-        await _run(human(["tool_result"], surface=ask_desk), step=after_step())
+        await _run(human(["tool_result"], channel=ask_desk), step=after_step())
 
 
 @pytest.mark.anyio
-async def test_a_surface_that_returns_something_else_fails_the_step() -> None:
+async def test_a_channel_that_returns_something_else_fails_the_step() -> None:
     with (
         desk("approve"),
         pytest.raises(TypeError, match="returned str, not a HumanAnswer"),
     ):
-        await _run(human(["tool_call"], surface=ask_desk))
+        await _run(human(["tool_call"], channel=ask_desk))
 
 
 @pytest.mark.anyio
-async def test_a_surface_that_raises_fails_the_step_with_its_own_error() -> None:
+async def test_a_channel_that_raises_fails_the_step_with_its_own_error() -> None:
     with desk(ConnectionError("review service unreachable")):
         with pytest.raises(ConnectionError, match="unreachable") as raised:
-            await _run(human(["tool_call"], surface=ask_desk))
+            await _run(human(["tool_call"], channel=ask_desk))
 
     assert raised.value.__notes__ == [
-        "The surface tests.test_human_surface:ask_desk raised while asking about a tool_call step, so the step does not proceed."
+        "The channel tests.test_human_channel:ask_desk raised while asking about a tool_call step, so the step does not proceed."
     ]
 
 
@@ -291,7 +291,7 @@ async def test_a_surface_that_raises_fails_the_step_with_its_own_error() -> None
 async def test_a_question_is_withdrawn_when_the_step_is_cancelled_meanwhile() -> None:
     tree = concurrent(
         {
-            "person": human(["tool_call"], surface=wait_at_desk),
+            "person": human(["tool_call"], channel=wait_at_desk),
             "stop": stops_once_asked(),
         }
     )
@@ -306,9 +306,9 @@ async def test_a_question_is_withdrawn_when_the_step_is_cancelled_meanwhile() ->
     ] == []
 
 
-SURFACES_NOT_FOUND_AGAIN: list[tuple[Any, type[Exception], str]] = [
+CHANNELS_NOT_FOUND_AGAIN: list[tuple[Any, type[Exception], str]] = [
     ("no_colon", ValueError, "'module:function'"),
-    ("tests.test_human_surface:missing", ValueError, "does not define 'missing'"),
+    ("tests.test_human_channel:missing", ValueError, "does not define 'missing'"),
     ("missing/review.py:ask", ValueError, "the file does not exist"),
     (desk_for("#reviews"), TypeError, "defined at module level"),
     (not_async, TypeError, "not_async is not async"),
@@ -316,28 +316,28 @@ SURFACES_NOT_FOUND_AGAIN: list[tuple[Any, type[Exception], str]] = [
 ]
 
 
-@pytest.mark.parametrize(("surface", "error", "match"), SURFACES_NOT_FOUND_AGAIN)
-def test_a_surface_must_be_found_again_by_name(
-    surface: Any, error: type[Exception], match: str
+@pytest.mark.parametrize(("channel", "error", "match"), CHANNELS_NOT_FOUND_AGAIN)
+def test_a_channel_must_be_found_again_by_name(
+    channel: Any, error: type[Exception], match: str
 ) -> None:
     with pytest.raises(error, match=match):
-        human(["tool_call"], surface=surface)
+        human(["tool_call"], channel=channel)
 
 
-def test_a_surface_cannot_be_offered_modify_yet() -> None:
-    with pytest.raises(ValueError, match="'modify' through the surface"):
-        human(["tool_call"], choices=["approve", "modify"], surface=ask_desk)
+def test_a_channel_cannot_be_offered_modify_yet() -> None:
+    with pytest.raises(ValueError, match="'modify' through the channel"):
+        human(["tool_call"], choices=["approve", "modify"], channel=ask_desk)
 
 
 @pytest.mark.anyio
-async def test_a_surface_is_recorded_by_name_and_rebuilt_from_it() -> None:
-    config = sentinel_config(human(["tool_call"], surface=ask_desk))
+async def test_a_channel_is_recorded_by_name_and_rebuilt_from_it() -> None:
+    config = sentinel_config(human(["tool_call"], channel=ask_desk))
     assert config == SentinelConfig.model_validate(
         {
             "name": "human",
             "params": {
                 "stages": ["tool_call"],
-                "surface": "tests.test_human_surface:ask_desk",
+                "channel": "tests.test_human_channel:ask_desk",
             },
         }
     )
@@ -351,7 +351,7 @@ async def test_a_surface_is_recorded_by_name_and_rebuilt_from_it() -> None:
     assert len(asked.questions) == 1
 
 
-SURFACE_FILE = """\
+CHANNEL_FILE = """\
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -366,26 +366,26 @@ with open(Path(__file__).with_suffix(".runs"), "a") as runs:
 
 @dataclass
 class Settings:
-    channel: str = "reviews"
+    queue: str = "reviews"
 
 
 async def ask(question):
-    return HumanAnswer("terminate", reason=f"asked in {Settings().channel} at {question.stage}")
+    return HumanAnswer("terminate", reason=f"asked in {Settings().queue} at {question.stage}")
 """
 
 
 # a directory with a colon in its name, as every absolute Windows path has
 @pytest.mark.parametrize("directory", ["", "c:"])
 @pytest.mark.anyio
-async def test_a_configuration_names_a_surface_in_a_python_file(
+async def test_a_configuration_names_a_channel_in_a_python_file(
     tmp_path: Path, directory: str
 ) -> None:
     (tmp_path / directory).mkdir(exist_ok=True)
     file = (tmp_path / directory / "review.py").resolve()
-    file.write_text(SURFACE_FILE)
+    file.write_text(CHANNEL_FILE)
     raw: Any = {
         "name": "human",
-        "params": {"stages": ["tool_call"], "surface": f"{file}:ask"},
+        "params": {"stages": ["tool_call"], "channel": f"{file}:ask"},
     }
 
     configured = sentinel_from_config(raw)
@@ -402,7 +402,7 @@ async def test_a_configuration_names_a_surface_in_a_python_file(
 def retried(
     ask: Callable[[HumanQuestion], Awaitable[HumanAnswer]],
 ) -> Callable[[HumanQuestion], Awaitable[HumanAnswer]]:
-    # a decorator defined in another file than the surface it wraps, as a
+    # a decorator defined in another file than the channel it wraps, as a
     # library's retry decorator is
     @functools.wraps(ask)
     async def again(question: HumanQuestion) -> HumanAnswer:
@@ -417,12 +417,12 @@ from inspect_ai.dataset import Sample
 from inspect_ai.solver import generate
 
 from inspect_sentinel import HumanAnswer, human
-from tests.test_human_surface import retried
+from tests.test_human_channel import retried
 
 
 @retried
 async def ask(question):
-    return HumanAnswer("approve", "approved by the decorated surface")
+    return HumanAnswer("approve", "approved by the decorated channel")
 
 
 @task
@@ -430,12 +430,12 @@ def decorated():
     return Task(
         dataset=[Sample(input="hello")],
         solver=generate(),
-        sentinel=human(["model_input"], surface=ask),
+        sentinel=human(["model_input"], channel=ask),
     )
 """
 
 
-def test_a_decorated_surface_in_a_task_file_is_found_again_on_retry(
+def test_a_decorated_channel_in_a_task_file_is_found_again_on_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -448,7 +448,7 @@ def test_a_decorated_surface_in_a_task_file_is_found_again_on_retry(
     assert log.eval.config.sentinel == SentinelConfig.model_validate(
         {
             "name": "human",
-            "params": {"stages": ["model_input"], "surface": "decorated_task.py:ask"},
+            "params": {"stages": ["model_input"], "channel": "decorated_task.py:ask"},
         }
     )
     assert retried_log.status == "success", retried_log.error
@@ -460,16 +460,16 @@ from inspect_sentinel.config import sentinel_config
 
 
 async def ask(question):
-    return HumanAnswer("approve", "approved by the script's surface")
+    return HumanAnswer("approve", "approved by the script's channel")
 
 
 if __name__ == "__main__":
-    print(sentinel_config(human(["tool_call"], surface=ask)).model_dump_json())
+    print(sentinel_config(human(["tool_call"], channel=ask)).model_dump_json())
 """
 
 
 @pytest.mark.anyio
-async def test_a_scripts_surface_is_rebuilt_in_another_process(tmp_path: Path) -> None:
+async def test_a_scripts_channel_is_rebuilt_in_another_process(tmp_path: Path) -> None:
     script = (tmp_path / "run_eval.py").resolve()
     script.write_text(SCRIPT)
 
@@ -484,16 +484,16 @@ async def test_a_scripts_surface_is_rebuilt_in_another_process(tmp_path: Path) -
         == SentinelConfig.model_validate(
             {
                 "name": "human",
-                "params": {"stages": ["tool_call"], "surface": f"{script}:ask"},
+                "params": {"stages": ["tool_call"], "channel": f"{script}:ask"},
             }
         ).root
     )
-    assert decision == Decision.proceed("approved by the script's surface")
+    assert decision == Decision.proceed("approved by the script's channel")
 
 
-def test_a_surface_typed_into_a_repl_is_refused() -> None:
+def test_a_channel_typed_into_a_repl_is_refused() -> None:
     namespace: dict[str, Any] = {"__name__": "__main__"}
     exec(compile("async def ask(question):\n    pass\n", "<stdin>", "exec"), namespace)
 
     with pytest.raises(TypeError, match="REPL, notebook or `python -c`"):
-        human(["tool_call"], surface=namespace["ask"])
+        human(["tool_call"], channel=namespace["ask"])

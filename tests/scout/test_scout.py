@@ -1759,17 +1759,17 @@ async def desk_rejects(question: HumanQuestion) -> HumanAnswer:
 
 
 async def desk_never_asked(question: HumanQuestion) -> HumanAnswer:
-    raise AssertionError("a replay asked human()'s surface")
+    raise AssertionError("a replay asked human()'s channel")
 
 
-def test_a_replay_gives_a_surfaces_recorded_answer_without_asking_it(
+def test_a_replay_gives_a_channels_recorded_answer_without_asking_it(
     tmp_path: Path,
 ) -> None:
-    def escalated(surface: Any) -> Sentinels:
+    def escalated(channel: Any) -> Sentinels:
         return sequential(
             [
                 threshold(by_argument(), escalate_at=0.5),
-                human(stages=["tool_call"], surface=surface),
+                human(stages=["tool_call"], channel=channel),
             ]
         )
 

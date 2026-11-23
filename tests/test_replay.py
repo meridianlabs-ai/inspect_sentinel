@@ -335,7 +335,7 @@ async def test_human_is_answered_by_the_recorded_answer_else_by_the_fixed_one(
 
 
 async def never_asked(question: HumanQuestion) -> HumanAnswer:
-    raise AssertionError("a replay asked human()'s surface")
+    raise AssertionError("a replay asked human()'s channel")
 
 
 @pytest.mark.parametrize(
@@ -346,13 +346,13 @@ async def never_asked(question: HumanQuestion) -> HumanAnswer:
     ],
 )
 @pytest.mark.anyio
-async def test_a_replay_answers_in_place_of_humans_surface(
+async def test_a_replay_answers_in_place_of_humans_channel(
     answers: dict[str, HumanAnswer], action: str, source: str
 ) -> None:
     sentinel = sequential(
         [
             threshold(flag(), escalate_at=0.5),
-            human(stages=["tool_call"], surface=never_asked),
+            human(stages=["tool_call"], channel=never_asked),
         ]
     )
     step = next(s for s in segmented([1]) if s.stage == "tool_call")
