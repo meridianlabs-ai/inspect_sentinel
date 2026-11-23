@@ -67,7 +67,7 @@ Each row of the results dataframe is one step at one stage:
 |---------------------------|---------------------------------------------|
 | `transcript_id` | The sample the step belongs to. |
 | `metadata.step_id` | The tool call id at a tool stage, or the model call id at a generate stage. A tool call's two steps share its id. Where a call id runs more than once (a retry after a tool error, or a provider that reuses ids), a run of the id after an earlier run's steps took it has its execution id instead, in logs that record one, so each step's id is unique in its transcript. A tool step of an agent run through an agent bridge has the id of the model call that proposed it, a `/`, then the call id. In read mode, an agent bridge's check of a tool call has its execution id, or, for a result the bridge could not tie to one run of a call id it handed out more than once, the id of the sentinel span it was reported in, which the reports of its monitors share. Either way it matches no replayed step (see [Bridged Agents](#bridged-agents)). |
-| `metadata.replay_step_id` | In read mode, the replayed step the row joins: its own `metadata.step_id`, except for an agent bridge's check, which names the replayed step of the call it checked, or `None` where there is none (see [Bridged Agents](#bridged-agents)). |
+| `metadata.replay_step_id` | In read mode, the replayed step the row joins: its own `metadata.step_id`, except for an agent bridge's check, which names the replayed step of the model call that proposed its call id, or `None` where the log doesn't tie it to one (see [Bridged Agents](#bridged-agents)). |
 | `metadata.stage` | `"model_input"` (`BeforeGenerate`), `"model_output"` (`AfterGenerate`), `"tool_call"` (`BeforeToolCall`) or `"tool_result"` (`AfterToolCall`). |
 | `metadata.conversation` | The conversation the step is in. Each agent and sub-agent has its own message thread, its conversation, so this tells a sub-agent's steps apart from the main agent's. |
 | `value` | For a monitor, the suspicion score: a number, or a dict with one entry per dimension. For a protocol, `True` if the action is `reject`, `modify` or `terminate`, and `False` for `proceed` or `escalate`. `None` where the monitor or protocol abstained. |
@@ -420,7 +420,7 @@ Agents run through Inspect's [agent bridge](https://inspect.aisi.org.uk/agent-br
 
 #### Comparing With the Recorded Sentinel
 
-`compare_decisions()` pairs each of a bridge's checks with the replayed step of the call it checked, so you can compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions (see [Comparing Decisions](#comparing-decisions)).
+`compare_decisions()` pairs each of a bridge's checks with the replayed step of its call, so you can compare a new monitor's decisions on a bridged agent's tool calls with the sentinel's live decisions (see [Comparing Decisions](#comparing-decisions)).
 
 A check is paired with the step of the model call that proposed the call, where the log shows which that is: the bridge's model calls in the check's conversation proposed its call id once, and replay built that model call's step at the check's stage. To see which steps replay built, read mode replays each transcript that has bridge checks, as `as_scanner()` would without `timeline`. The read-mode row names that step in `metadata.replay_step_id`. The check's own `metadata.step_id` and citations stay as read mode gives them.
 
@@ -432,6 +432,8 @@ A check is never paired by order or position. It is `"only recorded"` when the l
 - replay built no step for the call at the check's stage: the model's response holds the call id more than once, the model call was made with the monitor role's model (e.g. by a request filter), or no later request carried the result, as when the sentinel ended the run at that result;
 - the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call. Replay names those steps by the fresh id, which read mode doesn't yet match;
 - another check of the same stage names the same step, as when the bridge checks a result again.
+
+The log doesn't record which model call produced a bridged call. So with an `agent_bridge(filter=...)` that generates several responses and hands one over under a call id that another of them proposed, read mode can pair the check with the other generation's step, and `compare_decisions()` lists the two as `"matched"`. Without such a filter, a check is paired with the step of the call it was of, as described above.
 
 A replayed step is `"only replayed"` when the sentinel didn't check it live (e.g. the results of a turn in which it rejected a call), or when its check is `"only recorded"`.
 

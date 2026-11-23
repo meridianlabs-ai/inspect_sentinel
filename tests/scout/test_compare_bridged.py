@@ -40,7 +40,7 @@ from inspect_sentinel.scout import (
 
 Row = dict[str, Any]
 Client = Literal["openai", "anthropic"]
-Filter = Literal["candidates", "cached", "monitor"]
+Filter = Literal["candidates", "cached", "monitor", "rekeyed"]
 READ_FILE = "Read a file."
 PATH = {"type": "object", "properties": {"path": {"type": "string"}}}
 
@@ -78,7 +78,7 @@ def scaffold(
 ) -> Agent:
     """A tool loop over the `client` SDK that runs its tools itself, as Claude Code does.
 
-    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does. With `filter`, the bridge's requests go through a request filter: `"candidates"` generates a second candidate for the first request and hands over the first, `"cached"` generates for the second request but hands over its response to the first again, and `"monitor"` generates with the model for the monitor role.
+    With `retry`, it sends its first request twice and uses the second response, as an agent that retries a request does. With `filter`, the bridge's requests go through a request filter: `"candidates"` generates a second candidate for the first request and hands over the first, `"cached"` generates for the second request but hands over its response to the first again, `"monitor"` generates with the model for the monitor role, and `"rekeyed"` generates twice for the first request and hands over the second response with its call under the first response's call id.
     """
     first = True
     cached: list[ModelOutput] = []
@@ -104,6 +104,16 @@ def scaffold(
                 tool_choice=tool_choice,
                 config=config,
             )
+        if filter == "rekeyed" and first:
+            first = False
+            selected = await model.generate(
+                input=input, tools=tools, tool_choice=tool_choice, config=config
+            )
+            handed = selected.model_copy(deep=True)
+            [call] = handed.message.tool_calls or []
+            [discarded] = chosen.message.tool_calls or []
+            call.id = discarded.id
+            return handed
         if filter == "cached":
             cached.append(chosen)
             if len(cached) == 2:
@@ -604,6 +614,63 @@ def test_compare_decisions_pairs_a_new_protocols_decisions_with_a_bridges_checks
     assert {
         (r["stage"], r["step_id"]) for r in tools if r["status"] == "only replayed"
     } == {(s, joined(step, uuids)) for s, step in UNCHECKED[case]}
+
+
+def test_known_limitation_a_filter_that_rekeys_a_call_pairs_its_check_with_the_discarded_generation(
+    tmp_path: Path,
+) -> None:
+    # A known limitation, accepted on 2026-11-23 (design/pr-series.md,
+    # Deferred, "Exact joins for bridge checks, from a recorded producer"): the
+    # log doesn't record which model call produced a bridged call. A request
+    # filter generates `a` (reading "first"), then `b` (reading "second"), and
+    # hands over the second response with its call renamed `a`. The bridge
+    # checks the call that reads "second" under `a`, and the discarded first
+    # generation is the one model call that proposed `a`, so read mode pairs
+    # the check with its step. This pins that wrong pairing, so recording the
+    # producer has to change this test on purpose
+    uuids = run(
+        tmp_path,
+        [calls("a", path="first"), calls("b", path="second")],
+        "openai",
+        judge(),
+        filter="rekeyed",
+    )
+    frames = scanned(tmp_path, replayed=as_scanner(judge()), recorded=as_reader())
+    discarded, selected = f"{uuids[0]}/a", f"{uuids[1]}/b"
+
+    replayed = {
+        (r["metadata.stage"], r["metadata.step_id"]): r["metadata.metadata"]
+        for r in records(frames["replayed"])
+        if r["metadata.stage"].startswith("tool")
+    }
+    assert replayed == {
+        ("tool_call", discarded): {"args": {"path": "first"}},
+        ("tool_result", discarded): {"result": "t0:a"},
+        ("tool_call", selected): {"args": {"path": "second"}},
+    }
+    recorded = [
+        (r["metadata.stage"], r["metadata.replay_step_id"], r["metadata.metadata"])
+        for r in records(frames["recorded"])
+        if r["metadata.stage"].startswith("tool")
+    ]
+    # the check of the call that reads "second" names the discarded step
+    assert sorted(recorded, key=str) == sorted(
+        [
+            ("tool_call", discarded, {"args": {"path": "second"}}),
+            ("tool_result", discarded, {"result": "t0:a"}),
+        ],
+        key=str,
+    )
+    compared = {
+        (r["stage"], r["step_id"]): r["status"]
+        for r in records(compare_decisions(frames["replayed"], frames["recorded"]))
+        if r["stage"].startswith("tool")
+    }
+    assert compared == {
+        ("tool_call", discarded): "matched",
+        ("tool_result", discarded): "matched",
+        ("tool_call", selected): "only replayed",
+    }
 
 
 def test_replay_check_matches_a_bridge_check_with_the_step_it_checked(
