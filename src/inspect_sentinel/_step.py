@@ -159,7 +159,7 @@ class Truncation:
 class BeforeToolCall:
     """A tool call about to execute.
 
-    `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log (replay skips a bridged agent's tool steps).
+    `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log.
 
     They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
 
@@ -216,11 +216,11 @@ class BeforeToolCall:
 class AfterToolCall:
     """A tool call that has executed, before the model sees its result.
 
-    `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log (replay skips a bridged agent's tool steps).
+    `input`, `tools`, `tool_choice` and `assistant_message` all come from one model call: the one that produced the call (in-process, the transcript's `ModelEvent`). So they are the same live and in a replay from a log.
 
     They are set or `None` together. They are `None` when no model call produced the call (a pre-filled message, a human agent, or a call the scaffold made itself), when the transcript event that recorded the model call is no longer available, or when the host does not have it (a replay from messages). A scaffold that rebuilds the model's message under a new id before running its calls gets `None` live, while a replay from a log finds the model call.
 
-    Under an agent bridge, the call ids in `assistant_message` are the ones the bridge handed the agent (a new id where the model's id names another call), so `call.id` finds the call in it. When the bridge can't tell which call a result answers (two calls handed over under one id, or one call handed over more than once under the same id), the four fields are `None`.
+    Under an agent bridge, the call ids in `assistant_message` are the ones the bridge handed the agent (a new id where the model's id names another call), so `call.id` finds the call in it. When the bridge can't tell which call a result answers (two calls handed over under one id, or one call handed over more than once under the same id), or no longer holds the model call (the call was handed over more than 1000 calls earlier, or before the sample resumed from a checkpoint), the four fields are `None`.
 
     `input`, `tools`, `history`, `agent_messages` and `human_decisions` are read-only sequences that can share the lists the host keeps for the conversation rather than copy them; a monitor that wants a list calls `list()` on one, at its own cost. Monitors and protocols must not mutate them or the messages and tool definitions in them.
     """
