@@ -1696,7 +1696,6 @@ _COMPUTER_CALL = {
     "id": "cu_1",
     "call_id": "call_c",
     "actions": [{"type": "click", "x": 1, "y": 2, "button": "left"}],
-    "pending_safety_checks": [],
     "status": "completed",
 }
 
@@ -1760,6 +1759,9 @@ async def test_a_computer_call_the_eval_was_never_handed_goes_back_as_made(
         for item in sent
         if item.get("call_id") == "call_c"
     ] == [("computer_call", _COMPUTER_CALL["actions"]), ("computer_call_output", None)]
+    assert next(item for item in sent if item.get("type") == "computer_call") == (
+        _COMPUTER_CALL
+    )
     # every call of the turn is answered once, the computer call's output
     # first, as its call came first
     answers = [str(item.get("type")).endswith("_output") for item in sent]

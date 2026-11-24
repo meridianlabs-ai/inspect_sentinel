@@ -1169,7 +1169,6 @@ async def test_a_rejected_computer_call_is_put_back_with_why() -> None:
         "id": "cu_1",
         "call_id": "call_c",
         "actions": [{"type": "click", "x": 1, "y": 2, "button": "left"}],
-        "pending_safety_checks": [],
         "status": "completed",
     }
     await handler.reply(
@@ -1193,6 +1192,29 @@ async def test_a_rejected_computer_call_is_put_back_with_why() -> None:
         "user",
     ]
     assert "Clicking is not allowed." in json.dumps(added[-1])
+
+
+@pytest.mark.anyio
+async def test_a_computer_call_that_ran_is_read() -> None:
+    # the call as the live API writes it, without `pending_safety_checks`
+    call = {
+        "type": "computer_call",
+        "id": "cu_1",
+        "call_id": "call_c",
+        "actions": [{"type": "screenshot"}],
+        "status": "completed",
+    }
+    output = {
+        "type": "computer_call_output",
+        "call_id": "call_c",
+        "output": {
+            "type": "computer_screenshot",
+            "image_url": "data:image/png;base64,iVBORw0K",
+        },
+    }
+
+    request = _request("responses", then=[call, output])
+    assert await Handler(storm_rule()).request(request) == Pass()
 
 
 def _calls_with(arguments: str) -> bytes:
