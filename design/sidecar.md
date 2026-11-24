@@ -2286,11 +2286,11 @@ What a sentinel did is recorded in one shape, whether the sentinel ran inside In
 - **`sidecar`**, a `SentinelSidecar`, for a report a sidecar made:
   - `request_id`, the call's `x-irid`.
   - `request_received` and `reply_received`, when the proxy handed the sidecar the request and the reply.
-  - `trimmed`, whether the report holds only what Inspect acts on, as the judgment says. A trimmed report may leave out `function`.
+  - `trimmed`, whether the report holds only what Inspect acts on, as the judgment says. A sidecar's report of a step sent without its records, as a trimmed one is, has an empty `function`, as today. Leaving it out would stop an older Inspect, whose `SentinelEvent` requires one, from reading the log.
   - `reviews`, a typed record of each question the step asked a person: its `id`, when it was `asked` and `answered`, the `decision`, its `resolution` and, where cancelled, the `cause`. On the step's root event. Today each is an info event that carries a dict (`log_reviews` in `inspect_ai._sentinel._sidecar._review`).
   - The proxy, the endpoint's version, its release mode and the models called.
 
-  All of it but the two times is in `metadata.sentinel_sidecar` today ([#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167)). Step 18's PR may leave the proxy, version, release mode and models in `metadata`. `trimmed` and `reviews` need a typed field, because the reader reads both.
+  All of it but the two times was in `metadata.sentinel_sidecar` ([#167](https://github.com/meridianlabs-ai/inspect_sentinel/issues/167)), and step 18 moves it all into `sidecar`. Nothing but its writer read the metadata key, so older logs need no second reader. Step 18 fills each review with its `id` alone; step 22 fills the rest.
 - **The fields are marked experimental**, as `SentinelEvent` is, and `completed` is serialized as it is on `ModelEvent`.
 
 **On each `EvalSample`, `sentinel_stats`**, a summary of the sample, as `model_usage`, `total_time` and `limit` are. Like them, it is on `EvalSampleSummary` too, which the viewer's list of samples and `samples_df` read without loading the sample. It is keyed by sentinel name, as `model_usage` is keyed by model, and each entry is a `SentinelStats`:
@@ -2307,7 +2307,7 @@ What a sentinel did is recorded in one shape, whether the sentinel ran inside In
   - `results_withheld`, `None` where the sidecar didn't say.
 - **The key is the sentinel's name**, inside Inspect and through a sidecar alike: the instance name of the sentinel's root, as `SentinelEvent.path` builds on ([sentinel-reference.md](sentinel-reference.md)). Inspect knows its own. A sidecar's probe is to report the name of the sentinel it was started with (step 21). A sidecar that reports none, because it is older or withholds results, is keyed by its proxy's address. Where two entries would share a name, as a sentinel inside Inspect and one in a sidecar with the same root can, the sidecar's key has its proxy's address added.
 
-**On `EvalStats`, `sentinel_stats`**: the same shape, added up over the samples whose stats are `complete`, with the number of samples left out, as `EvalStats` holds the eval's `model_usage`.
+**On `EvalStats`, `sentinel_stats`**: the same shape, added up over the samples whose stats are `complete`, as `EvalStats` holds the eval's `model_usage`. Each entry is a `SentinelEvalStats`, which adds `samples`, the samples added up, and `incomplete_samples`, those left out. Its `complete` is false where any sample was left out.
 
 **In `inspect_ai.analysis`**, the data frames read the same fields. `EventTiming` already reads `timestamp`, `completed`, `working_start` and `working_time` from any event, so `events_df` has a sentinel event's times once step 18 lands. Step 23 adds the column groups for the rest, beside `ModelEventColumns` and `ToolEventColumns`.
 

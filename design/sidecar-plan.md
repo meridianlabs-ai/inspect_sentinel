@@ -9,7 +9,7 @@ Earlier prototype code exists for much of this. It is reused where it fits the d
 | Repository | Owner | What lands there |
 | --- | --- | --- |
 | `inspect_sentinel` | Meridian | the core package, the sidecar (`inspect_sentinel.sidecar`) with its Envoy shim, and the proxy hooks, each a package of its own under `src/proxies` |
-| `inspect_ai` | Meridian | Inspect's sidecar client, and the asks in `sidecar.md`, "Asked of inspect_ai" |
+| `inspect_ai` | Meridian | Inspect's sidecar client, and the asks in `sidecar.md`, "Asked of inspect_ai"; the typed log fields of step 18, a sentinel inside Inspect filling them in step 20, the sidecar client filling them in step 22, and step 23's columns in `inspect_ai.analysis` |
 | ts-mono | Meridian | the log viewer: types generated from inspect_ai's schema, and how it shows the fields of step 18 |
 | `inspect_scout` | Meridian | its schema, regenerated when inspect_ai's `SentinelEvent` changes |
 | `hawk` | METR | Middleman's passthrough hook, and routing `/sentinel/*` at the load balancer in front of Middleman |
@@ -65,7 +65,7 @@ inspect_sentinel
 20 a sentinel inside Inspect fills them: inspect_ai, after 18
 21 times and counts in results: inspect_sentinel, after 6 and 13
 22 the sidecar client fills them: inspect_ai, after 11, 18 and 21
-23 reading the measures from logs: inspect_sentinel, after 18, 20 and 22
+23 reading the measures from logs: inspect_ai columns and inspect_sentinel, after 18, 20 and 22
 24 the record log: inspect_sentinel, after 21
 shared state: inspect_sentinel, before more than one sidecar worker or restart continuity
 ```
@@ -311,10 +311,10 @@ The measures need times, outcomes and totals that the log has no field for. This
 - `SentinelEvent` gains `completed`, `working_time`, the `unjudged` status with its `reason`, and `sidecar`, a `SentinelSidecar`.
 - `EvalSample` gains `sentinel_stats`, a `SentinelStats` for each sentinel by name, whose `sidecar` is a `SentinelSidecarStats`. `EvalSampleSummary` gains it too, as it has the sample's `model_usage`, `total_time` and `limit`, so the list of samples and `samples_df` read it without loading the sample. `EvalStats` gains the same, added up.
 - `EvalConfig` gains `sentinel_proxy`, from #167.
-- The names are Meridian's suggestions, and this PR settles them. It also settles whether #167's provenance moves into `SentinelSidecar` or stays in `metadata`.
+- The names are Meridian's suggestions, and this PR settles them. #167's provenance moves into `SentinelSidecar`: nothing but its writer read `metadata.sentinel_sidecar`, so older logs need no second reader.
 - Every field is optional and absent unless a sentinel ran. An older log reads them as `None`, and an older reader ignores them. Each is marked experimental, as `SentinelEvent` is.
 - Landing, as #167 says, follows inspect_ai's `land-ts-mono` skill: regenerate inspect_ai's OpenAPI schema and ts-mono's generated types, land ts-mono and then inspect_ai, then regenerate `inspect_scout`'s schema, whose `SentinelEvent` changes, and land that.
-- Tests: each new field round-trips; a sample's summary has the sample's `sentinel_stats`; `events_df` with `EventTiming` reads a sentinel event's `completed` and `working_time`; a log written before this step reads with them `None`; an `unjudged` event needs a `reason`, and records no report; a trimmed report may leave out `function`, and any other may not; #167's tests, as that issue lists them.
+- Tests: each new field round-trips; a sample's summary has the sample's `sentinel_stats`; a log written before this step reads with them `None`; an `unjudged` event needs a `reason`, is at the empty path, and records no report, an explanation and an audit included; a sidecar's question ids are on the step's root event alone; a trimmed report keeps an empty `function`; #167's tests, as that issue lists them.
 
 ## Step 19: the log viewer shows the fields
 
