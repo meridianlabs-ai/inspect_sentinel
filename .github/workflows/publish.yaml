@@ -21,7 +21,7 @@ jobs:
     if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: meridianlabs-ai/actions/slack-approval-ping@b63bc2bb3cc6a615e83e27d5465cb87dd27379b9 # main
+      - uses: meridianlabs-ai/actions/slack-approval-ping@21aedd149692f720edb43544f84556f168461b59 # main
         with:
           webhook: ${{ secrets.SLACK_APPROVALS_WEBHOOK_URL }}
           approvers: "jjallaire dragonstyle epatey"
@@ -37,7 +37,7 @@ jobs:
   build:
     permissions:
       contents: read
-    uses: meridianlabs-ai/actions/.github/workflows/build-python-dist.yml@b63bc2bb3cc6a615e83e27d5465cb87dd27379b9 # main
+    uses: meridianlabs-ai/actions/.github/workflows/build-python-dist.yml@21aedd149692f720edb43544f84556f168461b59 # main
     with:
       python-version: "3.13"
 
@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: meridianlabs-ai/actions/slack-release-announce@65f1b6bdb9b1af7eb0bc89942c624dd4efef1316 # main, 2026-11-16
+      - uses: meridianlabs-ai/actions/slack-release-announce@21aedd149692f720edb43544f84556f168461b59 # main, 2026-11-16
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           title: ":rocket: inspect-sentinel ${{ github.event.release.tag_name }} released"
@@ -89,7 +89,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: meridianlabs-ai/actions/.github/workflows/publish-docs.yml@b63bc2bb3cc6a615e83e27d5465cb87dd27379b9 # main
+    uses: meridianlabs-ai/actions/.github/workflows/publish-docs.yml@21aedd149692f720edb43544f84556f168461b59 # main
     with:
       python-version: "3.13"
       extras: doc
