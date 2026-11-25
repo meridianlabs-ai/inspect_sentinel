@@ -473,6 +473,13 @@ def recorded_as(**converters: Callable[[object], object]) -> Callable[[F], F]:
     return decorate
 
 
+def recorded_converters(factory: object) -> Mapping[str, Callable[[object], object]]:
+    # the converters a factory opted in with `recorded_as()`, by param
+    return cast(
+        Mapping[str, Callable[[object], object]], getattr(factory, _RECORDED_AS, {})
+    )
+
+
 def _plain(value: object) -> object:
     # a mapping or sequence of configured monitors and protocols that the
     # registry cannot record, one that is not a dict (OrderedDict included), a

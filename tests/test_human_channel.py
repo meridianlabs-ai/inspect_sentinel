@@ -1,9 +1,10 @@
 import functools
 import importlib.metadata
+import importlib.util
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Generator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, cast
@@ -36,7 +37,7 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._host import HostContext
 from inspect_sentinel._human_decisions import kept_human_decision
-from inspect_sentinel._integration import Sentinels, resolve_sentinel, source_fallback
+from inspect_sentinel._integration import Sentinels, rebase_config, resolve_sentinel
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
 from inspect_sentinel.config import sentinel_config, sentinel_from_config
@@ -405,49 +406,136 @@ def _answer_file(reason: str) -> str:
     return f"from inspect_sentinel import HumanAnswer\n\n\nasync def ask(question):\n    return HumanAnswer('terminate', {reason!r})\n"
 
 
-# a retry rebuilds a logged sentinel in the task file's directory and opens
-# `source_fallback()` with the directory the retry runs in
+def _load_file(file: Path) -> Any:
+    # a file loaded by its path and not under a name another process imports,
+    # as inspect_ai loads a task file, so a function in it is recorded by file
+    spec = importlib.util.spec_from_file_location(f"_loaded_{file.stem}", file)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.mark.parametrize(
-    ("in_task_dir", "in_retry_dir", "fallback", "found"),
+    ("launch", "rebased"),
     [
-        (True, False, True, "task"),
-        (False, True, True, "retry"),
-        # a file in the working directory always wins
-        (True, True, True, "task"),
-        (False, False, True, None),
-        (False, True, False, None),
+        ("project", "tasks/review.py:ask"),
+        # a sibling of the task file's directory
+        ("project/runs", "../tasks/review.py:ask"),
+        # below the task file's directory
+        ("project/tasks/runs", "../review.py:ask"),
     ],
 )
+@pytest.mark.parametrize("given", ["function", "name"])
 @pytest.mark.anyio
-async def test_a_relative_channel_file_is_looked_for_in_the_fallback_when_missing(
+async def test_a_channel_file_recorded_in_a_task_files_directory_is_rebased_to_the_launch_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    in_task_dir: bool,
-    in_retry_dir: bool,
-    fallback: bool,
-    found: str | None,
+    launch: str,
+    rebased: str,
+    given: str,
 ) -> None:
-    task_dir, retry_dir = tmp_path / "task", tmp_path / "retry"
-    for directory, present in [(task_dir, in_task_dir), (retry_dir, in_retry_dir)]:
-        directory.mkdir()
-        if present:
-            (directory / "review.py").write_text(_answer_file(directory.name))
-    monkeypatch.chdir(task_dir)
-    raw: Any = {
-        "name": "human",
-        "params": {"stages": ["tool_call"], "channel": "review.py:ask"},
-    }
+    tasks, launch_dir = tmp_path / "project" / "tasks", tmp_path / launch
+    tasks.mkdir(parents=True)
+    launch_dir.mkdir(parents=True, exist_ok=True)
+    (tasks / "review.py").write_text(_answer_file("beside the task file"))
+    monkeypatch.chdir(tasks)
+    channel = (
+        _load_file(tasks / "review.py").ask if given == "function" else "review.py:ask"
+    )
+    recorded = sentinel_config(human(["tool_call"], channel=channel))
 
-    with source_fallback(str(retry_dir)) if fallback else nullcontext():
-        if found is None:
-            with pytest.raises(ValueError, match=str(task_dir / "review.py")):
-                sentinel_from_config(raw)
-            return
-        configured = sentinel_from_config(raw)
-    decision, _, _ = await _run(configured)
+    config = rebase_config(recorded, str(tasks), str(launch_dir))
+    monkeypatch.chdir(launch_dir)
+    decision, _, _ = await _run(sentinel_from_config(config))
 
-    assert decision == Decision.terminate(found)
-    assert sentinel_config(configured) == SentinelConfig.model_validate(raw)
+    assert recorded == _human_config("review.py:ask")
+    assert config == _human_config(rebased)
+    assert decision == Decision.terminate("beside the task file")
+
+
+def _human_config(channel: str, stages: list[str] | None = None) -> SentinelConfig:
+    return SentinelConfig.model_validate(
+        {
+            "name": "human",
+            "params": {"stages": stages or ["tool_call"], "channel": channel},
+        }
+    )
+
+
+def test_a_channel_named_in_a_parent_directory_is_rebased(tmp_path: Path) -> None:
+    tasks = tmp_path / "project" / "tasks"
+
+    config = rebase_config(
+        _human_config("../shared/review.py:ask"), str(tasks), str(tmp_path / "project")
+    )
+
+    assert config == _human_config("shared/review.py:ask")
+
+
+def _nested_config(first: str, second: str) -> SentinelConfig:
+    return SentinelConfig.model_validate(
+        {
+            "first": {
+                "name": "sequential",
+                "params": {},
+                "children": [
+                    {"name": "loud", "params": {}},
+                    _human_config(first).model_dump(),
+                ],
+            },
+            "second": _human_config(second).model_dump(),
+        }
+    )
+
+
+def test_rebasing_nested_and_named_entries(tmp_path: Path) -> None:
+    config = rebase_config(
+        _nested_config("a.py:ask", "b.py:ask"), str(tmp_path / "tasks"), str(tmp_path)
+    )
+
+    assert config == _nested_config("tasks/a.py:ask", "tasks/b.py:ask")
+
+
+@protocol
+def reads_policy(policy_file: str, notes: str = "notes.py:x") -> Protocol:
+    async def decide(
+        context: Context, step: BeforeToolCall, escalations: Escalations
+    ) -> Decision | None:
+        return None
+
+    return decide
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # a module's name and an absolute file
+        _human_config("tests.test_human_channel:ask_desk").model_dump(),
+        _human_config("/srv/review.py:ask").model_dump(),
+        # a param the factory does not record as a source reference, even one
+        # that reads as a file or a reference
+        {
+            "name": "reads_policy",
+            "params": {"policy_file": "policy.txt", "notes": "notes.py:x"},
+        },
+        # a factory that is not registered
+        {"name": "not_registered", "params": {"channel": "review.py:ask"}},
+        # stages and choices around a channel that is not a reference
+        {
+            "name": "human",
+            "params": {
+                "stages": ["tool_call"],
+                "choices": ["approve"],
+                "channel": None,
+            },
+        },
+    ],
+)
+def test_rebasing_leaves_other_values_as_given(tmp_path: Path, raw: Any) -> None:
+    config = SentinelConfig.model_validate(raw)
+
+    assert rebase_config(config, str(tmp_path / "tasks"), str(tmp_path)) == config
 
 
 def retried(
@@ -559,27 +647,36 @@ def _inspect_ai_version() -> Version:
 
 @pytest.mark.skipif(
     _inspect_ai_version() < Version("0.3.293"),
-    reason="before inspect-ai 0.3.293, eval_retry() rebuilds the logged sentinel outside the task file's directory, so a channel named by a path relative to it is not found",
+    reason="before inspect-ai 0.3.293, the log records a task's own channel file relative to the task file's directory, and eval_retry() rebuilds it where the eval was launched, so it is not found",
 )
 @pytest.mark.parametrize(
-    ("channel", "recorded", "reason"),
+    ("channel", "file", "reason"),
     [
-        ("ask", "plain_task.py:ask", "approved by the task file's channel"),
+        ("ask", "plain_task.py", "approved by the task file's channel"),
         (
             '"review.py:ask"',
-            "review.py:ask",
+            "review.py",
             "approved by the channel beside the task file",
         ),
     ],
 )
-@pytest.mark.parametrize("retry_from", ["parent", "elsewhere"])
+@pytest.mark.parametrize(
+    ("launch", "tasks_from_launch"),
+    [
+        ("project", "tasks"),
+        # outside the project, so the log records the task file by its
+        # absolute path
+        ("run", "../project/tasks"),
+    ],
+)
 def test_a_channel_named_relative_to_a_task_file_in_a_subdirectory_is_found_on_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     channel: str,
-    recorded: str,
+    file: str,
     reason: str,
-    retry_from: str,
+    launch: str,
+    tasks_from_launch: str,
 ) -> None:
     tasks = tmp_path / "project" / "tasks"
     tasks.mkdir(parents=True)
@@ -587,26 +684,25 @@ def test_a_channel_named_relative_to_a_task_file_in_a_subdirectory_is_found_on_r
         SUBDIRECTORY_TASK_FILE.replace("CHANNEL", channel)
     )
     (tasks / "review.py").write_text(BESIDE_FILE)
-    if retry_from == "parent":
-        monkeypatch.chdir(tmp_path / "project")
-        task = "tasks/plain_task.py"
-    else:
-        # outside the project the log records the task file by its absolute
-        # path; the retry runs from yet another directory
-        (tmp_path / "run").mkdir()
-        (tmp_path / "retry").mkdir()
-        monkeypatch.chdir(tmp_path / "run")
-        task = str(tasks / "plain_task.py")
+    (tmp_path / launch).mkdir(exist_ok=True)
+    monkeypatch.chdir(tmp_path / launch)
+    task = (
+        "tasks/plain_task.py" if launch == "project" else str(tasks / "plain_task.py")
+    )
 
     log = eval(task, model="mockllm/model", log_dir=str(tmp_path / "logs"))[0]
-    if retry_from == "elsewhere":
-        monkeypatch.chdir(tmp_path / "retry")
     retried_log = eval_retry(log, log_dir=str(tmp_path / "logs"))[0]
 
     assert log.status == "error"
-    # recorded relative to the task file's directory, where the task was made
+    # relative to the directory the eval was launched from, as the task file is
     assert log.eval.config.sentinel == SentinelConfig.model_validate(
-        {"name": "human", "params": {"stages": ["model_input"], "channel": recorded}}
+        {
+            "name": "human",
+            "params": {
+                "stages": ["model_input"],
+                "channel": f"{tasks_from_launch}/{file}:ask",
+            },
+        }
     )
     assert retried_log.status == "success", retried_log.error
     assert retried_log.eval.config.sentinel == log.eval.config.sentinel
@@ -620,20 +716,12 @@ PLAIN_SUBDIRECTORY_TASK_FILE = SUBDIRECTORY_TASK_FILE.replace(
 )
 
 
-@pytest.mark.skipif(
-    _inspect_ai_version() < Version("0.3.293"),
-    reason="before inspect-ai 0.3.293, eval_retry() rebuilds the logged sentinel where the retry runs, so a file beside the task file is never looked at",
-)
-@pytest.mark.parametrize(
-    ("beside_task_file", "reason"),
-    [
-        (False, "approved beside the eval"),
-        # a file of the same name beside the task file wins
-        (True, "approved beside the task file"),
-    ],
-)
-def test_an_evals_own_channel_file_is_found_where_the_retry_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, beside_task_file: bool, reason: str
+# an eval's own sentinel is made where the eval runs, so its relative files
+# are relative to there, even when the task file's directory has one of the
+# same name
+@pytest.mark.parametrize("beside_task_file", [False, True])
+def test_an_evals_own_channel_file_is_found_where_the_eval_ran_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, beside_task_file: bool
 ) -> None:
     tasks = tmp_path / "tasks"
     tasks.mkdir()
@@ -663,7 +751,13 @@ def test_an_evals_own_channel_file_is_found_where_the_retry_runs(
     assert log.status == "error"
     assert retried_log.status == "success", retried_log.error
     assert retried_log.samples is not None
-    assert reason in retried_log.samples[0].model_dump_json()
+    assert "approved beside the eval" in retried_log.samples[0].model_dump_json()
+    assert log.eval.config.sentinel == SentinelConfig.model_validate(
+        {
+            "name": "human",
+            "params": {"stages": ["model_input"], "channel": "review.py:ask"},
+        }
+    )
 
 
 SCRIPT = """\

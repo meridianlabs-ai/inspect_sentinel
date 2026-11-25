@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 from collections.abc import Callable, Hashable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, NamedTuple, cast
 
 import yaml
@@ -24,8 +25,9 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
-from ._decorators import ENTRY_FIELDS, VERSION
+from ._decorators import ENTRY_FIELDS, VERSION, recorded_converters
 from ._portable import PortabilityError
+from ._sources import is_source_reference, rebase_reference
 from ._types import Sentinel, Sentinels
 
 logger = logging.getLogger(__name__)
@@ -356,3 +358,54 @@ def _config_name(name: str) -> str:
         if len(found) == 1 and found[0].name == name:
             return bare
     return name
+
+
+def rebase_config(config: SentinelConfig, from_dir: str, to_dir: str) -> SentinelConfig:
+    """Rebase a configuration's source file references from one directory to another.
+
+    A relative file reference in a configuration, a `"<file>.py:function"` that `human(channel=)` records, is relative to the working directory the sentinel was made in. inspect_ai records a task's own sentinel, made in the task file's directory, against the directory the eval was launched from, where `eval_retry()` rebuilds it. Only params a factory records as source references are rewritten, each to the same file relative to `to_dir`; a module's name, an absolute file and every other value are as given. An entry whose factory is not registered is as given.
+
+    Args:
+        config: The configuration, as `sentinel_config()` records it.
+        from_dir: The directory its relative file references are relative to.
+        to_dir: The directory to make them relative to.
+    """
+    source, target = Path(from_dir).resolve(), Path(to_dir).resolve()
+    if source == target:
+        return config
+    return SentinelConfig.model_validate(
+        _rebase_layer(config.model_dump(), source, target)
+    )
+
+
+def _rebase_layer(layer: object, from_dir: Path, to_dir: Path) -> object:
+    if isinstance(layer, list):
+        items = cast(list[object], layer)
+        return [_rebase_layer(entry, from_dir, to_dir) for entry in items]
+    entries = cast(dict[str, Any], layer)
+    if isinstance(entries.get("name"), str):
+        return _rebase_entry(entries, from_dir, to_dir)
+    return {
+        name: _rebase_layer(entry, from_dir, to_dir) for name, entry in entries.items()
+    }
+
+
+def _rebase_entry(
+    entry: dict[str, Any], from_dir: Path, to_dir: Path
+) -> dict[str, Any]:
+    found = _find_all(entry["name"])
+    converters: Mapping[str, object] = (
+        recorded_converters(found[0].factory) if len(found) == 1 else {}
+    )
+    params = {
+        key: rebase_reference(value, from_dir, to_dir)
+        if is_source_reference(converters.get(key))
+        else value
+        for key, value in entry.get("params", {}).items()
+    }
+    nested = {
+        key: _rebase_layer(value, from_dir, to_dir)
+        for key, value in entry.items()
+        if key not in ENTRY_FIELDS
+    }
+    return {**entry, "params": params, **nested}
