@@ -35,6 +35,7 @@ inspect-docs:
         - href: stages.qmd
         - href: monitors.qmd
         - href: llm-monitors.qmd
+        - href: auto-mode.qmd
         - href: protocols.qmd
         - href: human-decisions.qmd
         - href: state.qmd

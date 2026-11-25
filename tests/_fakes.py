@@ -81,8 +81,11 @@ class FakeHost:
         eval: EvalContext | None = None,
         budget: int = 10**9,
         chars_per_token: int = 1,
+        roles: Sequence[str] = (),
     ) -> None:
         self.eval = eval
+        # the model roles this host has a model for
+        self.roles = set(roles)
         self.answers = list(answers)
         self.asked: list[Asked] = []
         self.completion = completion
@@ -96,6 +99,9 @@ class FakeHost:
         self.chars_per_token = chars_per_token
         self.budgets: list[tuple[str | None, str | None]] = []
         self.counted: list[str] = []
+
+    def role_configured(self, role: str) -> bool:
+        return role in self.roles
 
     async def input_budget(
         self,

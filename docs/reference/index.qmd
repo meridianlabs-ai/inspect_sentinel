@@ -46,6 +46,11 @@ A `Step` here is the payload a monitor or protocol receives, and `Context` is wh
 ### Sentinels
 ### PortabilityError
 
+## Shipped monitors
+
+### auto_mode
+### AutoModePolicy
+
 ## Shipped protocols
 
 ### observe_only

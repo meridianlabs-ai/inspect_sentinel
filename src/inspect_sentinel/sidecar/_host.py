@@ -18,7 +18,7 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolChoice, ToolInfo
 
 from .._context import Context, EvalContext
-from .._host import HostNative, HumanAnswer
+from .._host import HostNative, HumanAnswer, native_role_configured
 from .._report import Decision, Escalations, Failed, Report, Reported
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from ._inspect_ai import Billed, billing, get_model_input_budget
@@ -196,6 +196,10 @@ class SidecarHost:
         """The token count of `input` for the role's model if the sidecar has one configured, otherwise for `model`; resolved as `generate` resolves it."""
         return await self._resolve(model, role).count_tokens(input, config)
 
+    def role_configured(self, role: str) -> bool:
+        """Whether the sidecar has a model configured for `role`."""
+        return role in self._roles
+
     def _resolve(self, model: str | None, role: str | None) -> Model:
         # the model a host call names, the way `generate` resolves it: the
         # role's configured model wins, otherwise `model`; with neither it
@@ -305,6 +309,10 @@ class RunHost:
         return await self._host.count_tokens(
             input, model=model, role=role, config=config
         )
+
+    def role_configured(self, role: str) -> bool:
+        """Whether the sidecar's host has a model configured for `role`."""
+        return native_role_configured(self._host, role)
 
     async def ask_human(
         self, step: Step, escalations: Escalations, choices: Sequence[str]

@@ -7,6 +7,7 @@ from ._context import Context, EvalContext, InspectSample, ProxyContext
 from ._decorators import monitor, protocol
 from ._final import decide_final
 from ._host import Host, HumanAnswer, HumanChannel, HumanQuestion
+from ._monitors import AutoModePolicy, auto_mode
 from ._portable import PortabilityError
 from ._preprocess import (
     AllMessages,
@@ -80,6 +81,7 @@ __all__ = [
     "Action",
     "AfterGenerate",
     "AfterToolCall",
+    "AutoModePolicy",
     "BeforeGenerate",
     "BeforeToolCall",
     "Context",
@@ -116,6 +118,7 @@ __all__ = [
     "Step",
     "Suspicion",
     "Truncation",
+    "auto_mode",
     "call_text",
     "concurrent",
     "decide_final",

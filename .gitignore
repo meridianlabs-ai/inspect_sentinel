@@ -218,3 +218,7 @@ logs-*/
 
 # replay-trust benchmark output (python -m benchmarks.replay_trust)
 benchmarks/replay_trust/results/
+
+# auto_mode benchmark output (python -m benchmarks.auto_mode): logs, scans,
+# fetched prompts, local cases and reports, which hold the judges' prompts
+benchmarks/auto_mode/out/

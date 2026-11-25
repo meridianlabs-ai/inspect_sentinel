@@ -362,11 +362,25 @@ def _register(
     recorded_as: dict[str, Callable[[object], object]] = getattr(
         factory, _RECORDED_AS, {}
     )
-    for name in recorded_as:
+    recorded_always: dict[str, Callable[[object], object]] = getattr(
+        factory, _RECORDED_ALWAYS, {}
+    )
+    for name in [*recorded_as, *recorded_always]:
         if name not in signature:
             raise TypeError(
-                f"{registered_name} records {name!r} through recorded_as(), but has no parameter of that name."
+                f"{registered_name} records {name!r} through recorded_as() or recorded_always(), but has no parameter of that name."
             )
+    if recorded_always and any(
+        p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in signature.values()
+    ):
+        raise TypeError(
+            f"{registered_name} uses recorded_always(), which needs a factory without *args or **kwargs."
+        )
+    both = sorted(set(recorded_as) & set(recorded_always))
+    if both:
+        raise TypeError(
+            f"{registered_name} records {', '.join(map(repr, both))} through both recorded_as() and recorded_always(); use one."
+        )
     positional = [
         p.name
         for p in signature.values()
@@ -445,6 +459,19 @@ def _register(
             }
         else:
             recorded_args, recorded_kwargs = plain_args, plain_kwargs
+        if recorded_always:
+            # the params the factory opted in with `recorded_always()` are
+            # recorded through their converter whether given or not, the
+            # default included
+            bound = inspect.signature(factory).bind_partial(
+                *recorded_args, **recorded_kwargs
+            )
+            recorded_args = ()
+            recorded_kwargs = dict(bound.arguments)
+            for name, convert in recorded_always.items():
+                recorded_kwargs[name] = convert(
+                    recorded_kwargs.get(name, signature[name].default)
+                )
         registry_tag(
             factory,
             instance,
@@ -459,6 +486,21 @@ def _register(
 
 
 _RECORDED_AS = "__inspect_sentinel_recorded_as__"
+
+_RECORDED_ALWAYS = "__inspect_sentinel_recorded_always__"
+
+
+def recorded_always(**converters: Callable[[object], object]) -> Callable[[F], F]:
+    # As recorded_as(), but the named params are recorded whether the caller
+    # gave them or not, the default converted too: for a param whose default
+    # stands for something that can change between versions, so that a
+    # configuration rebuilds what ran rather than today's default.
+    # auto_mode(policy=) records the expanded policy this way.
+    def decorate(factory: F) -> F:
+        setattr(factory, _RECORDED_ALWAYS, converters)
+        return factory
+
+    return decorate
 
 
 def recorded_as(**converters: Callable[[object], object]) -> Callable[[F], F]:

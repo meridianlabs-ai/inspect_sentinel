@@ -1,0 +1,24 @@
+inspect_sentinel
+Copyright (c) 2026 Meridian Labs
+
+inspect_sentinel is licensed under the MIT License (see LICENSE), except as
+noted below.
+
+The auto_mode() judge's prompt adapts text from OpenAI Codex
+(https://github.com/openai/codex), commit
+6aaf2a86b198bb0ee8f9d995e79155ad5c7f6357, files
+codex-rs/prompts/templates/guardian/policy_template.md,
+codex-rs/prompts/templates/guardian/policy.md and
+codex-rs/prompts/templates/guardian/classifier_instructions.md. That text is
+licensed under the Apache License, Version 2.0 (see LICENSE-APACHE). Codex's
+NOTICE reads, in the part that applies:
+
+    OpenAI Codex
+    Copyright 2025 OpenAI
+
+The adapted text is in src/inspect_sentinel/_monitors/auto_mode_prompt.py,
+in the sections whose comments name Codex as their source, and in the rules
+of the "inspect" policy in src/inspect_sentinel/_monitors/auto_mode_policy.py
+that its comments name. Meridian Labs rewrote and shortened it for a judge of
+agents in a sandbox; the changes are Meridian Labs's, under the Apache
+License, Version 2.0.

@@ -23,6 +23,7 @@ from inspect_sentinel import (
     Monitor,
     Observation,
     PortabilityError,
+    auto_mode,
     concurrent,
     human,
     monitor,
@@ -915,6 +916,7 @@ def plain() -> Monitor:
         lambda: sequential([plain()]),
         lambda: threshold(plain(), reject_at=0.5),
         lambda: human(stages=["tool_call"]),
+        lambda: auto_mode(),
     ],
 )
 def test_shipped_protocols_pass(configure_shipped: Callable[[], object]) -> None:
@@ -945,6 +947,7 @@ def modules_from(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[Path], N
         ("escalate_turn_to_human", "escalate_turn_to_human"),
         ("llm_suspicion", "llm_suspicion"),
         ("nested", "nested"),
+        ("auto_mode", "auto_mode_eval"),
     ],
 )
 def test_examples(

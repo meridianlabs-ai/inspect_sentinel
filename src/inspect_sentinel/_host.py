@@ -23,7 +23,7 @@ from typing import (
 )
 from typing import Protocol as TypingProtocol
 
-from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput
+from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput, model_roles
 from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from inspect_ai.util import Store
 
@@ -303,6 +303,26 @@ class Host(HostNative):
             choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`, in the order to present them.
         """
         return await self._native.ask_human(step, escalations, choices)
+
+
+@runtime_checkable
+class KnowsRoles(TypingProtocol):
+    # a host that says itself which model roles it has a model for, as the
+    # sidecar's does; inspect_ai's own hosts, in an eval and in a replay,
+    # resolve roles through model_roles(), so they need not
+    def role_configured(self, role: str) -> bool: ...
+
+
+def native_role_configured(native: HostNative, role: str) -> bool:
+    if isinstance(native, KnowsRoles):
+        return native.role_configured(role)
+    return role in model_roles()
+
+
+def role_configured(host: Host, role: str) -> bool:
+    # whether the host has a model for `role`, so a monitor that must not
+    # fall back to the agent's own model can tell before it asks
+    return native_role_configured(host._native, role)  # pyright: ignore[reportPrivateUsage]
 
 
 class AnswersFromRecord:
