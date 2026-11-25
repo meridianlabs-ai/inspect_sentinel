@@ -272,8 +272,14 @@ def guardian(
         task_text = task if isinstance(task, str) else None
         left_out = 0
         if evidence == "shared":
+            lines = (await shared_transcript(step)).splitlines()
+            if cap is not None:
+                fixed = len(system.text) + len(
+                    review_request(step, task_text, session, transcript="")
+                )
+                lines, left_out = fit(lines, fixed, cap or CAP)
             content = review_request(
-                step, task_text, session, transcript=await shared_transcript(step)
+                step, task_text, session, transcript="\n".join(lines) + "\n"
             )
         else:
             entries = transcript_entries(step, task_text)

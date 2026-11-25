@@ -173,11 +173,11 @@ def claude_code(
             lines = (await shared_transcript(step)).splitlines()
         else:
             lines = transcript_lines(step, task if isinstance(task, str) else None)
-            if cap is not None:
-                fixed = len(loaded.system) + max(
-                    len(loaded.user_message([], n)) for n in (1, 2)
-                )
-                lines, left_out = fit(lines, fixed, cap or CAP)
+        if cap is not None:
+            fixed = len(loaded.system) + max(
+                len(loaded.user_message([], n)) for n in (1, 2)
+            )
+            lines, left_out = fit(lines, fixed, cap or CAP)
         system = ChatMessageSystem(content=loaded.system)
 
         async def ask(stage: int, config: GenerateConfig) -> str:

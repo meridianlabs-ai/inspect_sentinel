@@ -23,8 +23,8 @@ from inspect_sentinel import (
 CAP = 100_000
 """Tokens a judge prompt is kept under."""
 
-CHARS_PER_TOKEN = 3
-"""Characters per token for estimating a prompt's size: fewer than most English or code takes, so an estimate under the cap is under it."""
+CHARS_PER_TOKEN = 2.5
+"""Characters per token for estimating a prompt's size: fewer than English or code takes, so an estimate under the cap is usually under it. Dense text such as base64 can take fewer, so the usage files record each trajectory's largest prompt, and the ledger prices a trajectory whose prompt passed the cap at the higher rate."""
 
 SHARED = StepPreprocessor[BeforeToolCall](
     input_window=LastTurns(20), omit_assistant_text=True, omit_reasoning=True
@@ -45,7 +45,7 @@ def cap_judge_model(model: str, cap: int = CAP) -> None:
 
 def fit(entries: Sequence[str], fixed: int, cap: int = CAP) -> tuple[list[str], int]:
     """`entries` cut to fit a prompt of `cap` tokens around `fixed` characters of the rest of it: the oldest after the first (the task) are left out until the estimate fits, and the last (the call under review) is always kept. Returns the entries kept and how many were left out."""
-    budget = int(cap * 0.95) * CHARS_PER_TOKEN - fixed
+    budget = int(cap * 0.95 * CHARS_PER_TOKEN) - fixed
     kept = list(entries)
     total = sum(len(e) + 1 for e in kept)
     left_out = 0

@@ -237,38 +237,25 @@ def reconcile(data: Path) -> list[dict[str, Any]]:
     for file in sorted((data / "logs").rglob("*.eval")):
         if str(file) in known:
             continue
-        header = read_eval_log(str(file), header_only=True)
-        batch = cast(
-            Mapping[str, Any], (header.eval.metadata or {}).get("amb_batch") or {}
-        )
-        if not batch or header.status == "started":
+        batch = _batch_of(file)
+        if batch is None:
             continue
-        log = read_eval_log(str(file))
-        samples = log.samples or []
-        halted = [s for s in samples if _stopped(s)]
-        priced = entries(
-            "generate",
-            f"{batch['setting']}/{batch['mode']}/{batch['model']}/{batch['start']}-{batch['end']}",
-            log.stats.model_usage,
-        )
-        row: dict[str, Any] = {
-            **{k: batch[k] for k in ("setting", "mode", "model", "start", "end")},
-            "log": str(file),
-            "status": log.status,
-            "samples": len(samples),
-            "ok": sum(1 for s in samples if s.error is None and s not in halted),
-            "errors": [
-                str(s.error.message)[:300] for s in samples if s.error is not None
-            ],
-            "stopped": len(halted),
-            "cost": sum(e.cost for e in priced),
-            "seconds": 0.0,
-            "reconciled": True,
-        }
-        record(data / "ledger.csv", priced)
+        header = read_eval_log(str(file), header_only=True)
+        # a log still being written is left for later; one marked started
+        # that hasn't changed in longer than a trajectory may take belongs to
+        # a run that died, and is priced from the samples it wrote
+        idle = time.time() - file.stat().st_mtime
+        if header.status == "started" and idle < DEAD_AFTER:
+            continue
+        row: dict[str, Any] = {**_row(batch, str(file)), "reconciled": True}
+        record(data / "ledger.csv", row.pop("entries"))
         _append(data / "batches.jsonl", row)
         added.append(row)
     return added
+
+
+DEAD_AFTER = 3 * 3600
+"""Seconds a log marked started must go unchanged before `reconcile()` takes its run for dead."""
 
 
 def _queue(plan: Plan, data: Path, position: dict[tuple[str, str], int]) -> list[Batch]:
@@ -354,7 +341,7 @@ def _run(
             (
                 f
                 for f in log_dir.glob("*.eval")
-                if f.stat().st_mtime >= began_at and _prefix(batch) in f.name
+                if f.stat().st_mtime >= began_at and _batch_of(f) == batch
             ),
             key=lambda f: f.stat().st_mtime,
         )
@@ -363,11 +350,21 @@ def _run(
                 f"{batch.label} exited {done_.returncode} with no log; see {output}."
             )
         location = str(written[-1])
+    return {**_row(batch, location), "seconds": seconds}
+
+
+def _row(batch: Batch, location: str) -> dict[str, Any]:
+    # a batch's record from its log. A log whose run died before it finished
+    # has no stats, so its spend is summed from the samples it wrote; a sample
+    # still running when it died wrote nothing, and its spend can't be known
     log = read_eval_log(location)
     samples = log.samples or []
     stopped = [s for s in samples if _stopped(s)]
-    ok = sum(1 for s in samples if s.error is None and s not in stopped)
-    usage = log.stats.model_usage
+    usage = dict(log.stats.model_usage)
+    if not usage:
+        for sample in samples:
+            for model, used in sample.model_usage.items():
+                usage[model] = usage[model] + used if model in usage else used
     priced = entries("generate", batch.label, usage)
     return {
         "setting": batch.setting,
@@ -378,19 +375,27 @@ def _run(
         "log": location,
         "status": log.status,
         "samples": len(samples),
-        "ok": ok,
+        "ok": sum(1 for s in samples if s.error is None and s not in stopped),
         "errors": [str(s.error.message)[:300] for s in samples if s.error is not None],
         "stopped": len(stopped),
         "cost": sum(e.cost for e in priced),
-        "seconds": seconds,
+        "seconds": 0.0,
         "entries": priced,
     }
 
 
-def _prefix(batch: Batch) -> str:
-    # the start of the task name batch.py gives the batch's eval
-    return (
-        f"amb-{batch.setting}-{batch.mode}-{batch.model.split('/')[-1]}-{batch.start}"
+def _batch_of(file: Path) -> Batch | None:
+    # the batch a log was run for, from the metadata batch.py records
+    header = read_eval_log(str(file), header_only=True)
+    found = cast(Mapping[str, Any], (header.eval.metadata or {}).get("amb_batch") or {})
+    if not found:
+        return None
+    return Batch(
+        found["setting"],
+        found["mode"],
+        found["model"],
+        int(found["start"]),
+        int(found["end"]),
     )
 
 
@@ -420,8 +425,8 @@ def _free_gb() -> float:
 
 def _prune_images() -> None:
     # remove the benchmark's own images that no container uses (docker
-    # refuses to remove one in use without --force, which is not passed), and
-    # dangling build layers; nothing else on the machine is touched
+    # refuses to remove one in use without --force, which is not passed);
+    # nothing else on the machine is touched
     listed = subprocess.run(
         [
             "docker",
@@ -449,7 +454,6 @@ def _prune_images() -> None:
             old.append(name)
     for name in old:
         subprocess.run(["docker", "rmi", name], capture_output=True)
-    subprocess.run(["docker", "image", "prune", "-f"], capture_output=True)
 
 
 def _stopped(sample: EvalSample) -> bool:

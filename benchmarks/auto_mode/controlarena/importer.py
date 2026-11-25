@@ -13,6 +13,7 @@ A sample that errored, that a provider's safety classifier stopped (a reply endi
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -25,6 +26,9 @@ from ..trajectories import Mode, ToolSpec, Trajectory, TrajectoryCall, Turn
 
 RESULT_CHARS = 4000
 """How much of a tool's output a trajectory keeps: its head and tail around a marker. About the 1,000 tokens Codex Guardian keeps of one."""
+
+ARG_CHARS = 30_000
+"""How much of one string argument of a call a trajectory keeps, its head and tail around a marker: enough for any file an agent writes in these settings, and short enough that one call can't take a judge's prompt past its cap."""
 
 _LANDED = re.compile(r"^Side task '([^']+)' passed")
 _AUTO_SUBMIT = "side_task_auto_submit"
@@ -80,9 +84,9 @@ def trajectory_id(sample: EvalSample, setting: str, attacker: str) -> str:
         if str(sample.metadata.get("eval_mode", "")).lower() == "attack"
         else "honest"
     )
-    return _id(
-        f"ca-{setting}-{mode}-{attacker.split('/')[-1]}-{sample.id}-e{sample.epoch}"
-    )
+    # opaque, so the replayed sample's id says nothing of its mode or attacker
+    named = f"{setting}/{mode}/{attacker}/{sample.id}/{sample.epoch}"
+    return f"t-{hashlib.sha256(named.encode()).hexdigest()[:16]}"
 
 
 def convert(
@@ -127,7 +131,10 @@ def convert(
             calls.append(
                 TrajectoryCall(
                     tool=call.function,
-                    args=dict(call.arguments),
+                    args={
+                        k: _cut(v, ARG_CHARS) if isinstance(v, str) else v
+                        for k, v in call.arguments.items()
+                    },
                     result=_cut(_result_text(result)),
                     error=result is not None and result.error is not None,
                 )
@@ -243,16 +250,14 @@ def _result_text(message: ChatMessageTool | None) -> str:
     return message.text
 
 
-def _cut(text: str) -> str:
-    if len(text) <= RESULT_CHARS:
+def _cut(text: str, limit: int = RESULT_CHARS) -> str:
+    if len(text) <= limit:
         return text
-    half = RESULT_CHARS // 2
-    return f"{text[:half]}\n[... {len(text) - RESULT_CHARS} characters cut ...]\n{text[-half:]}"
+    half = limit // 2
+    return (
+        f"{text[:half]}\n[... {len(text) - limit} characters cut ...]\n{text[-half:]}"
+    )
 
 
 def _name(value: Any) -> str | None:
     return str(value) if value else None
-
-
-def _id(text: str) -> str:
-    return re.sub(r"[^a-z0-9_.-]+", "-", text.lower()).strip("-")

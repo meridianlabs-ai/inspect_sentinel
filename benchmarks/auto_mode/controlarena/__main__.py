@@ -17,12 +17,14 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from inspect_ai.model import ModelUsage
 
+from ..evidence import CAP
 from ..logs import check_manifest, generate_logs
 from ..paths import check_out
 from ..score import MONITORS as _CASE_MONITORS
@@ -55,13 +57,16 @@ from .generate import (
     stopped,
 )
 from .importer import import_logs
-from .ledger import MARGIN, entries, record, spent
+from .ledger import MARGIN, Entry, price, record, spent
 from .refusals import classify
 
 PRIOR_PER_CALL = {"claude_code": 0.006}
 """Dollars per judged tool call assumed for a monitor before any has been measured; others 0.004."""
 
 DEFAULT_PER_CALL = 0.004
+
+OVER_CAP = 5
+"""How much more a judge prompt over the cap costs: Haiku's price above 100K tokens."""
 
 assert set(JUDGES) == set(_CASE_MONITORS)
 
@@ -159,6 +164,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "forecast":
         print(forecast(Plan.read(args.plan), data, out, args.ablation_subset))
         return 0
+    with _locked(data):
+        return _command(args, command, data, out, ledger)
+
+
+def _command(
+    args: argparse.Namespace, command: str, data: Path, out: Path, ledger: Path
+) -> int:
     keys = dotenv(args.env_file) if args.env_file else {}
     os.environ.update(keys)
     if command in ("generate", "run"):
@@ -178,14 +190,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
     if command in ("import", "run"):
         # exactly the logs of the batches run, never one still being written
-        files = [Path(b["log"]) for b in done(data) if b.get("log")]
+        files = [
+            Path(b["log"]) for b in done(data) if b.get("log") and b["model"] in TIERS
+        ]
         if spent(ledger) + MARGIN + 1.0 > args.budget:
             print("Not judging refusals: the budget is spent.", file=sys.stderr)
             attempts: dict[str, str] = {}
         else:
-            found, usage = classify(files, data, args.judge_model)
-            record(ledger, entries("judge", "refusals", usage))
-            attempts = dict(found)
+            attempts = dict(classify(files, data, args.judge_model))
         trajectories, skipped = import_logs(files, attempts)
         write_trajectories(trajectories, out / "trajectories" / "controlarena.yaml")
         print(
@@ -234,12 +246,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 continue
+            # the projection is charged before the scan and reversed once its
+            # real cost is recorded, so a scan that dies is still counted
+            record(
+                ledger,
+                [
+                    Entry(
+                        "judge-reserved",
+                        name,
+                        args.judge_model,
+                        ModelUsage(),
+                        projected,
+                    )
+                ],
+            )
             file = score_trajectories(
                 name, trajectories, settings, only=chosen if name in ABLATIONS else None
             )
             used = read_usage(file.with_suffix(".usage.csv"))
-            cost = sum(u["cost"] or 0.0 for u in used)
-            _record_judging(ledger, name, args.judge_model, used)
+            cost = _record_judging(ledger, name, args.judge_model, used)
+            record(
+                ledger,
+                [
+                    Entry(
+                        "judge-reserved",
+                        name,
+                        args.judge_model,
+                        ModelUsage(),
+                        -projected,
+                    )
+                ],
+            )
             print(f"{name}: scored {calls} calls for ${cost:.2f}.")
     if command in ("report", "run", "score"):
         report = write_trajectory_report(trajectories, out)
@@ -376,17 +413,58 @@ def _per_call(out: Path, name: str) -> float:
 
 def _record_judging(
     ledger: Path, name: str, model: str, used: Sequence[dict[str, Any]]
-) -> None:
-    usage = ModelUsage(
-        input_tokens=sum(u["input_tokens"] for u in used),
-        output_tokens=sum(u["output_tokens"] for u in used),
-        input_tokens_cache_read=sum(u["cache_read_tokens"] for u in used),
-        input_tokens_cache_write=sum(u["cache_write_tokens"] for u in used),
-        reasoning_tokens=sum(u["reasoning_tokens"] for u in used),
-    )
+) -> float:
     # priced by the ledger's own table, like generation, so the budget is
-    # checked against one set of prices
-    record(ledger, entries("judge", name, {model: usage}))
+    # checked against one set of prices; a trajectory any of whose prompts
+    # passed the cap is priced at five times, the rate above it
+    total = 0.0
+    for row in used:
+        usage = ModelUsage(
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
+            input_tokens_cache_read=row["cache_read_tokens"],
+            input_tokens_cache_write=row["cache_write_tokens"],
+            reasoning_tokens=row["reasoning_tokens"],
+        )
+        total += price(model, usage) * (
+            OVER_CAP if row["max_prompt_tokens"] > CAP else 1
+        )
+    record(ledger, [Entry("judge", name, model, ModelUsage(), total)])
+    return total
+
+
+@contextmanager
+def _locked(data: Path) -> Generator[None]:
+    # one command at a time on a data directory: two would take the same
+    # dataset positions and each check the budget without the other's spend
+    data.mkdir(parents=True, exist_ok=True)
+    lock = data / "run.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        holder = lock.read_text().strip()
+        if holder.isdigit() and _alive(int(holder)):
+            raise SystemExit(
+                f"Another command (pid {holder}) is using {data}; wait for it, or remove {lock} if it is gone."
+            ) from None
+        lock.unlink()
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+    try:
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 if __name__ == "__main__":

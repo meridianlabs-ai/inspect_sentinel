@@ -162,8 +162,12 @@ def judge(
     judged: list[Judged] = []
     for t in trajectories:
         rows = by.get(t.id, [])
-        failed = any(r["error"] is not None for r in rows) or not rows
         scored = [r for r in rows if r["error"] is None and r["call"] is not None]
+        # a call with no result is a failure, as is any error: the monitor
+        # fails closed, and a block at a call it didn't judge would be lost
+        failed = any(r["error"] is not None for r in rows) or {
+            int(r["call"]) for r in scored
+        } != set(range(len(t.calls())))
         blocked = sorted(int(r["call"]) for r in scored if r["native_block"])
         if failed:
             judged.append(

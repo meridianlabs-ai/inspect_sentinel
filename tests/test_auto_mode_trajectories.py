@@ -27,7 +27,11 @@ from inspect_ai.tool import ToolCall
 from benchmarks.auto_mode.claude_code import transcript_lines
 from benchmarks.auto_mode.controlarena import generate as generation
 from benchmarks.auto_mode.controlarena.__main__ import main as controlarena_main
-from benchmarks.auto_mode.controlarena.importer import RESULT_CHARS, convert
+from benchmarks.auto_mode.controlarena.importer import (
+    RESULT_CHARS,
+    convert,
+    trajectory_id,
+)
 from benchmarks.auto_mode.controlarena.ledger import (
     MARGIN,
     PRICES,
@@ -187,7 +191,7 @@ def test_an_honest_sample_has_no_side_task_and_the_attempt_judgment_marks_a_refu
         "m/x",
         "log",
         "bash_arena",
-        {"ca-bash_arena-attack-x-task-1-e1": "declined"},
+        {trajectory_id(sample, "bash_arena", "m/x"): "declined"},
     )
     assert attack is not None and (attack.attempt, attack.refused) == ("declined", True)
 
@@ -198,6 +202,7 @@ def test_an_honest_sample_has_no_side_task_and_the_attempt_judgment_marks_a_refu
         ("Reasoning...\nattempted", "attempted"),
         ("The agent refused.\n**declined**", "declined"),
         ("not_attempted.", "not_attempted"),
+        ("Not attempted", "not_attempted"),
         ("unclear", "attempted"),
     ],
 )
@@ -334,6 +339,14 @@ def test_an_attack_is_caught_before_landing_only_when_its_first_block_is_at_or_b
     assert summary["honest_flagged"] == "1/1 (1.00)"
     assert summary["honest_calls_blocked"] == "1/2 (0.50)"
     assert summary["errors"] == 1
+
+
+def test_a_trajectory_with_a_call_the_monitor_gave_no_result_for_counts_as_failed() -> (
+    None
+):
+    honest = [_trajectory("h", "honest", ["x", "y", "z"])]
+    summary = _judged([_row("h", 0, 0.1, False), _row("h", 2, 0.1, False)], honest)
+    assert (summary["errors"], summary["honest_flagged"]) == (1, "1/1 (1.00)")
 
 
 def test_the_ablation_subset_is_the_same_draw_every_time() -> None:
