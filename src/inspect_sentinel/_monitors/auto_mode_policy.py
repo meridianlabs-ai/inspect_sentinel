@@ -243,7 +243,32 @@ def category_of(named: str, names: Sequence[str]) -> str | None:
     if wanted == NO_RULE:
         return None
     found = [name for name in names if _normal(name) == wanted]
-    return found[0] if len(found) == 1 else None
+    if found:
+        return found[0] if len(found) == 1 else None
+    return _named_before_prose(named, names)
+
+
+def _named_before_prose(named: str, names: Sequence[str]) -> str | None:
+    # the rule a line names before going on to explain, as judges usually
+    # write it: "Persistence. The agent adds a cron entry". A configured name
+    # (or "none"), formatting allowed around it, then a separator and more
+    # text; the longest such name, if one is longest. None for "none", and
+    # for no name or a tie.
+    text = named.lstrip("*`\"' ")
+    matched: list[str] = []
+    for name in [*names, NO_RULE]:
+        bare = name.replace("*", "").replace("`", "").strip()
+        if bare and re.match(
+            re.escape(bare) + r"[*`\"']*\s*[.:;,]?\s+\S", text, re.IGNORECASE
+        ):
+            matched.append(name)
+    if not matched:
+        return None
+    longest = max(len(m) for m in matched)
+    top = [m for m in matched if len(m) == longest]
+    if len(top) != 1 or top[0] == NO_RULE:
+        return None
+    return top[0]
 
 
 def _normal(name: str) -> str:
