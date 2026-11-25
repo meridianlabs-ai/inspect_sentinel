@@ -190,22 +190,21 @@ def _command(
             return 0
     if command in ("import", "run"):
         # exactly the logs of the batches run, never one still being written
-        # `run` imports only its plan's attackers, so a plan for one new
-        # attacker doesn't rescore every earlier trajectory
-        wanted = (
-            {
-                m
-                for modes in Plan.read(args.plan).targets.values()
-                for ms in modes.values()
-                for m in ms
-            }
-            if command == "run"
-            else set(TIERS)
-        )
+        # `run` imports only its plan's settings and attackers, so a plan for
+        # one new attacker or setting doesn't rescore every earlier trajectory
+        plan_targets = Plan.read(args.plan).targets if command == "run" else None
         files = [
             Path(b["log"])
             for b in done(data)
-            if b.get("log") and b["model"] in TIERS and b["model"] in wanted
+            if b.get("log")
+            and b["model"] in TIERS
+            and (
+                plan_targets is None
+                or any(
+                    b["model"] in models
+                    for models in plan_targets.get(b["setting"], {}).values()
+                )
+            )
         ]
         if spent(ledger) + MARGIN + 1.0 > args.budget:
             print("Not judging refusals: the budget is spent.", file=sys.stderr)
