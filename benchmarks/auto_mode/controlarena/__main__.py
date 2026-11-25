@@ -44,7 +44,16 @@ from ..trajectory_score import (
     score_trajectories,
     subset,
 )
-from .generate import Plan, done, dotenv, generate
+from .generate import (
+    TIERS,
+    Plan,
+    cost_per_trajectory,
+    counts,
+    done,
+    dotenv,
+    generate,
+    stopped,
+)
 from .importer import import_logs
 from .ledger import MARGIN, entries, record, spent
 from .refusals import classify
@@ -122,6 +131,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if name == "import":
             p.add_argument("--judge-model", default="anthropic/claude-haiku-5-5")
 
+    p = commands.add_parser(
+        "status",
+        help="Tabulate what has been generated: samples, stops, errors and cost by setting, mode and attacker.",
+    )
+    common(p)
+
+    p = commands.add_parser(
+        "forecast", help="Forecast what a plan still costs, from the measured costs."
+    )
+    common(p)
+    p.add_argument("--plan", type=Path, required=True)
+    p.add_argument("--ablation-subset", type=int, default=None)
+
     args = parser.parse_args(argv)
     data: Path = args.data
     out: Path = args.out or data / "bench"
@@ -131,6 +153,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 4
     ledger = data / "ledger.csv"
     command: str = args.command
+    if command == "status":
+        print(status(data))
+        return 0
+    if command == "forecast":
+        print(forecast(Plan.read(args.plan), data, out, args.ablation_subset))
+        return 0
     keys = dotenv(args.env_file) if args.env_file else {}
     os.environ.update(keys)
     if command in ("generate", "run"):
@@ -217,6 +245,92 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = write_trajectory_report(trajectories, out)
         print(report.read_text())
     return 0
+
+
+def status(data: Path) -> str:
+    """A table of the batches run, by setting, mode and attacker: samples, those without error, those a provider's safety classifier stopped, those that errored, dollars and the mean minutes a batch took."""
+    rows: dict[tuple[str, str, str], list[float]] = {}
+    for b in done(data):
+        key = (b["setting"], b["mode"], b["model"])
+        found = rows.setdefault(key, [0, 0, 0, 0, 0.0, 0.0, 0])
+        found[0] += b["samples"]
+        found[1] += b.get("ok", 0)
+        found[2] += b.get("stopped", 0)
+        found[3] += len(b.get("errors", []))
+        found[4] += b.get("cost", 0.0)
+        found[5] += b.get("seconds", 0.0)
+        found[6] += 1
+    lines = [
+        "| setting | mode | attacker | samples | ok | stopped | errored | dollars | minutes a batch |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for (setting, mode, model), r in sorted(rows.items()):
+        lines.append(
+            f"| {setting} | {mode} | {model} | {r[0]:.0f} | {r[1]:.0f} | {r[2]:.0f} | {r[3]:.0f} | {r[4]:.2f} | {r[5] / max(1, r[6]) / 60:.1f} |"
+        )
+    return "\n".join(lines)
+
+
+def forecast(plan: Plan, data: Path, out: Path, ablation_subset: int | None) -> str:
+    """What `plan` still costs to generate and judge, from the measured costs: a line per tier of attacker, then judging, then the ablations."""
+    have = counts(data)
+    halted = stopped(data)
+    measured = _calls_per_trajectory(out)
+    per_call = {name: _per_call(out, name) for name in JUDGES + ABLATIONS}
+    lines = ["| part | trajectories | dollars |", "|---|---|---|"]
+    totals: dict[str, tuple[int, float]] = {}
+    judged = 0
+    calls = 0.0
+    for setting, modes in plan.targets.items():
+        for mode, models in modes.items():
+            for model, n in models.items():
+                missing = (
+                    0
+                    if (setting, mode, model) in halted
+                    else max(0, n - have.get((setting, mode, model), 0))
+                )
+                tier = "frontier" if TIERS.get(model) == "frontier" else "sonnet"
+                cost = missing * cost_per_trajectory(data, setting, model, plan)
+                count, dollars = totals.get(tier, (0, 0.0))
+                totals[tier] = (count + missing, dollars + cost)
+                total = (
+                    n
+                    if (setting, mode, model) not in halted
+                    else have.get((setting, mode, model), 0)
+                )
+                judged += total
+                calls += total * measured.get(setting, measured.get("*", 30.0))
+    for tier, (count, dollars) in sorted(totals.items()):
+        lines.append(
+            f"| generation, {tier}-class attackers | {count} more | {dollars:.2f} |"
+        )
+    judging = calls * sum(per_call[j] for j in JUDGES)
+    lines.append(
+        f"| judging, three judges, {calls:.0f} calls | {judged} in all | {judging:.2f} |"
+    )
+    share = min(1.0, (ablation_subset or judged) / max(1, judged))
+    ablating = calls * share * sum(per_call[a] for a in ABLATIONS)
+    lines.append(
+        f"| ablations, six, on {round(judged * share)} trajectories | | {ablating:.2f} |"
+    )
+    lines.append(f"| spent so far | | {spent(data / 'ledger.csv'):.2f} |")
+    grand = sum(d for _, d in totals.values()) + judging + ablating
+    lines.append(f"| **still to spend** | | **{grand:.2f}** |")
+    return "\n".join(lines)
+
+
+def _calls_per_trajectory(out: Path) -> dict[str, float]:
+    # tool calls per trajectory, by setting and overall ("*"), from what is
+    # imported
+    directory = out / "trajectories"
+    if not directory.exists():
+        return {}
+    found = load_trajectories(directory)
+    by: dict[str, list[int]] = {}
+    for t in found:
+        by.setdefault(t.setting, []).append(len(t.calls()))
+        by.setdefault("*", []).append(len(t.calls()))
+    return {k: sum(v) / len(v) for k, v in by.items()}
 
 
 def _logs_match(trajectories: Sequence[Trajectory], log_dir: Path) -> bool:

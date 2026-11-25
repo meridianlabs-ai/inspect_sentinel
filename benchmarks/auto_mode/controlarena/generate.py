@@ -152,6 +152,10 @@ def generate(
     lock = threading.Lock()
     running: dict[Batch, float] = {}
     ran: list[dict[str, Any]] = []
+    for row in reconcile(data):
+        log(
+            f"Recorded {row['setting']}/{row['mode']}/{row['model']}/{row['start']}-{row['end']}, run before but not recorded: ${row['cost']:.2f}."
+        )
     position = _positions(data)
     queue = _queue(plan, data, position)
     with ThreadPoolExecutor(max_workers=plan.parallel) as pool:
@@ -160,28 +164,39 @@ def generate(
             projected = (batch.end - batch.start) * cost_per_trajectory(
                 data, batch.setting, batch.model, plan
             )
+            skip = False
             while True:
                 with lock:
-                    if _free_gb() < MIN_FREE_GB:
+                    # checked as each batch starts, not when it was queued: a
+                    # batch that has just finished may have been stopped
+                    if (batch.setting, batch.mode, batch.model) in stopped(data):
+                        log(
+                            f"Skipping {batch.label}: a provider's safety classifier stopped this attacker in this setting and mode."
+                        )
+                        skip = True
+                        break
+                    if len(running) < plan.parallel and _free_gb() < MIN_FREE_GB:
                         _prune_images()
-                    if _free_gb() < MIN_FREE_GB:
+                    if len(running) >= plan.parallel:
+                        pass
+                    elif _free_gb() < MIN_FREE_GB:
                         if not running:
                             log(
                                 f"Stopping: {_free_gb():.0f}GB free on Docker's disk, under {MIN_FREE_GB}GB."
                             )
                             return _finish(futures, ran)
-                        time.sleep(15)
-                        continue
-                    committed = spent(ledger) + sum(running.values())
-                    if committed + projected <= limit:
+                    elif spent(ledger) + sum(running.values()) + projected <= limit:
                         running[batch] = projected
                         break
-                    if not running:
+                    elif not running:
+                        committed = spent(ledger)
                         log(
                             f"Stopping: {batch.label} is projected at ${projected:.2f}, and ${committed:.2f} is spent of the ${limit:.2f} generation may use."
                         )
                         return _finish(futures, ran)
                 time.sleep(15)
+            if skip:
+                continue
 
             def run(b: Batch = batch) -> dict[str, Any]:
                 try:
@@ -213,6 +228,47 @@ def _finish(
         ) as ex:  # a batch that failed to run is reported, and the others still finish
             ran.append({"error": repr(ex)})
     return ran
+
+
+def reconcile(data: Path) -> list[dict[str, Any]]:
+    """Record every finished batch log under `data/logs` that `batches.jsonl` doesn't name, such as one whose driver was stopped while it ran, pricing it into the ledger; return the rows added. A log still being written is left for later."""
+    known = {b.get("log") for b in done(data)}
+    added: list[dict[str, Any]] = []
+    for file in sorted((data / "logs").rglob("*.eval")):
+        if str(file) in known:
+            continue
+        header = read_eval_log(str(file), header_only=True)
+        batch = cast(
+            Mapping[str, Any], (header.eval.metadata or {}).get("amb_batch") or {}
+        )
+        if not batch or header.status == "started":
+            continue
+        log = read_eval_log(str(file))
+        samples = log.samples or []
+        halted = [s for s in samples if _stopped(s)]
+        priced = entries(
+            "generate",
+            f"{batch['setting']}/{batch['mode']}/{batch['model']}/{batch['start']}-{batch['end']}",
+            log.stats.model_usage,
+        )
+        row: dict[str, Any] = {
+            **{k: batch[k] for k in ("setting", "mode", "model", "start", "end")},
+            "log": str(file),
+            "status": log.status,
+            "samples": len(samples),
+            "ok": sum(1 for s in samples if s.error is None and s not in halted),
+            "errors": [
+                str(s.error.message)[:300] for s in samples if s.error is not None
+            ],
+            "stopped": len(halted),
+            "cost": sum(e.cost for e in priced),
+            "seconds": 0.0,
+            "reconciled": True,
+        }
+        record(data / "ledger.csv", priced)
+        _append(data / "batches.jsonl", row)
+        added.append(row)
+    return added
 
 
 def _queue(plan: Plan, data: Path, position: dict[tuple[str, str], int]) -> list[Batch]:
