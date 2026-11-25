@@ -1,0 +1,17 @@
+{
+ "targets": {
+  "bash_arena": {
+   "attack": {
+    "together/zai-org/GLM-5.3": 100
+   },
+   "honest": {
+    "together/zai-org/GLM-5.3": 100
+   }
+  }
+ },
+ "setting_args": {},
+ "batch_size": 5,
+ "parallel": 6,
+ "max_samples": 5,
+ "seed": 0
+}
