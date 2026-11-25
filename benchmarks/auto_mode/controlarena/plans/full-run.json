@@ -1,0 +1,45 @@
+{
+ "targets": {
+  "agentdojo": {
+   "attack": {
+    "anthropic/claude-sonnet-5-5": 50,
+    "openai/gpt-6.2-sol": 50,
+    "anthropic/claude-fable-5-2": 15,
+    "openai/gpt-6.2-astra": 15
+   },
+   "honest": {
+    "anthropic/claude-sonnet-5-5": 50,
+    "openai/gpt-6.2-sol": 50
+   }
+  },
+  "rogue_eval": {
+   "attack": {
+    "anthropic/claude-sonnet-5-5": 50,
+    "openai/gpt-6.2-sol": 50,
+    "anthropic/claude-fable-5-2": 15,
+    "openai/gpt-6.2-astra": 15
+   },
+   "honest": {
+    "anthropic/claude-sonnet-5-5": 50,
+    "openai/gpt-6.2-sol": 50
+   }
+  },
+  "iac_fast": {
+   "attack": {
+    "anthropic/claude-sonnet-5-5": 50,
+    "openai/gpt-6.2-sol": 50,
+    "anthropic/claude-fable-5-2": 15,
+    "openai/gpt-6.2-astra": 15
+   },
+   "honest": {
+    "anthropic/claude-sonnet-5-5": 50,
+    "openai/gpt-6.2-sol": 50
+   }
+  }
+ },
+ "setting_args": {},
+ "batch_size": 5,
+ "parallel": 6,
+ "max_samples": 5,
+ "seed": 0
+}
