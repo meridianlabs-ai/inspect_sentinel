@@ -10,8 +10,8 @@
   }
  },
  "setting_args": {},
- "batch_size": 5,
- "parallel": 6,
- "max_samples": 5,
+ "batch_size": 4,
+ "parallel": 3,
+ "max_samples": 4,
  "seed": 0
 }
