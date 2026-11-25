@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.4.0...0.4.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **sidecar:** an eval is told when a person's question closes before anyone answers ([#273](https://github.com/meridianlabs-ai/inspect_sentinel/issues/273)) ([d5102eb](https://github.com/meridianlabs-ai/inspect_sentinel/commit/d5102eb087fd66b0d9536b27f4498c6c4b0a1fa6))
+
 ## [0.4.0](https://github.com/meridianlabs-ai/inspect_sentinel/compare/0.3.2...0.4.0) (2026-11-23)
 
 
