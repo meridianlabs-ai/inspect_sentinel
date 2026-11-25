@@ -197,7 +197,8 @@ _TEXT = "text/plain"
 # custom prompt template from the template fields, and folds the system
 # message into a user message when told the model has none. A client that
 # calls through a provider's SDK sends none of them: the SDK merges its own
-# `extra_body` before sending.
+# `extra_body` before sending. Kept by hand from the LiteLLM versions CI
+# tests: see `LITELLM` in the Makefile.
 _REWRITTEN_FROM = frozenset(
     {
         "extra_body",
