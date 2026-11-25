@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TypeVar, cast
 
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample
@@ -32,6 +32,18 @@ MANIFEST = "cases.json"
 
 MANIFEST_VERSION = 2
 """The manifest's format; logs with an older one are made again."""
+
+
+class Replayable(Protocol):
+    """What a log is made from: a case, or a trajectory, with its id."""
+
+    @property
+    def id(self) -> str:
+        """Its sample id."""
+        ...
+
+
+R = TypeVar("R", bound=Replayable)
 
 
 def case_digest(case: Case) -> str:
@@ -147,9 +159,17 @@ def text_editor(results: Iterator[str]) -> Tool:
 
 
 def generate_logs(
-    cases: Sequence[Case], log_dir: Path, *, max_tasks: int = 32, force: bool = False
+    cases: Sequence[R],
+    log_dir: Path,
+    *,
+    max_tasks: int = 32,
+    force: bool = False,
+    task: Callable[[R], Task] | None = None,
+    digest: Callable[[R], str] | None = None,
 ) -> Path:
     """Write a log for each case under `log_dir`, with the manifest naming each case's digest and log, and return `log_dir`.
+
+    `task` and `digest` make a case's task and digest; by default a `Case`'s (`case_task()`, `case_digest()`), and for trajectories `trajectory_task()` and `trajectory_digest()`.
 
     Raises:
         UnsafeOutput: If `log_dir`, or a link beneath it, resolves to where git would take what is written there.
@@ -165,8 +185,11 @@ def generate_logs(
     (log_dir / MANIFEST).unlink(missing_ok=True)
     for old in _logs_in(log_dir):
         old.unlink()
+    # a case's by default; with cases of another kind, both are given
+    task_of = cast(Callable[[R], Task], task or case_task)
+    digest_of = cast(Callable[[R], str], digest or case_digest)
     logs = eval(
-        [case_task(case) for case in cases],
+        [task_of(case) for case in cases],
         log_dir=str(log_dir),
         display="none",
         max_tasks=max_tasks,
@@ -182,7 +205,7 @@ def generate_logs(
         files[str(sample_id)] = Path(log.location).name
     entries = {
         case.id: {
-            "digest": case_digest(case),
+            "digest": digest_of(case),
             "log": files[case.id],
             "sha256": _sha256(log_dir / files[case.id]),
         }
@@ -194,7 +217,9 @@ def generate_logs(
     return log_dir
 
 
-def check_manifest(cases: Sequence[Case], log_dir: Path) -> dict[str, str]:
+def check_manifest(
+    cases: Sequence[R], log_dir: Path, digest: Callable[[R], str] | None = None
+) -> dict[str, str]:
     """Check that `log_dir` holds exactly one log for each of `cases`, made from it as it is now and unchanged since, and no other log at any depth; return each case's digest by id.
 
     Raises:
@@ -207,13 +232,14 @@ def check_manifest(cases: Sequence[Case], log_dir: Path) -> dict[str, str]:
             f"The logs in {log_dir} were made by an older version of the benchmark; make them again with `logs --force`."
         )
     entries: dict[str, dict[str, str]] = manifest["cases"]
+    digest_of = cast(Callable[[R], str], digest or case_digest)
     ids = {c.id for c in cases}
     missing = sorted(ids - set(entries))
     extra = sorted(set(entries) - ids)
     changed = sorted(
         c.id
         for c in cases
-        if c.id in entries and entries[c.id]["digest"] != case_digest(c)
+        if c.id in entries and entries[c.id]["digest"] != digest_of(c)
     )
     named = {e["log"] for e in entries.values()}
     present = {f.relative_to(log_dir).as_posix() for f in _logs_in(log_dir)}
@@ -231,14 +257,16 @@ def check_manifest(cases: Sequence[Case], log_dir: Path) -> dict[str, str]:
     return {i: e["digest"] for i, e in entries.items()}
 
 
-def log_files(cases: Sequence[Case], log_dir: Path) -> list[Path]:
+def log_files(
+    cases: Sequence[R], log_dir: Path, digest: Callable[[R], str] | None = None
+) -> list[Path]:
     """The log of each of `cases` in `log_dir`, in their order, once `check_manifest()` finds the directory is exactly theirs; a scan is given these files, never the directory.
 
     Raises:
         FileNotFoundError: If `log_dir` has no manifest.
         ValueError: If the logs in `log_dir` are not exactly those of `cases` as they are now.
     """
-    check_manifest(cases, log_dir)
+    check_manifest(cases, log_dir, digest)
     manifest: dict[str, Any] = json.loads((log_dir / MANIFEST).read_text())
     return [log_dir / manifest["cases"][c.id]["log"] for c in cases]
 

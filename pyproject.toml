@@ -179,8 +179,12 @@ timeout = 120
 # of its own.
 include = ["src/inspect_sentinel", "tests", "examples", "benchmarks"]
 # generated code, from `make envoy-protos`, which is read for its types but
-# not checked
-exclude = ["src/inspect_sentinel/sidecar/envoy/_proto"]
+# not checked; and the auto_mode benchmark's ControlArena batch runner, which
+# runs in ControlArena's own environment and imports it, never in this one
+exclude = [
+    "src/inspect_sentinel/sidecar/envoy/_proto",
+    "benchmarks/auto_mode/controlarena/batch.py",
+]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 pythonVersion = "3.11"
