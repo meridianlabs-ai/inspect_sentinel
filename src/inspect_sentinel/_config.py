@@ -362,7 +362,7 @@ def _config_name(name: str) -> str:
 def config_relative_to(sentinels: Sentinels, directory: str) -> SentinelConfig:
     """Record constructed monitors and protocols as `sentinel_config()` does, with their source file references relative to `directory`.
 
-    A relative file reference, a `"<file>.py:function"` that `human(channel=)` records, is relative to the working directory the sentinel was made in. inspect_ai records the sentinel in the eval log relative to the directory the eval was launched from, where `eval_retry()` rebuilds it. Each reference a factory marks as a source reference names the file it was resolved to when the instance was made, kept in memory and never recorded; that file is recorded relative to `directory`, or by its absolute path where there is no relative path to it (another drive). A module's name, a file given by its absolute path and every other value are recorded as `sentinel_config()` records them.
+    A relative file reference, a `"<file>.py:function"` that `human(channel=)` records, is relative to the working directory the sentinel was made in. inspect_ai records the sentinel in the eval log relative to the directory the eval was launched from, where `eval_retry()` rebuilds it. Each reference a factory marks as a source reference, relative or absolute, names the file it was resolved to when the instance was made, kept in memory and never recorded; that file is recorded relative to `directory`, or by its absolute path where there is no relative path to it (another drive). A module's name and every other value are recorded as `sentinel_config()` records them.
 
     Args:
         sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.

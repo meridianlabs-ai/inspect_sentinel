@@ -115,17 +115,15 @@ def is_source_reference(converter: object) -> bool:
     return getattr(converter, _SOURCE_REFERENCE, False) is True
 
 
-def reference_origin(given: object, recorded: object) -> Path | None:
-    # the file a recorded "<file>.py:function" reference names, resolved as
-    # `import_source()` resolves it in the working directory, so a symlink
-    # followed by `..` names the file the import found. None for a module's
-    # name, and for a file given by its absolute path, which stays as given
+def reference_origin(recorded: object) -> Path | None:
+    # the file a recorded "<file>.py:function" reference names, relative or
+    # absolute, resolved as `import_source()` resolves it in the working
+    # directory, so a symlink followed by `..` names the file the import
+    # found. None for a module's name
     if not isinstance(recorded, str):
         return None
     module, _, qualname = recorded.rpartition(":")
     if not module.endswith(".py") or not qualname:
-        return None
-    if isinstance(given, str) and Path(module).is_absolute():
         return None
     return _absolute(module)
 

@@ -571,12 +571,10 @@ def test_other_values_are_recorded_as_sentinel_config_records_them(
     tasks = tmp_path / "tasks"
     tasks.mkdir()
     (tasks / "review.py").write_text(_answer_file("task"))
-    absolute = (tasks / "review.py").resolve().as_posix()
     monkeypatch.chdir(tasks)
     unchanged = [
-        # a module's name, and a file given by its absolute path
+        # a module's name
         human(["tool_call"], channel="tests.test_human_channel:ask_desk"),
-        human(["tool_call"], channel=f"{absolute}:ask"),
         # a param the factory does not mark as a source reference, even one
         # that reads as a file or a reference
         reads_policy(policy_file="policy.txt", notes="notes.py:x"),
@@ -593,6 +591,43 @@ def test_other_values_are_recorded_as_sentinel_config_records_them(
     assert config_relative_to(rebuilt, str(tmp_path)) == _human_config(
         "tasks/review.py:ask"
     )
+
+
+@pytest.mark.anyio
+async def test_a_file_given_by_its_absolute_path_is_recorded_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "review.py").write_text(_answer_file("task"))
+    absolute = (tasks / "review.py").resolve().as_posix()
+    monkeypatch.chdir(tasks)
+    sentinel = human(["tool_call"], channel=f"{absolute}:ask")
+
+    config = config_relative_to(sentinel, str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    decision, _, _ = await _run(sentinel_from_config(config))
+
+    # recorded as given where it was made
+    assert sentinel_config(sentinel) == _human_config(f"{absolute}:ask")
+    assert config == _human_config("tasks/review.py:ask")
+    assert decision == Decision.terminate("task")
+
+
+@pytest.mark.parametrize("composition", [sequential, concurrent])
+def test_channels_in_a_tuple_of_children_are_recorded_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, composition: Any
+) -> None:
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "review.py").write_text(_answer_file("task"))
+    monkeypatch.chdir(tasks)
+    sentinel = composition((loud(), human(["tool_call"], channel="review.py:ask")))
+
+    children = config_relative_to(sentinel, str(tmp_path)).model_dump()["children"]
+
+    # recorded as a list, with the channel at the same index
+    assert children[1]["params"]["channel"] == "tasks/review.py:ask"
 
 
 def test_a_file_with_no_relative_path_is_recorded_by_its_absolute_path(
@@ -917,6 +952,40 @@ def test_a_task_files_channel_named_through_a_symlink_is_found_on_retry(
     assert retried_log.status == "success", retried_log.error
     assert retried_log.samples is not None
     assert "approved through the link" in retried_log.samples[0].model_dump_json()
+
+
+@_GATE
+def test_a_task_files_channel_in_a_tuple_of_children_is_found_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "plain_task.py").write_text(
+        SUBDIRECTORY_TASK_FILE.replace(
+            'sentinel=human(["model_input"], channel=CHANNEL)',
+            'sentinel=sequential((human(["model_input"], channel="review.py:ask"),))',
+        ).replace(
+            "from inspect_sentinel import HumanAnswer, human",
+            "from inspect_sentinel import HumanAnswer, human, sequential",
+        )
+    )
+    (tasks / "review.py").write_text(BESIDE_FILE)
+    (tmp_path / "review.py").write_text(ROOT_FILE)
+    monkeypatch.chdir(tmp_path)
+
+    log = eval("tasks/plain_task.py", model="mockllm/model", log_dir="logs")[0]
+    retried_log = eval_retry(log, log_dir="logs")[0]
+
+    assert log.status == "error"
+    assert log.eval.config.sentinel is not None
+    [child] = log.eval.config.sentinel.model_dump()["children"]
+    assert child["params"]["channel"] == "tasks/review.py:ask"
+    assert retried_log.status == "success", retried_log.error
+    assert retried_log.samples is not None
+    assert (
+        "approved by the channel beside the task file"
+        in retried_log.samples[0].model_dump_json()
+    )
 
 
 # the same task file with no sentinel of its own

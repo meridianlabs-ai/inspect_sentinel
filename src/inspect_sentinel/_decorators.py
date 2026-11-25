@@ -503,7 +503,7 @@ def _origins(
     found: Origins = {}
     for name, value in given.items():
         if is_source_reference(recorded_as.get(name)):
-            origin = reference_origin(value, recorded.get(name))
+            origin = reference_origin(recorded.get(name))
             if origin is not None:
                 found[("params", name)] = origin
             continue
@@ -512,8 +512,9 @@ def _origins(
         children: list[tuple[tuple[str | int, ...], object]] = []
         if _configured(value):
             children = [(("params", name), value)]
-        elif isinstance(value, list) and value:
-            items = cast(list[object], value)
+        elif isinstance(value, (list, tuple)) and value:
+            # a tuple is recorded as a list
+            items = list(cast(Sequence[object], value))
             if all(map(_configured, items)):
                 children = [((name, i), item) for i, item in enumerate(items)]
         elif isinstance(value, dict) and value:
