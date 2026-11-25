@@ -118,7 +118,7 @@ def test_integration_module_exports_the_host_surface() -> None:
         "sentinel_from_config",
         "config_from_sentinel",
         "kept_human_decision",
-        "rebase_config",
+        "config_relative_to",
         "validate_instance_name",
         "resolve_sentinel",
         "step_types",

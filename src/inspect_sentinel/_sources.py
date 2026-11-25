@@ -106,7 +106,7 @@ _Converter = Callable[[object], object]
 def source_reference(converter: _Converter) -> _Converter:
     # marks a `recorded_as()` converter whose recorded value is a source
     # reference, "module:function" where the module may be a `.py` file's
-    # path, so `rebase_config()` rebases the file's path
+    # path, so `config_relative_to()` records the file relative to a directory
     setattr(converter, _SOURCE_REFERENCE, True)
     return converter
 
@@ -115,20 +115,27 @@ def is_source_reference(converter: object) -> bool:
     return getattr(converter, _SOURCE_REFERENCE, False) is True
 
 
-def rebase_reference(reference: object, from_dir: Path, to_dir: Path) -> object:
-    # a "<file>.py:function" reference whose file is relative to `from_dir`,
-    # as one relative to `to_dir`; a module's name, an absolute file and any
-    # other value as given. A file `to_dir` has no relative path to (another
-    # drive) becomes absolute, as `_relative()` records a file outside the
-    # working directory
-    if not isinstance(reference, str):
-        return reference
-    module, _, qualname = reference.rpartition(":")
-    if not module.endswith(".py") or not qualname or Path(module).is_absolute():
-        return reference
-    file = from_dir / module
+def reference_origin(given: object, recorded: object) -> Path | None:
+    # the file a recorded "<file>.py:function" reference names, resolved as
+    # `import_source()` resolves it in the working directory, so a symlink
+    # followed by `..` names the file the import found. None for a module's
+    # name, and for a file given by its absolute path, which stays as given
+    if not isinstance(recorded, str):
+        return None
+    module, _, qualname = recorded.rpartition(":")
+    if not module.endswith(".py") or not qualname:
+        return None
+    if isinstance(given, str) and Path(module).is_absolute():
+        return None
+    return _absolute(module)
+
+
+def relative_reference(recorded: str, origin: Path, directory: str) -> str:
+    # a reference to the file `origin` relative to `directory`, or absolute
+    # where there is no relative path to it (another drive)
+    _, _, qualname = recorded.rpartition(":")
     try:
-        rebased = Path(os.path.relpath(file, to_dir)).as_posix()
+        file = os.path.relpath(origin, Path(directory).resolve())
     except ValueError:
-        rebased = Path(os.path.normpath(file)).as_posix()
-    return f"{rebased}:{qualname}"
+        file = str(origin)
+    return f"{Path(file).as_posix()}:{qualname}"

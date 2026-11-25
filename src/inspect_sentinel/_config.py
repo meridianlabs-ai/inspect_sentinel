@@ -4,7 +4,6 @@ import inspect
 import json
 import logging
 from collections.abc import Callable, Hashable, Mapping, Sequence
-from pathlib import Path
 from typing import Any, NamedTuple, cast
 
 import yaml
@@ -25,9 +24,9 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
-from ._decorators import ENTRY_FIELDS, VERSION, recorded_converters
+from ._decorators import ENTRY_FIELDS, VERSION, Origins, instance_origins
 from ._portable import PortabilityError
-from ._sources import is_source_reference, rebase_reference
+from ._sources import relative_reference
 from ._types import Sentinel, Sentinels
 
 logger = logging.getLogger(__name__)
@@ -360,52 +359,40 @@ def _config_name(name: str) -> str:
     return name
 
 
-def rebase_config(config: SentinelConfig, from_dir: str, to_dir: str) -> SentinelConfig:
-    """Rebase a configuration's source file references from one directory to another.
+def config_relative_to(sentinels: Sentinels, directory: str) -> SentinelConfig:
+    """Record constructed monitors and protocols as `sentinel_config()` does, with their source file references relative to `directory`.
 
-    A relative file reference in a configuration, a `"<file>.py:function"` that `human(channel=)` records, is relative to the working directory the sentinel was made in. inspect_ai records a task's own sentinel, made in the task file's directory, against the directory the eval was launched from, where `eval_retry()` rebuilds it. Only params a factory records as source references are rewritten, each to the same file relative to `to_dir`; a module's name, an absolute file and every other value are as given. An entry whose factory is not registered is as given.
+    A relative file reference, a `"<file>.py:function"` that `human(channel=)` records, is relative to the working directory the sentinel was made in. inspect_ai records the sentinel in the eval log relative to the directory the eval was launched from, where `eval_retry()` rebuilds it. Each reference a factory marks as a source reference names the file it was resolved to when the instance was made, kept in memory and never recorded; that file is recorded relative to `directory`, or by its absolute path where there is no relative path to it (another drive). A module's name, a file given by its absolute path and every other value are recorded as `sentinel_config()` records them.
 
     Args:
-        config: The configuration, as `sentinel_config()` records it.
-        from_dir: The directory its relative file references are relative to.
-        to_dir: The directory to make them relative to.
+        sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.
+        directory: The directory to record file references relative to.
+
+    Raises:
+        TypeError: If a value is not a configured monitor or protocol.
     """
-    source, target = Path(from_dir).resolve(), Path(to_dir).resolve()
-    if source == target:
+    config = sentinel_config(sentinels)
+    origins = _layer_origins(sentinels)
+    if not origins:
         return config
-    return SentinelConfig.model_validate(
-        _rebase_layer(config.model_dump(), source, target)
-    )
+    dumped: Any = config.model_dump()
+    for path, origin in origins.items():
+        holder = dumped
+        for key in path[:-1]:
+            holder = holder[key]
+        holder[path[-1]] = relative_reference(holder[path[-1]], origin, directory)
+    return SentinelConfig.model_validate(dumped)
 
 
-def _rebase_layer(layer: object, from_dir: Path, to_dir: Path) -> object:
-    if isinstance(layer, list):
-        items = cast(list[object], layer)
-        return [_rebase_layer(entry, from_dir, to_dir) for entry in items]
-    entries = cast(dict[str, Any], layer)
-    if isinstance(entries.get("name"), str):
-        return _rebase_entry(entries, from_dir, to_dir)
+def _layer_origins(sentinels: Sentinels) -> Origins:
+    if is_registry_object(sentinels):
+        return instance_origins(sentinels)
+    if isinstance(sentinels, Mapping):
+        named = cast(Mapping[str, object], sentinels).items()
+    else:
+        named = enumerate(cast(Sequence[object], sentinels))
     return {
-        name: _rebase_layer(entry, from_dir, to_dir) for name, entry in entries.items()
+        (key, *path): origin
+        for key, child in named
+        for path, origin in instance_origins(child).items()
     }
-
-
-def _rebase_entry(
-    entry: dict[str, Any], from_dir: Path, to_dir: Path
-) -> dict[str, Any]:
-    found = _find_all(entry["name"])
-    converters: Mapping[str, object] = (
-        recorded_converters(found[0].factory) if len(found) == 1 else {}
-    )
-    params = {
-        key: rebase_reference(value, from_dir, to_dir)
-        if is_source_reference(converters.get(key))
-        else value
-        for key, value in entry.get("params", {}).items()
-    }
-    nested = {
-        key: _rebase_layer(value, from_dir, to_dir)
-        for key, value in entry.items()
-        if key not in ENTRY_FIELDS
-    }
-    return {**entry, "params": params, **nested}

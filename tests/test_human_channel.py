@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import anyio
 import pytest
-from inspect_ai import eval, eval_retry
+from inspect_ai import eval, eval_retry, task_with
 from inspect_ai.log import SentinelConfig
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import Store
@@ -37,9 +37,14 @@ from inspect_sentinel import (
 )
 from inspect_sentinel._host import HostContext
 from inspect_sentinel._human_decisions import kept_human_decision
-from inspect_sentinel._integration import Sentinels, rebase_config, resolve_sentinel
+from inspect_sentinel._integration import (
+    Sentinels,
+    config_relative_to,
+    resolve_sentinel,
+)
 from inspect_sentinel._runner import run_sentinel
 from inspect_sentinel._step import BeforeToolCall, Step
+from inspect_sentinel._types import Sentinel
 from inspect_sentinel.config import sentinel_config, sentinel_from_config
 from tests._fakes import (
     FakeHost,
@@ -416,23 +421,29 @@ def _load_file(file: Path) -> Any:
     return module
 
 
+def _human_config(channel: str) -> SentinelConfig:
+    return SentinelConfig.model_validate(
+        {"name": "human", "params": {"stages": ["tool_call"], "channel": channel}}
+    )
+
+
 @pytest.mark.parametrize(
-    ("launch", "rebased"),
+    ("launch", "logged"),
     [
         ("project", "tasks/review.py:ask"),
-        # a sibling of the task file's directory
+        # a sibling of the directory the channel was made in
         ("project/runs", "../tasks/review.py:ask"),
-        # below the task file's directory
+        # below the directory the channel was made in
         ("project/tasks/runs", "../review.py:ask"),
     ],
 )
 @pytest.mark.parametrize("given", ["function", "name"])
 @pytest.mark.anyio
-async def test_a_channel_file_recorded_in_a_task_files_directory_is_rebased_to_the_launch_directory(
+async def test_a_channel_file_is_recorded_relative_to_another_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     launch: str,
-    rebased: str,
+    logged: str,
     given: str,
 ) -> None:
     tasks, launch_dir = tmp_path / "project" / "tasks", tmp_path / launch
@@ -443,58 +454,105 @@ async def test_a_channel_file_recorded_in_a_task_files_directory_is_rebased_to_t
     channel = (
         _load_file(tasks / "review.py").ask if given == "function" else "review.py:ask"
     )
-    recorded = sentinel_config(human(["tool_call"], channel=channel))
+    sentinel = human(["tool_call"], channel=channel)
 
-    config = rebase_config(recorded, str(tasks), str(launch_dir))
+    config = config_relative_to(sentinel, str(launch_dir))
     monkeypatch.chdir(launch_dir)
     decision, _, _ = await _run(sentinel_from_config(config))
 
-    assert recorded == _human_config("review.py:ask")
-    assert config == _human_config(rebased)
+    # recorded where it was made, as before
+    assert sentinel_config(sentinel) == _human_config("review.py:ask")
+    assert config == _human_config(logged)
     assert decision == Decision.terminate("beside the task file")
 
 
-def _human_config(channel: str, stages: list[str] | None = None) -> SentinelConfig:
-    return SentinelConfig.model_validate(
-        {
-            "name": "human",
-            "params": {"stages": stages or ["tool_call"], "channel": channel},
-        }
+def test_a_channel_named_in_a_parent_directory_is_recorded_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks, shared = tmp_path / "tasks", tmp_path / "shared"
+    tasks.mkdir()
+    shared.mkdir()
+    (shared / "review.py").write_text(_answer_file("shared"))
+    monkeypatch.chdir(tasks)
+
+    sentinel = human(["tool_call"], channel="../shared/review.py:ask")
+
+    assert config_relative_to(sentinel, str(tmp_path)) == _human_config(
+        "shared/review.py:ask"
     )
 
 
-def test_a_channel_named_in_a_parent_directory_is_rebased(tmp_path: Path) -> None:
-    tasks = tmp_path / "project" / "tasks"
+@pytest.mark.anyio
+async def test_a_function_from_a_file_outside_where_it_was_made_is_recorded_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks, shared = tmp_path / "tasks", tmp_path / "shared"
+    tasks.mkdir()
+    shared.mkdir()
+    (shared / "review.py").write_text(_answer_file("shared"))
+    monkeypatch.chdir(tasks)
+    sentinel = human(["tool_call"], channel=_load_file(shared / "review.py").ask)
 
-    config = rebase_config(
-        _human_config("../shared/review.py:ask"), str(tasks), str(tmp_path / "project")
-    )
+    config = config_relative_to(sentinel, str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    decision, _, _ = await _run(sentinel_from_config(config))
+
+    # outside the directory it was made in, the file is recorded by its
+    # absolute path, but relative to a directory that has a relative path to it
+    shared_file = (shared / "review.py").resolve().as_posix()
+    assert sentinel_config(sentinel) == _human_config(f"{shared_file}:ask")
+    assert config == _human_config("shared/review.py:ask")
+    assert decision == Decision.terminate("shared")
+
+
+@pytest.mark.parametrize("beside_link", [False, True])
+@pytest.mark.anyio
+async def test_a_channel_named_through_a_symlink_is_recorded_as_the_file_it_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, beside_link: bool
+) -> None:
+    # `link/../review.py` names the link target's parent's file; read as text,
+    # without the link, it is `tasks/review.py`
+    tasks, shared = tmp_path / "tasks", tmp_path / "shared"
+    tasks.mkdir()
+    (shared / "nested").mkdir(parents=True)
+    (tasks / "link").symlink_to(shared / "nested", target_is_directory=True)
+    (shared / "review.py").write_text(_answer_file("through the link"))
+    if beside_link:
+        (tasks / "review.py").write_text(_answer_file("beside the link"))
+    monkeypatch.chdir(tasks)
+    sentinel = human(["tool_call"], channel="link/../review.py:ask")
+
+    config = config_relative_to(sentinel, str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    decision, _, _ = await _run(sentinel_from_config(config))
 
     assert config == _human_config("shared/review.py:ask")
+    assert decision == Decision.terminate("through the link")
 
 
-def _nested_config(first: str, second: str) -> SentinelConfig:
-    return SentinelConfig.model_validate(
-        {
-            "first": {
-                "name": "sequential",
-                "params": {},
-                "children": [
-                    {"name": "loud", "params": {}},
-                    _human_config(first).model_dump(),
-                ],
-            },
-            "second": _human_config(second).model_dump(),
-        }
-    )
+def test_nested_and_named_channels_are_recorded_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    for name in ("a", "b", "c"):
+        (tasks / f"{name}.py").write_text(_answer_file(name))
+    monkeypatch.chdir(tasks)
+    second = human(["tool_call"], channel="b.py:ask")
+    sentinels: dict[str, Sentinel] = {
+        "first": sequential([loud(), human(["tool_call"], channel="a.py:ask")]),
+        "second": second,
+        # a lone nested instance, which the configuration records in params
+        "third": sequential(human(["tool_call"], channel="c.py:ask")),
+    }
 
+    named = config_relative_to(sentinels, str(tmp_path)).model_dump()
+    listed = config_relative_to([second], str(tmp_path)).model_dump()
 
-def test_rebasing_nested_and_named_entries(tmp_path: Path) -> None:
-    config = rebase_config(
-        _nested_config("a.py:ask", "b.py:ask"), str(tmp_path / "tasks"), str(tmp_path)
-    )
-
-    assert config == _nested_config("tasks/a.py:ask", "tasks/b.py:ask")
+    assert named["first"]["children"][1]["params"]["channel"] == "tasks/a.py:ask"
+    assert named["second"]["params"]["channel"] == "tasks/b.py:ask"
+    assert named["third"]["params"]["children"]["params"]["channel"] == "tasks/c.py:ask"
+    assert listed[0]["params"]["channel"] == "tasks/b.py:ask"
 
 
 @protocol
@@ -507,35 +565,54 @@ def reads_policy(policy_file: str, notes: str = "notes.py:x") -> Protocol:
     return decide
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        # a module's name and an absolute file
-        _human_config("tests.test_human_channel:ask_desk").model_dump(),
-        _human_config("/srv/review.py:ask").model_dump(),
-        # a param the factory does not record as a source reference, even one
+def test_other_values_are_recorded_as_sentinel_config_records_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "review.py").write_text(_answer_file("task"))
+    absolute = (tasks / "review.py").resolve().as_posix()
+    monkeypatch.chdir(tasks)
+    unchanged = [
+        # a module's name, and a file given by its absolute path
+        human(["tool_call"], channel="tests.test_human_channel:ask_desk"),
+        human(["tool_call"], channel=f"{absolute}:ask"),
+        # a param the factory does not mark as a source reference, even one
         # that reads as a file or a reference
-        {
-            "name": "reads_policy",
-            "params": {"policy_file": "policy.txt", "notes": "notes.py:x"},
-        },
-        # a factory that is not registered
-        {"name": "not_registered", "params": {"channel": "review.py:ask"}},
-        # stages and choices around a channel that is not a reference
-        {
-            "name": "human",
-            "params": {
-                "stages": ["tool_call"],
-                "choices": ["approve"],
-                "channel": None,
-            },
-        },
-    ],
-)
-def test_rebasing_leaves_other_values_as_given(tmp_path: Path, raw: Any) -> None:
-    config = SentinelConfig.model_validate(raw)
+        reads_policy(policy_file="policy.txt", notes="notes.py:x"),
+    ]
 
-    assert rebase_config(config, str(tmp_path / "tasks"), str(tmp_path)) == config
+    for sentinel in unchanged:
+        assert config_relative_to(sentinel, str(tmp_path)) == sentinel_config(sentinel)
+    # relative to the directory it was made in, as recorded
+    made_here = human(["tool_call"], channel="review.py:ask")
+    assert config_relative_to(made_here, str(tasks)) == sentinel_config(made_here)
+    # rebuilt from a configuration relative to the launch directory, there
+    monkeypatch.chdir(tmp_path)
+    rebuilt = sentinel_from_config(_human_config("tasks/review.py:ask"))
+    assert config_relative_to(rebuilt, str(tmp_path)) == _human_config(
+        "tasks/review.py:ask"
+    )
+
+
+def test_a_file_with_no_relative_path_is_recorded_by_its_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # as on Windows, for a file on another drive
+    import inspect_sentinel._sources as sources
+
+    def no_relative_path(path: object, start: object = None) -> str:
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    (tmp_path / "review.py").write_text(_answer_file("task"))
+    monkeypatch.chdir(tmp_path)
+    sentinel = human(["tool_call"], channel="review.py:ask")
+    monkeypatch.setattr(sources.os.path, "relpath", no_relative_path)
+
+    config = config_relative_to(sentinel, "/elsewhere")
+
+    file = (tmp_path / "review.py").resolve().as_posix()
+    assert config == _human_config(f"{file}:ask")
 
 
 def retried(
@@ -708,6 +785,138 @@ def test_a_channel_named_relative_to_a_task_file_in_a_subdirectory_is_found_on_r
     assert retried_log.eval.config.sentinel == log.eval.config.sentinel
     assert retried_log.samples is not None
     assert reason in retried_log.samples[0].model_dump_json()
+
+
+_GATE = pytest.mark.skipif(
+    _inspect_ai_version() < Version("0.3.293"),
+    reason="before inspect-ai 0.3.293, the log records a task's own channel file relative to where it was made, and eval_retry() rebuilds it where the eval was launched",
+)
+
+ROOT_FILE = BESIDE_FILE.replace(
+    "approved by the channel beside the task file", "approved by the root's channel"
+)
+
+
+def _import_task_file(file: Path, name: str, monkeypatch: pytest.MonkeyPatch) -> Any:
+    # a task file imported as a module, registering its tasks, as a project
+    # imports its own task factories
+    spec = importlib.util.spec_from_file_location(name, file)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+@_GATE
+@pytest.mark.parametrize("called_as", ["object", "name"])
+def test_an_imported_task_factorys_channel_is_found_where_it_was_made_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, called_as: str
+) -> None:
+    # the factory runs in the launch directory, so its relative channel is
+    # the root's file, not the one beside the task file
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "imported_task.py").write_text(
+        SUBDIRECTORY_TASK_FILE.replace("CHANNEL", '"review.py:ask"').replace(
+            "def plain", "def imported_task"
+        )
+    )
+    (tasks / "review.py").write_text(BESIDE_FILE)
+    (tmp_path / "review.py").write_text(ROOT_FILE)
+    module = _import_task_file(tasks / "imported_task.py", "imported_task", monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    task = module.imported_task() if called_as == "object" else "imported_task"
+
+    log = eval(task, model="mockllm/model", log_dir="logs")[0]
+    retried_log = eval_retry(log, log_dir="logs")[0]
+
+    assert log.status == "error"
+    assert log.eval.config.sentinel == SentinelConfig.model_validate(
+        {
+            "name": "human",
+            "params": {"stages": ["model_input"], "channel": "review.py:ask"},
+        }
+    )
+    assert retried_log.status == "success", retried_log.error
+    assert retried_log.samples is not None
+    assert "approved by the root's channel" in retried_log.samples[0].model_dump_json()
+
+
+@_GATE
+def test_a_channel_made_elsewhere_and_attached_to_a_task_is_found_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks, elsewhere = tmp_path / "tasks", tmp_path / "elsewhere"
+    tasks.mkdir()
+    elsewhere.mkdir()
+    (tasks / "attached_task.py").write_text(
+        PLAIN_SUBDIRECTORY_TASK_FILE.replace("def plain", "def attached_task")
+    )
+    (tmp_path / "review.py").write_text(ROOT_FILE)
+    (elsewhere / "review.py").write_text(
+        BESIDE_FILE.replace(
+            "approved by the channel beside the task file", "approved elsewhere"
+        )
+    )
+    module = _import_task_file(tasks / "attached_task.py", "attached_task", monkeypatch)
+    monkeypatch.chdir(elsewhere)
+    sentinel = human(["model_input"], channel="review.py:ask")
+    monkeypatch.chdir(tmp_path)
+
+    log = eval(
+        task_with(module.attached_task(), sentinel=sentinel),
+        model="mockllm/model",
+        log_dir="logs",
+    )[0]
+    retried_log = eval_retry(log, log_dir="logs")[0]
+
+    assert log.status == "error"
+    assert log.eval.config.sentinel == SentinelConfig.model_validate(
+        {
+            "name": "human",
+            "params": {"stages": ["model_input"], "channel": "elsewhere/review.py:ask"},
+        }
+    )
+    assert retried_log.status == "success", retried_log.error
+    assert retried_log.samples is not None
+    assert "approved elsewhere" in retried_log.samples[0].model_dump_json()
+
+
+@_GATE
+@pytest.mark.parametrize("beside_link", [False, True])
+def test_a_task_files_channel_named_through_a_symlink_is_found_on_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, beside_link: bool
+) -> None:
+    tasks, shared = tmp_path / "tasks", tmp_path / "shared"
+    tasks.mkdir()
+    (shared / "nested").mkdir(parents=True)
+    (tasks / "link").symlink_to(shared / "nested", target_is_directory=True)
+    (tasks / "plain_task.py").write_text(
+        SUBDIRECTORY_TASK_FILE.replace("CHANNEL", '"link/../review.py:ask"')
+    )
+    (shared / "review.py").write_text(
+        BESIDE_FILE.replace(
+            "approved by the channel beside the task file", "approved through the link"
+        )
+    )
+    if beside_link:
+        (tasks / "review.py").write_text(BESIDE_FILE)
+    monkeypatch.chdir(tmp_path)
+
+    log = eval("tasks/plain_task.py", model="mockllm/model", log_dir="logs")[0]
+    retried_log = eval_retry(log, log_dir="logs")[0]
+
+    assert log.status == "error"
+    assert log.eval.config.sentinel == SentinelConfig.model_validate(
+        {
+            "name": "human",
+            "params": {"stages": ["model_input"], "channel": "shared/review.py:ask"},
+        }
+    )
+    assert retried_log.status == "success", retried_log.error
+    assert retried_log.samples is not None
+    assert "approved through the link" in retried_log.samples[0].model_dump_json()
 
 
 # the same task file with no sentinel of its own

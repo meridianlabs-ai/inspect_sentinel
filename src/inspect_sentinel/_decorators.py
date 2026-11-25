@@ -4,10 +4,12 @@ import inspect
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from functools import wraps
+from pathlib import Path
 from typing import (
     Any,
     NamedTuple,
     ParamSpec,
+    TypeAlias,
     TypeVar,
     cast,
     get_args,
@@ -31,6 +33,7 @@ from inspect_ai._util.registry import (
 
 from ._portable import check_portable
 from ._report import Decision, Observation, Report
+from ._sources import is_source_reference, reference_origin
 from ._step import Step
 from ._types import (
     Group,
@@ -452,6 +455,17 @@ def _register(
             *recorded_args,
             **recorded_kwargs,
         )
+        # set even when empty: an instance another factory configured carries
+        # over its own, which name that factory's params
+        setattr(
+            instance,
+            ORIGINS_ATTR,
+            _origins(
+                recorded_as,
+                dict(zip(positional, plain_args, strict=False)) | plain_kwargs,
+                dict(zip(positional, recorded_args, strict=False)) | recorded_kwargs,
+            ),
+        )
         return instance
 
     registry_add(wrapper, info)
@@ -473,11 +487,47 @@ def recorded_as(**converters: Callable[[object], object]) -> Callable[[F], F]:
     return decorate
 
 
-def recorded_converters(factory: object) -> Mapping[str, Callable[[object], object]]:
-    # the converters a factory opted in with `recorded_as()`, by param
-    return cast(
-        Mapping[str, Callable[[object], object]], getattr(factory, _RECORDED_AS, {})
-    )
+# where a configured instance holds, in memory only, the file each of its
+# source references names, resolved where it was made: by the path to the
+# reference in its configuration's `model_dump()`, its nested instances' too
+ORIGINS_ATTR = "__inspect_sentinel_origins__"
+
+Origins: TypeAlias = dict[tuple[str | int, ...], Path]
+
+
+def _origins(
+    recorded_as: Mapping[str, Callable[[object], object]],
+    given: Mapping[str, object],
+    recorded: Mapping[str, object],
+) -> Origins:
+    found: Origins = {}
+    for name, value in given.items():
+        if is_source_reference(recorded_as.get(name)):
+            origin = reference_origin(value, recorded.get(name))
+            if origin is not None:
+                found[("params", name)] = origin
+            continue
+        # where the configuration records nested instances: a list or mapping
+        # under the param's name, a lone one in `params`, as a registry dict
+        children: list[tuple[tuple[str | int, ...], object]] = []
+        if _configured(value):
+            children = [(("params", name), value)]
+        elif isinstance(value, list) and value:
+            items = cast(list[object], value)
+            if all(map(_configured, items)):
+                children = [((name, i), item) for i, item in enumerate(items)]
+        elif isinstance(value, dict) and value:
+            entries = cast(dict[str, object], value)
+            if all(map(_configured, entries.values())):
+                children = [((name, key), item) for key, item in entries.items()]
+        for prefix, child in children:
+            for path, origin in instance_origins(child).items():
+                found[prefix + path] = origin
+    return found
+
+
+def instance_origins(instance: object) -> Origins:
+    return cast(Origins, getattr(instance, ORIGINS_ATTR, {}))
 
 
 def _plain(value: object) -> object:
