@@ -466,7 +466,6 @@ def _as_computer_call(events: list[dict[str, Any]], index: int) -> None:
                 item["type"] = "computer_call"
                 del item["name"], item["arguments"]
                 item["action"] = {"type": "click", "button": "left", "x": 10, "y": 20}
-                item["pending_safety_checks"] = []
 
 
 _ITEM_EVENTS = ("response.output_item.added", "response.output_item.done")
