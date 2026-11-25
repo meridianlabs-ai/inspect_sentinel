@@ -26,11 +26,14 @@ PRICES: dict[str, ModelCost] = {
     "openai/gpt-6.2-astra": ModelCost(
         input=8.00, output=40.00, input_cache_read=0.80, input_cache_write=8.00
     ),
+    "together/zai-org/GLM-5.3": ModelCost(
+        input=1.40, output=4.40, input_cache_read=0.26, input_cache_write=1.40
+    ),
     "anthropic/claude-haiku-5-5": ModelCost(
         input=0.10, output=0.50, input_cache_read=0.01, input_cache_write=0.125
     ),
 }
-"""Dollars per million tokens, from the plan's list prices (2026-11-24): Sonnet-class $2/$10 and Fable-class about $8/$40 for input/output, Haiku 5.5 $0.10/$0.50 up to 100K-token prompts. Cache reads are priced at 0.1 times input for every model, and cache writes at 1.25 times for Anthropic and 1 times for OpenAI. These are assumptions: a cached read priced higher than the provider charges makes the ledger overstate spend, which errs toward stopping early."""
+"""Dollars per million tokens, from the plan's list prices (2026-11-24): Sonnet-class $2/$10 and Fable-class about $8/$40 for input/output, GLM-5.3 on Together $1.40/$4.40 with cached input at $0.26 (Together's list price, 2026-11-25), Haiku 5.5 $0.10/$0.50 up to 100K-token prompts. Cache reads are priced at 0.1 times input for every model, and cache writes at 1.25 times for Anthropic and 1 times for OpenAI. These are assumptions: a cached read priced higher than the provider charges makes the ledger overstate spend, which errs toward stopping early."""
 
 UNPRICED = ModelCost(
     input=10.00, output=50.00, input_cache_read=10.00, input_cache_write=12.50

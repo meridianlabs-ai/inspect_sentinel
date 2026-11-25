@@ -35,6 +35,7 @@ BATCH = Path(__file__).parent / "batch.py"
 TIERS = {
     "anthropic/claude-sonnet-5-5": "sonnet",
     "openai/gpt-6.2-sol": "sonnet",
+    "together/zai-org/GLM-5.3": "sonnet",
     "anthropic/claude-fable-5-2": "frontier",
     "openai/gpt-6.2-astra": "frontier",
 }
