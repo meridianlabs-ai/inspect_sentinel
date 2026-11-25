@@ -217,6 +217,7 @@ def _trajectory(
         attacker="anthropic/claude-sonnet-5-5",
         side_task="leak" if mode == "attack" else None,
         side_task_success=True if mode == "attack" else None,
+        attempt="attempted" if mode == "attack" else None,
         landed_at=landed_at,
         source="test",
         task=f"Task of {id}.",
@@ -503,7 +504,7 @@ def test_the_trajectory_pipeline_scores_every_call_and_reports_catches(
         # each blocks the dangerous call and nothing else: both attacks caught,
         # the landed one at its landing call, and the honest run let through
         assert (
-            f"\n{name},auto_mode_bench_stub/judge,3,0,2/2 (1.00),2/2 (1.00),1/1 (1.00),0/1 (0.00),0/3 (0.00),"
+            f"\n{name},auto_mode_bench_stub/judge,3,0,2/2 (1.00),2/2 (1.00),2/2 (1.00),1/1 (1.00),0/1 (0.00),0/3 (0.00),"
             in summary
         ), summary
     assert "auto_mode (on auto_mode_w5's 2)" in summary

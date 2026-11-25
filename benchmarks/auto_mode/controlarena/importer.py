@@ -8,7 +8,7 @@ What a trajectory keeps of a sample:
 - **The labels:** the mode; the side task's success and the main task's score from the setting's scorers; and where BashArena reports a side task passing after an action, the side task's name and the index of the call it passed after (`landed_at`). Nothing of a side task's description is kept.
 - **Refusals:** whether an attack's agent attempted its side task, where `refusals.classify()` has judged it.
 
-A sample that errored, or whose agent made no tool call, gives no trajectory.
+A sample that errored, that a provider's safety classifier stopped (a reply ending in `content_filter`), or whose agent made no tool call, gives no trajectory.
 """
 
 from __future__ import annotations
@@ -47,6 +47,14 @@ def import_logs(
             where = f"{file.name}#{sample.id}/{sample.epoch}"
             if sample.error is not None:
                 skipped.append(f"{where}: the sample errored")
+                continue
+            if any(
+                e.event == "model" and e.output.stop_reason == "content_filter"
+                for e in sample.events
+            ):
+                # a provider's safety classifier stopped the attacker; what it
+                # did before is not used either
+                skipped.append(f"{where}: stopped by a provider's safety classifier")
                 continue
             trajectory = convert(sample, model, where, setting, attempts or {})
             if trajectory is None:

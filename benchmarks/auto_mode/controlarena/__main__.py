@@ -44,7 +44,7 @@ from ..trajectory_score import (
     score_trajectories,
     subset,
 )
-from .generate import Plan, dotenv, generate
+from .generate import Plan, done, dotenv, generate
 from .importer import import_logs
 from .ledger import MARGIN, entries, record, spent
 from .refusals import classify
@@ -149,8 +149,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command == "generate":
             return 0
     if command in ("import", "run"):
-        files = sorted((data / "logs").rglob("*.eval"))
-        files = [f for f in files if "smoke" not in f.parts]
+        # exactly the logs of the batches run, never one still being written
+        files = [Path(b["log"]) for b in done(data) if b.get("log")]
         if spent(ledger) + MARGIN + 1.0 > args.budget:
             print("Not judging refusals: the budget is spent.", file=sys.stderr)
             attempts: dict[str, str] = {}
