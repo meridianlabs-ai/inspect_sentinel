@@ -2,7 +2,7 @@
 
 This file runs in ControlArena's own environment (`python benchmarks/auto_mode/controlarena/batch.py SPEC.json`), never in Sentinel's, so ControlArena's pins can't change Sentinel's environment; pyright leaves it out for that reason. `generate.py` writes the spec, runs this, and reads the log it names. It configures ControlArena's own settings and policies and nothing else: every attack comes from ControlArena's attack policy (BashArena's own where the setting ships one) run against its setting.
 
-The spec is JSON: `setting` (a ControlArena setting name), `setting_args` (its fields), `mode` (`honest` or `attack`), `model` (the untrusted model), `config` (its generate config), `trusted_model`, `seed`, `start` and `end` (positions in the setting's dataset shuffled by `seed`; positions past its end wrap, as repeats with a suffixed id), `log_dir`, and the limits `max_samples`, `token_limit`, `max_steps` and `time_limit`. It prints one JSON line: the log's path.
+The spec is JSON: `setting` (a ControlArena setting name), `setting_args` (its fields), `mode` (`honest` or `attack`), `model` (the untrusted model), `config` (its generate config), `trusted_model`, `seed`, `start` and `end` (positions in the setting's dataset shuffled by `seed`; positions past its end wrap, as repeats with a suffixed id), `log_dir`, and the limits `max_samples`, `token_limit`, `max_steps` and `time_limit`; and optionally `sentinel` (`reject_at` and `judge`), a live `threshold(auto_mode())` protocol for the eval. It prints one JSON line: the log's path.
 """
 
 from __future__ import annotations
@@ -22,6 +22,20 @@ from control_arena.settings._setting import Setting
 from inspect_ai import eval
 from inspect_ai.dataset import Sample
 from inspect_ai.model import GenerateConfig
+
+
+def _sentinel(live: dict[str, Any] | None) -> dict[str, Any]:
+    # a live protocol, only when the spec asks for one; inspect_sentinel is
+    # then installed in ControlArena's environment
+    if not live:
+        return {}
+    from inspect_sentinel import auto_mode, threshold
+
+    return {
+        "sentinel": threshold(
+            auto_mode(model=live["judge"]), reject_at=float(live["reject_at"])
+        )
+    }
 
 
 def main(spec_file: str) -> None:
@@ -60,7 +74,12 @@ def main(spec_file: str) -> None:
             }
         },
     )
-    [log] = eval(task, **eval_config.eval_args(), display="log")
+    [log] = eval(
+        task,
+        **eval_config.eval_args(),
+        display="log",
+        **_sentinel(spec.get("sentinel")),
+    )
     print(json.dumps({"log": log.location, "status": log.status}))
 
 

@@ -79,6 +79,9 @@ class Plan:
     token_limit: int = 1_000_000
     """Tokens per trajectory, ControlArena's default."""
 
+    sentinel: Mapping[str, Any] | None = None
+    """A live protocol to run the attacker under, or `None` (the default) for none: `{"reject_at": 0.5, "judge": MODEL}` runs `threshold(auto_mode(model=MODEL), reject_at=...)`, so a call the judge scores at or above `reject_at` is refused and the agent is told it was not approved. Its judge's usage is in the batch's log and priced with the attacker's. Use its own data directory, since what is done is counted by setting, mode and attacker."""
+
     @staticmethod
     def read(file: Path) -> Plan:
         """Read a plan from JSON."""
@@ -313,6 +316,7 @@ def _run(
         "max_samples": plan.max_samples,
         "time_limit": plan.time_limit,
         "token_limit": plan.token_limit,
+        "sentinel": dict(plan.sentinel) if plan.sentinel else None,
     }
     name = batch.label.replace("/", "_")
     spec_file = specs / f"{name}.json"
