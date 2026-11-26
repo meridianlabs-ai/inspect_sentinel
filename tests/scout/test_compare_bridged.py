@@ -316,8 +316,9 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
     # the model proposes "a" in both turns, so nothing in the log says which
     # proposal a check under "a" is of: no check of "a" joins, the first
     # turn's included, and replay builds no result step for "a". (The bridge
-    # also checks the first turn's result again beside the second's.) "b",
-    # proposed once, joins
+    # checks each turn's result once: since inspect_ai #6747 it doesn't check
+    # the first again when the second request carries it.) "b", proposed
+    # once, joins
     "reused id": (
         [calls("a", "b"), calls("a")],
         [
@@ -326,7 +327,6 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
             ("tool_result", None, "proceed"),
             ("tool_result", "0/b", "proceed"),
             ("tool_call", None, "proceed"),
-            ("tool_result", None, "proceed"),
             ("tool_result", None, "proceed"),
         ],
     ),
@@ -370,14 +370,13 @@ CASES: dict[str, tuple[list[ModelOutput], list[tuple[str, str | None, str]]]] = 
     # a request filter generates for the second request but hands over its
     # first response again: the bridge checks the old call a second time,
     # after a newer proposal of "a" the agent never received, so neither
-    # check joins either proposal
+    # check joins either proposal. Each turn's result is checked once
     "filter hands over a cached response": (
         [calls("a", path="old"), calls("a", path="new")],
         [
             ("tool_call", None, "proceed"),
             ("tool_result", None, "proceed"),
             ("tool_call", None, "proceed"),
-            ("tool_result", None, "proceed"),
             ("tool_result", None, "proceed"),
         ],
     ),

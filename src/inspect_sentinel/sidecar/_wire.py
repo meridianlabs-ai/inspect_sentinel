@@ -852,61 +852,43 @@ def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-# inspect_ai's providers write an item's `internal` into its text in this
-# tag, and its readers take every such span out of a text but read only the
-# first. See parse_content_with_internal() in inspect_ai's
-# src/inspect_ai/model/_internal.py.
-_INTERNAL = re.compile(r"<content-internal>.*?</content-internal>", re.DOTALL)
-
-
-def check_internal(texts: Iterable[object], what: str) -> None:
-    """Refuse a body in which inspect_ai's readers would take text out unread.
-
-    Args:
-        texts: The texts of the body that inspect_ai's readers take `<content-internal>` spans out of. Each reader passes its own: the others are read whole, and a span in them is kept.
-        what: `request` or `reply`, for the error.
-
-    Raises:
-        UnreadableError: If one of `texts` holds more than one span, as only the first is read and the others are dropped, while the model is sent them all.
-    """
-    for text in texts:
-        if isinstance(text, str) and len(_INTERNAL.findall(text)) > 1:
-            raise UnreadableError(
-                f"The {what} holds text with more than one <content-internal> span, of which only the first would be read."
-            )
-
-
 def check_internal_kept(
     texts: Iterable[object], messages: Iterable[ChatMessage], what: str
 ) -> None:
-    """Refuse a body whose `<content-internal>` values inspect_ai's readers took out of its texts but kept nowhere.
+    """Refuse a body whose `<content-internal>` values inspect_ai's readers dropped.
 
-    A reader keeps a span's value on the part it reads the text as, but some read no part for a text that holds nothing else, or keep the text and drop the value.
+    inspect_ai's providers write an item's `internal` value into its text as a `<content-internal>` span. A reader takes the span out and keeps its value on a part, or leaves it in a text it reads whole: a part's text, or reasoning or its summary. This checks what the readers read, not how they read it.
 
     Args:
-        texts: The texts the readers take spans out of, as `check_internal` is given them.
+        texts: The texts of the body that inspect_ai's readers take `<content-internal>` spans out of. Each reader passes its own: the others are read whole, and a span in them is kept.
         messages: What the readers read the body as.
         what: `request` or `reply`, for the error.
 
     Raises:
-        UnreadableError: If the value of a span in `texts` is on no part of `messages`.
+        UnreadableError: If a span's value is neither on a part of `messages` nor still in one of their texts.
     """
-    from ._inspect_ai import internal_key, internal_text
+    from ._inspect_ai import internal_key, internal_values
 
     sent = {
-        read[0]
+        value
         for text in texts
-        if isinstance(text, str) and (read := internal_text(text)) is not None
+        if isinstance(text, str)
+        for value in internal_values(text)
     }
     if not sent:
         return
-    kept = {
-        internal_key(part.internal)
-        for message in messages
-        if not isinstance(message.content, str)
-        for part in message.content
-        if getattr(part, "internal", None) is not None
-    }
+    kept: set[str] = set()
+    for message in messages:
+        if isinstance(message.content, str):
+            kept.update(internal_values(message.content))
+            continue
+        for part in message.content:
+            if part.internal is not None:
+                kept.add(internal_key(part.internal))
+            for name in ("text", "reasoning", "summary"):
+                read = getattr(part, name, None)
+                if isinstance(read, str):
+                    kept.update(internal_values(read))
     if sent - kept:
         raise UnreadableError(
             f"The {what} holds a <content-internal> value that would be dropped unread."

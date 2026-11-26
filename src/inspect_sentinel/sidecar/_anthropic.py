@@ -21,7 +21,6 @@ from ._wire import (
     StreamEvent,
     UnreadableError,
     check_found,
-    check_internal,
     check_internal_kept,
     json_object,
     made_event,
@@ -78,7 +77,6 @@ async def read_reply(content_type: str, body: bytes) -> ModelOutput:
     _check_blocks(getattr(message, "content", None), "reply")
     blocks = cast("list[object]", getattr(message, "content", None) or [])
     texts = [getattr(block, "text", None) for block in blocks]
-    check_internal(texts, "reply")
     try:
         # an object, not a dict, so that the converter doesn't validate it again
         output = await model_output_from_anthropic(cast(Any, message))
@@ -102,7 +100,6 @@ async def read_request(request: dict[str, Any]) -> list[ChatMessage]:
             _check_blocks(entry["content"], "request")
         _check_documents(entry.get("content"))
         texts.extend(_texts(entry))
-    check_internal(texts, "request")
     try:
         read = await messages_from_anthropic(
             cast(Any, messages), _system(request.get("system"))

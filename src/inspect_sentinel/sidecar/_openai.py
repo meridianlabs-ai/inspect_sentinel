@@ -18,14 +18,13 @@ from inspect_ai.model import (
     model_output_from_openai_responses,
 )
 
-from ._inspect_ai import internal_text, is_assistant_item, without_reasoning
+from ._inspect_ai import is_assistant_item
 from ._wire import (
     Edits,
     Spliced,
     StreamEvent,
     UnreadableError,
     check_found,
-    check_internal,
     check_internal_kept,
     json_object,
     sdk_events,
@@ -580,7 +579,6 @@ async def read_chat_request(request: dict[str, Any]) -> list[ChatMessage]:
                 raise UnreadableError(
                     "The request holds an assistant's text and refusal both, of which only the text would be read."
                 )
-    check_internal(texts, "request")
     _check_merged(cast("list[object]", messages))
     try:
         read = await messages_from_openai(cast(Any, messages), _model(request))
@@ -634,7 +632,6 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
     if not isinstance(entries, list):
         raise UnreadableError("The request has no input.")
     _check_parts(cast("list[object]", entries))
-    _check_duplicates(cast("list[object]", entries))
     texts = [
         text
         for entry in cast("list[object]", entries)
@@ -642,7 +639,6 @@ async def read_responses_request(request: dict[str, Any]) -> list[ChatMessage]:
         and cast("dict[str, Any]", entry).get("role") == "assistant"
         for text in _assistant_texts(cast("dict[str, Any]", entry))
     ]
-    check_internal(texts, "request")
     for entry in cast("list[object]", entries):
         if (
             isinstance(entry, dict)
@@ -927,15 +923,14 @@ async def responses_rejected_turn(
 def _chat_texts(message: dict[str, Any]) -> list[object]:
     # The texts inspect_ai's Chat Completions reader takes <content-internal>
     # spans out of: a text part of any message, and an assistant's text given
-    # as a string, once the reasoning in tags is taken out of it, as a span in
-    # the reasoning stays there. Any other message's string is read whole. See
+    # as a string. Any other message's string is read whole. See
     # messages_from_openai() and content_from_openai() in inspect_ai's
     # src/inspect_ai/model/_openai.py.
     content: object = message.get("content")
     if isinstance(content, str):
         if message.get("role") != "assistant":
             return []
-        return [without_reasoning(content)]
+        return [content]
     return [
         cast("dict[str, Any]", part).get("text")
         for part in cast("list[object]", content if isinstance(content, list) else [])
@@ -951,8 +946,7 @@ def _is_text(part: dict[str, Any]) -> bool:
 
 def _assistant_texts(entry: dict[str, Any]) -> list[object]:
     # the texts of an assistant's item in a Responses request, which
-    # inspect_ai's reader takes <content-internal> spans out of; a refusal is
-    # read whole
+    # inspect_ai's reader takes <content-internal> spans out of
     content: object = entry.get("content")
     if isinstance(content, str):
         return [content]
@@ -1018,53 +1012,6 @@ def _check_arguments(arguments: object, what: str) -> None:
         raise UnreadableError(
             f"The {what} holds a tool call whose arguments aren't a JSON object, which would be read as none."
         )
-
-
-def _check_duplicates(entries: list[object]) -> None:
-    # inspect_ai's Responses reader keeps only the last of an assistant's
-    # texts that carry the same <content-internal> span, as a scaffold can
-    # send one text twice. Two different texts with one span would lose the
-    # first unread. It does so within each run of assistant items, which any
-    # other item ends. See messages_from_responses_input() and
-    # filter_duplicate_assistant_content() in inspect_ai's
-    # src/inspect_ai/agent/_bridge/responses_impl.py.
-    seen: dict[str, str] = {}
-    for entry in entries:
-        if not (
-            isinstance(entry, dict) and is_assistant_item(cast("dict[str, Any]", entry))
-        ):
-            seen = {}
-            continue
-        if cast("dict[str, Any]", entry).get("role") != "assistant":
-            continue
-        content: object = cast("dict[str, Any]", entry).get("content")
-        # each part read as inspect_ai reads it: a refusal is text too
-        texts = (
-            [content]
-            if isinstance(content, str)
-            else [
-                str(
-                    cast("dict[str, Any]", part).get(
-                        "text", cast("dict[str, Any]", part).get("refusal", "")
-                    )
-                )
-                for part in cast("list[object]", content)
-                if isinstance(part, dict)
-            ]
-            if isinstance(content, list)
-            else []
-        )
-        for text in texts:
-            read = internal_text(text)
-            if read is None:
-                continue
-            value, kept = read
-            # compared as inspect_ai compares them: the decoded value, written
-            # its way, and the text it reads
-            if seen.setdefault(value, kept) != kept:
-                raise UnreadableError(
-                    "The request holds two different assistant texts that carry the same <content-internal> value, of which only the last would be read."
-                )
 
 
 def _check_choices(entries: list[dict[str, Any]], part: str) -> None:

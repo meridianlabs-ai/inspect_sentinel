@@ -197,26 +197,11 @@ def noting(start: JsonValue | None = None) -> Generator[Noted]:
 def is_assistant_item(item: dict[str, Any]) -> bool:
     """Whether inspect_ai's Responses reader takes an input item for part of an assistant's turn, as it gathers a turn's items until another item ends it.
 
-    Asked of inspect_ai: Responses readers that drop no assistant text unread.
+    Asked of inspect_ai: a public way to tell which Responses input items belong to an assistant's turn.
     """
     from inspect_ai.model._openai_responses import is_assistant_message_param
 
     return is_assistant_message_param(cast(Any, item))
-
-
-def without_reasoning(text: str) -> str:
-    """A Chat Completions assistant's text with the reasoning in tags taken out, as inspect_ai's reader takes it out before anything else.
-
-    Asked of inspect_ai: Chat Completions readers that keep an assistant's `internal` value.
-    """
-    from inspect_ai.model._reasoning import parse_content_with_reasoning
-
-    try:
-        rest, _ = parse_content_with_reasoning(text)
-    except Exception:
-        # the reader raises on it too, which makes the request unreadable
-        return text
-    return rest
 
 
 def internal_key(value: object) -> str:
@@ -226,25 +211,21 @@ def internal_key(value: object) -> str:
     return to_json_str_safe(value)
 
 
-def internal_text(text: str) -> tuple[str, str] | None:
-    """The `<content-internal>` value a text carries, as inspect_ai's Responses reader compares two of them, and the text it reads; None if the text carries none or one it can't read.
+def internal_values(text: str) -> list[str]:
+    """The `<content-internal>` values a text carries, as inspect_ai's readers read them, each written as `internal_key` writes it.
 
-    Asked of inspect_ai: Responses readers that drop no assistant text unread.
+    Asked of inspect_ai: a public reader of `<content-internal>` spans.
     """
-    from inspect_ai._util.json import to_json_str_safe
     from inspect_ai.model._internal import (
         CONTENT_INTERNAL_TAG,
-        parse_content_with_internal,
+        parse_content_with_internal_blocks,
     )
 
-    try:
-        kept, value = parse_content_with_internal(text, CONTENT_INTERNAL_TAG)
-    except Exception:
-        # the reader raises on it too, which makes the request unreadable
-        return None
-    if not value:
-        return None
-    return to_json_str_safe(value), kept
+    return [
+        internal_key(block.internal)
+        for block in parse_content_with_internal_blocks(text, CONTENT_INTERNAL_TAG)
+        if block.internal is not None
+    ]
 
 
 async def anthropic_message(message: ChatMessage) -> dict[str, Any]:

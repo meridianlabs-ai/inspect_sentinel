@@ -431,7 +431,7 @@ A check is never paired by order or position. It is `"only recorded"` when the l
 - the model proposed the call id more than once in the conversation: a reused id, a request filter's several candidates, or an earlier response a filter hands over again. Nothing in the log says which proposal the check was of;
 - replay built no step for the call at the check's stage: the model's response holds the call id more than once, the model call was made with the monitor role's model (e.g. by a request filter), or no later request carried the result, as when the sentinel ended the run at that result;
 - the bridge handed the call over under a fresh id, as it does when the model reuses an id for a different call. Replay names those steps by the fresh id, which read mode doesn't yet match;
-- another check of the same stage names the same step, as when the bridge checks a result again.
+- another check of the same stage names the same step, as when the bridge checks a result again. The bridge in inspect_ai 0.3.292 and earlier does so once the model reuses the call's id, or once 1,000 later calls have been handed over.
 
 The log doesn't record which model call produced a bridged call. So with an `agent_bridge(filter=...)` that generates several responses and hands one over under a call id that another of them proposed, read mode can pair the check with the other generation's step, and `compare_decisions()` lists the two as `"matched"`. Without such a filter, a check is paired with the step of the call it was of, as described above.
 

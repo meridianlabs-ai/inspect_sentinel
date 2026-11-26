@@ -1,9 +1,16 @@
+import base64
 import json
 
 import pytest
+from inspect_ai.model import (
+    ChatMessageAssistant,
+    Content,
+    ContentReasoning,
+    ContentText,
+)
 
 from inspect_sentinel.sidecar import UnreadableError, read_reply, read_request
-from inspect_sentinel.sidecar._wire import stream_events
+from inspect_sentinel.sidecar._wire import check_internal_kept, stream_events
 from tests.sidecar._traffic import (
     OPENAI_RECORDED,
     STREAM,
@@ -95,3 +102,53 @@ async def test_provider_with_no_reader() -> None:
         await read_request("somebody", b"{}")
     with pytest.raises(UnreadableError, match="no reader for provider 'somebody'"):
         await read_reply("somebody", STREAM, b"")
+
+
+_SPAN = (
+    "<content-internal>"
+    + base64.b64encode(json.dumps({"id": 1}).encode()).decode()
+    + "</content-internal>"
+)
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param("Rain.", id="no part"),
+        pytest.param([ContentText(text="Rain.")], id="no value"),
+        pytest.param(
+            [ContentText(text="Rain.", internal={"id": 2})], id="another value"
+        ),
+    ],
+)
+def test_a_value_dropped_is_unreadable(
+    read: str | list[Content],
+) -> None:
+    with pytest.raises(UnreadableError, match="would be dropped unread"):
+        check_internal_kept(
+            [f"Rain.\n{_SPAN}"], [ChatMessageAssistant(content=read)], "request"
+        )
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param([ContentText(text="Rain.", internal={"id": 1})], id="on a part"),
+        pytest.param(
+            [ContentReasoning(reasoning=f"Hmm. {_SPAN}"), ContentText(text="Rain.")],
+            id="in reasoning",
+        ),
+        pytest.param(
+            [
+                ContentReasoning(reasoning="Hmm.", summary=f"Short. {_SPAN}"),
+                ContentText(text="Rain."),
+            ],
+            id="in a reasoning summary",
+        ),
+        pytest.param(f"Rain.\n{_SPAN}", id="in a text read whole"),
+    ],
+)
+def test_a_value_kept_is_read(read: str | list[Content]) -> None:
+    check_internal_kept(
+        [f"Rain.\n{_SPAN}"], [ChatMessageAssistant(content=read)], "request"
+    )

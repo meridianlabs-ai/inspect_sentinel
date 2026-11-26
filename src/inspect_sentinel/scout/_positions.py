@@ -355,8 +355,9 @@ def _count(
 
 def _one_to_one(joins: dict[str, tuple[str, str, str | None]]) -> dict[str, str]:
     # each bridge check's step, where no other check is of it at that stage:
-    # the bridge can check one call more than once (a result reported again
-    # under a reused id), and position alone cannot say which check is whose
+    # the bridge can check one call more than once (inspect_ai 0.3.292's
+    # bridge checks a result again under a reused id, or after 1,000 later
+    # calls), and position alone cannot say which check is whose
     claims = Counter(joins.values())
     return {
         span: join[2]

@@ -8,6 +8,7 @@ from inspect_ai.model import (
     ChatMessageSystem,
     ChatMessageUser,
     ContentDocument,
+    ContentText,
 )
 
 from inspect_sentinel.sidecar import UnreadableError, read_reply, read_request
@@ -413,7 +414,7 @@ async def test_request_that_cannot_be_read(body: bytes, says: str) -> None:
 
 _NO_INPUT: dict[str, Any] = {}
 
-# a span inspect_ai reads, then one it would drop unread
+# a span inspect_ai reads, then a marker that isn't one, which it reads as text
 _TWO_SPANS = (
     "Rain. <content-internal>eyJpZCI6IDF9</content-internal>"
     " <content-internal>A storm.</content-internal>"
@@ -421,7 +422,7 @@ _TWO_SPANS = (
 
 
 @pytest.mark.anyio
-async def test_a_request_with_text_inspect_ai_would_drop_is_unreadable() -> None:
+async def test_a_tool_results_text_blocks_are_read_whole() -> None:
     body = _asked(
         {
             "type": "tool_result",
@@ -433,16 +434,18 @@ async def test_a_request_with_text_inspect_ai_would_drop_is_unreadable() -> None
         }
     )
 
-    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
-        await read_request("anthropic", body)
+    messages = await read_request("anthropic", body)
+
+    assert "A storm." in messages[-1].text
 
 
 @pytest.mark.anyio
-async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
+async def test_a_replys_text_is_read_whole() -> None:
     body = message({"type": "text", "text": _TWO_SPANS}, stop_reason="end_turn")
 
-    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
-        await read_reply("anthropic", JSON, body)
+    output = await read_reply("anthropic", JSON, body)
+
+    assert "A storm." in output.message.text
 
 
 @pytest.mark.anyio
@@ -493,15 +496,14 @@ async def test_a_reply_with_text_inspect_ai_would_drop_is_unreadable() -> None:
         ),
     ],
 )
-async def test_more_text_inspect_ai_would_drop_is_unreadable(
-    then: list[dict[str, Any]],
-) -> None:
+async def test_more_text_is_read_whole(then: list[dict[str, Any]]) -> None:
     body = json.dumps(
         {"messages": [{"role": "user", "content": "Hello"}, *then]}
     ).encode()
 
-    with pytest.raises(UnreadableError, match="more than one <content-internal>"):
-        await read_request("anthropic", body)
+    messages = await read_request("anthropic", body)
+
+    assert "A storm." in json.dumps([m.model_dump(mode="json") for m in messages])
 
 
 @pytest.mark.anyio
@@ -556,3 +558,27 @@ async def test_a_document_of_plain_text_is_read_whole() -> None:
     read = messages[-1].content[0]
     assert isinstance(read, ContentDocument)
     assert base64.b64decode(read.document.split(",", 1)[1]).decode() == _TWO_SPANS
+
+
+@pytest.mark.anyio
+async def test_a_text_with_two_internal_values_is_read_as_two_parts() -> None:
+    two = (
+        "Rain.\n<content-internal>eyJpZCI6IDF9</content-internal>"
+        "\nHail.\n<content-internal>eyJpZCI6IDJ9</content-internal>"
+    )
+    body = json.dumps(
+        {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": [{"type": "text", "text": two}]},
+            ]
+        }
+    ).encode()
+
+    messages = await read_request("anthropic", body)
+
+    assert [
+        (part.text, part.internal)
+        for part in messages[-1].content
+        if isinstance(part, ContentText)
+    ] == [("Rain.", {"id": 1}), ("Hail.", {"id": 2})]
