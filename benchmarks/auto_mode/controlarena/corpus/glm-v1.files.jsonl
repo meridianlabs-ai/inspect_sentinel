@@ -383,6 +383,7 @@
 {"path": "trajectory_logs/bash_arena/2026-11-26T05-38-07-00-00_auto-mode-trajectory_meMTzZwEQa2dc4Tq8pFx2Q.eval", "sha256": "09a52d96121e3382a386cca603223a83d4e2f23d761e4b42110e1401029b0786", "bytes": 87751, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/bash_arena/2026-11-26T05-38-07-00-00_auto-mode-trajectory_muygc6wYnoopZPUsqWz934.eval", "sha256": "d7029e4866c3f1d98ff0b02fe9a2f02e5b1f5fb09430fe392d24e9c946f99c32", "bytes": 52543, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/bash_arena/2026-11-26T05-38-07-00-00_auto-mode-trajectory_nuiHhF8JmEUnBNDDdQUhYF.eval", "sha256": "7cac36f443699a4edf2e0a4d849a3bc4ad8022d48eef95f1b6ca3b0a79fcf473", "bytes": 87119, "kind": "trajectory_logs"}
+{"path": "trajectory_logs/bash_arena/cases.json", "sha256": "114bc12736dcdad8cdbacd71c7fc98bab562f053fa65d962db20a84662d24b1f", "bytes": 46432, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/three_settings/2026-11-25T18-23-41-00-00_auto-mode-trajectory_4RYC5nQHaZ2VxpZfB5LMVL.eval", "sha256": "6e6d26508ad137a0b5996f9a9f147ea648c8f0c6f7919a4acc342ccf87fbdaca", "bytes": 10810, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/three_settings/2026-11-25T18-23-41-00-00_auto-mode-trajectory_7TwubA6XBdCfpFHiXUwqM5.eval", "sha256": "ba458733bc7955293fd37f5fb4e3056bf5b967311ebc83af756473622235b11c", "bytes": 28654, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/three_settings/2026-11-25T18-23-41-00-00_auto-mode-trajectory_8kyoa7q7sTfhLYbj7gXW23.eval", "sha256": "44d492e5a6b5d4073552287a2c5c349e495a8a62b436e5c6a7fd0b4f9e44085a", "bytes": 13372, "kind": "trajectory_logs"}
@@ -981,3 +982,4 @@
 {"path": "trajectory_logs/three_settings/2026-11-25T18-24-02-00-00_auto-mode-trajectory_f8VmWYdpzxQqomsnbA3QZx.eval", "sha256": "8dd7339eba39d11325937603dd7dad5ac3d1facaa690d7e6d9a7f011e9e12374", "bytes": 6287, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/three_settings/2026-11-25T18-24-02-00-00_auto-mode-trajectory_irkxedEXpeo4yDKqdhMur2.eval", "sha256": "d8ccc8b223dbe352e80e44cb78aebeb7da33da6018a22d89c7759817cf0be6c7", "bytes": 13234, "kind": "trajectory_logs"}
 {"path": "trajectory_logs/three_settings/2026-11-25T18-24-02-00-00_auto-mode-trajectory_mBXkyw7TUhTFLMXZzChCzy.eval", "sha256": "e6dbd0f03b175e202aafbc8b7c71047b1fcd0d905f18f5700f1f9f72570b3239", "bytes": 17140, "kind": "trajectory_logs"}
+{"path": "trajectory_logs/three_settings/cases.json", "sha256": "65dc541309fe1426742e859198b7d014bb2d507550433425c8b3ecd4b8777bd5", "bytes": 138768, "kind": "trajectory_logs"}
