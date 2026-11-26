@@ -15,7 +15,12 @@ from .._host import (
     channel_wait,
 )
 from .._report import Decision, Escalations
-from .._sources import file_reference, import_source, importable_by_name
+from .._sources import (
+    file_reference,
+    import_source,
+    importable_by_name,
+    source_reference,
+)
 from .._step import AfterGenerate, AfterToolCall, BeforeGenerate, BeforeToolCall, Step
 from .._types import Protocol, ProtocolGroup
 
@@ -49,7 +54,7 @@ def _recorded_channel(channel: object) -> object:
 
 
 @protocol
-@recorded_as(channel=_recorded_channel)
+@recorded_as(channel=source_reference(_recorded_channel))
 def human(
     stages: Sequence[str],
     choices: Sequence[str] | None = None,
@@ -66,7 +71,7 @@ def human(
     Args:
         stages: The stages to ask at, as `SentinelEvent.stage` records them: `"tool_call"` (before a tool call), `"tool_result"` (after it, with the result the model is about to receive), `"model_input"` (before a generate by the agent's model, with the request about to be sent) and `"model_output"` (after a generate by the agent's model, before its output reaches the agent).
         choices: What the person may pick, from `approve`, `reject`, `terminate` and `modify`. Defaults to `approve`, `reject` and `terminate` before a call, and `approve` and `terminate` after a call and at the generate stages, where `reject` and `modify` are not legal. A channel cannot be offered `modify` yet.
-        channel: Where to ask the person instead of the host: an `async` function defined at module level that takes a `HumanQuestion` and returns a `HumanAnswer`, or its name as `"module:function"` (the module may be a `.py` file's path, e.g. `"tasks/review.py:ask_reviewers"`), so a configuration file can name it. The log records a function by the name that finds it in another process, its module's where that imports and otherwise its file's, as for a script, so a retry or a replay finds it again. A file's path is relative to the working directory when `human()` is called, which for a sentinel made in a task file is the task file's directory. A function defined inside another function, or in a REPL, notebook or `python -c`, cannot be found again and is a `TypeError`. None, the default, asks through `Host.ask_human`.
+        channel: Where to ask the person instead of the host: an `async` function defined at module level that takes a `HumanQuestion` and returns a `HumanAnswer`, or its name as `"module:function"` (the module may be a `.py` file's path, e.g. `"tasks/review.py:ask_reviewers"`), so a configuration file can name it. The log records a function by the name that finds it in another process, its module's where that imports and otherwise its file's, as for a script, so a retry or a replay finds it again. A file's path is relative to the working directory when `human()` is called, which for a task file inspect_ai loads is the task file's directory; inspect_ai logs the file `human()` found relative to the directory the eval was launched from, where a retry rebuilds it. A function defined inside another function, or in a REPL, notebook or `python -c`, cannot be found again and is a `TypeError`. None, the default, asks through `Host.ask_human`.
     """
     valid = ", ".join(repr(stage) for stage in _LEGAL)
     if isinstance(stages, str) or not stages:

@@ -24,8 +24,9 @@ from inspect_ai.log import SentinelConfig, SentinelEntry
 from inspect_ai.util import resource
 
 from ._context import validate_instance_name
-from ._decorators import ENTRY_FIELDS, VERSION
+from ._decorators import ENTRY_FIELDS, VERSION, Origins, instance_origins
 from ._portable import PortabilityError
+from ._sources import relative_reference
 from ._types import Sentinel, Sentinels
 
 logger = logging.getLogger(__name__)
@@ -356,3 +357,42 @@ def _config_name(name: str) -> str:
         if len(found) == 1 and found[0].name == name:
             return bare
     return name
+
+
+def config_relative_to(sentinels: Sentinels, directory: str) -> SentinelConfig:
+    """Record constructed monitors and protocols as `sentinel_config()` does, with their source file references relative to `directory`.
+
+    A relative file reference, a `"<file>.py:function"` that `human(channel=)` records, is relative to the working directory the sentinel was made in. inspect_ai records the sentinel in the eval log relative to the directory the eval was launched from, where `eval_retry()` rebuilds it. Each reference a factory marks as a source reference, relative or absolute, names the file it was resolved to when the instance was made, kept in memory and never recorded; that file is recorded relative to `directory`, or by its absolute path where there is no relative path to it (another drive). A module's name and every other value are recorded as `sentinel_config()` records them.
+
+    Args:
+        sentinels: One monitor or protocol, or a sequence or mapping of instance names to them, as `Task(sentinel=)` accepts.
+        directory: The directory to record file references relative to.
+
+    Raises:
+        TypeError: If a value is not a configured monitor or protocol.
+    """
+    config = sentinel_config(sentinels)
+    origins = _layer_origins(sentinels)
+    if not origins:
+        return config
+    dumped: Any = config.model_dump()
+    for path, origin in origins.items():
+        holder = dumped
+        for key in path[:-1]:
+            holder = holder[key]
+        holder[path[-1]] = relative_reference(holder[path[-1]], origin, directory)
+    return SentinelConfig.model_validate(dumped)
+
+
+def _layer_origins(sentinels: Sentinels) -> Origins:
+    if is_registry_object(sentinels):
+        return instance_origins(sentinels)
+    if isinstance(sentinels, Mapping):
+        named = cast(Mapping[str, object], sentinels).items()
+    else:
+        named = enumerate(cast(Sequence[object], sentinels))
+    return {
+        (key, *path): origin
+        for key, child in named
+        for path, origin in instance_origins(child).items()
+    }

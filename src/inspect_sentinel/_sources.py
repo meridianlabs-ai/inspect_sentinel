@@ -3,21 +3,14 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import os
 import sys
-from collections.abc import Generator
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
 # the prefix of the name a module loaded from its file gets
 _FROM_FILE = "_sentinel_source_"
-
-# where a relative source file is looked for when the working directory has
-# no file of that name, while `source_fallback()` is open
-_fallback: ContextVar[Path | None] = ContextVar(
-    "inspect_sentinel_source_fallback", default=None
-)
 
 
 def source_file(module: str) -> str | None:
@@ -72,22 +65,6 @@ def import_source(module: str, file: str | None) -> ModuleType | None:
         return _import_file(path)
 
 
-@contextmanager
-def source_fallback(directory: str) -> Generator[None]:
-    """Look for a relative source file in `directory` when the working directory has no file of that name, while the context is open.
-
-    A configuration names a function by a source file's path, relative to the working directory where it was recorded. inspect_ai's `eval_retry()` rebuilds the logged sentinel in the task file's directory, where a sentinel made in the task file was recorded, and opens this with the directory the retry runs in, where an eval's own sentinel was. A file in the working directory always wins: whether it exists is all that is checked.
-
-    Args:
-        directory: The directory to look in second.
-    """
-    token = _fallback.set(Path(directory).resolve())
-    try:
-        yield
-    finally:
-        _fallback.reset(token)
-
-
 def _import_file(path: Path) -> ModuleType:
     # under a name of its own, so it never stands in for a module of the
     # same name, nor runs twice
@@ -118,9 +95,45 @@ def _relative(file: str) -> str:
 
 
 def _absolute(file: str) -> Path:
-    path = (Path.cwd() / file).resolve()
-    fallback = _fallback.get()
-    if fallback is None or path.exists():
-        return path
-    second = (fallback / file).resolve()
-    return second if second.exists() else path
+    return (Path.cwd() / file).resolve()
+
+
+_SOURCE_REFERENCE = "__inspect_sentinel_source_reference__"
+
+_Converter = Callable[[object], object]
+
+
+def source_reference(converter: _Converter) -> _Converter:
+    # marks a `recorded_as()` converter whose recorded value is a source
+    # reference, "module:function" where the module may be a `.py` file's
+    # path, so `config_relative_to()` records the file relative to a directory
+    setattr(converter, _SOURCE_REFERENCE, True)
+    return converter
+
+
+def is_source_reference(converter: object) -> bool:
+    return getattr(converter, _SOURCE_REFERENCE, False) is True
+
+
+def reference_origin(recorded: object) -> Path | None:
+    # the file a recorded "<file>.py:function" reference names, relative or
+    # absolute, resolved as `import_source()` resolves it in the working
+    # directory, so a symlink followed by `..` names the file the import
+    # found. None for a module's name
+    if not isinstance(recorded, str):
+        return None
+    module, _, qualname = recorded.rpartition(":")
+    if not module.endswith(".py") or not qualname:
+        return None
+    return _absolute(module)
+
+
+def relative_reference(recorded: str, origin: Path, directory: str) -> str:
+    # a reference to the file `origin` relative to `directory`, or absolute
+    # where there is no relative path to it (another drive)
+    _, _, qualname = recorded.rpartition(":")
+    try:
+        file = os.path.relpath(origin, Path(directory).resolve())
+    except ValueError:
+        file = str(origin)
+    return f"{Path(file).as_posix()}:{qualname}"
