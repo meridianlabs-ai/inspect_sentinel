@@ -1,6 +1,6 @@
 """Where the benchmark may write: its output holds the judges' prompts and the imported datasets, which must never be committed.
 
-An output directory may be anywhere outside the repository, but inside it only where git ignores it and tracks nothing under it. That holds for where each artifact actually lands: the directory's own resolved location, and the resolved target of every link beneath it, so a link such as `out/scans -> ../published` can't carry the scans somewhere git would take them.
+An output directory may be anywhere outside the repository, but inside it only where git ignores it and tracks nothing under it. That holds for where each artifact actually lands: the directory's own resolved location, and the resolved target of every link beneath it, so a link such as `out/scans -> ../published` can't carry the scans somewhere git would take them. A destination that is not a directory, a dangling link's included, is checked as a file, so a rule that ignores only a directory of that name doesn't cover it.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class UnsafeOutput(ValueError):
 def check_out(out: Path, repository: Path = REPOSITORY) -> str | None:
     """Why writing under `out` is not safe, or None where it is: `out` itself, and every link beneath it, must resolve outside `repository`, or inside it where git ignores the destination and tracks nothing under it."""
     root = repository.resolve()
-    reason = _unsafe(out.resolve(), root, f"--out {out}")
+    reason = _unsafe(out.resolve(), root, f"--out {out}", directory=True)
     if reason is not None or not out.is_dir():
         return reason
     seen: set[Path] = set()
@@ -32,10 +32,14 @@ def check_out(out: Path, repository: Path = REPOSITORY) -> str | None:
         seen.add(real)
         for child in directory.iterdir():
             if child.is_symlink():
+                # a link to a directory is checked as one; any other link,
+                # dangling ones included, can only have a file written through
+                # it, so a rule for a directory of that name doesn't cover it
                 reason = _unsafe(
                     child.resolve(),
                     root,
                     f"{child}, a link under --out {out} to {child.resolve()},",
+                    directory=child.is_dir(),
                 )
                 if reason is not None:
                     return reason
@@ -55,7 +59,7 @@ def require_safe(out: Path, repository: Path = REPOSITORY) -> None:
         raise UnsafeOutput(reason)
 
 
-def _unsafe(resolved: Path, root: Path, label: str) -> str | None:
+def _unsafe(resolved: Path, root: Path, label: str, directory: bool) -> str | None:
     if not resolved.is_relative_to(root):
         return None
     relative = resolved.relative_to(root).as_posix()
@@ -70,7 +74,7 @@ def _unsafe(resolved: Path, root: Path, label: str) -> str | None:
                 "check-ignore",
                 "-q",
                 "--no-index",
-                f"{relative}/",
+                f"{relative}/" if directory else relative,
             ],
             capture_output=True,
         )

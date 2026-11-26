@@ -840,16 +840,29 @@ def _repository(root: Path) -> Path:
     return root
 
 
-LINKS: dict[str, tuple[str, str]] = {
-    # a link under the output directory: where it is, and what it points to
-    # (relative to the repository; "/" for outside it)
-    "scans to unignored": ("out/scans", "published"),
-    "scans to ignored": ("out/scans", "linked/scans"),
-    "scans to outside": ("out/scans", "/elsewhere/scans"),
-    "result file to unignored": ("out/results/guardian.csv", "published/g.csv"),
-    "nested to unignored": ("out/cache/guardian/x", "published"),
-    "outside back to unignored": ("../outside/scans", "published"),
-    "to tracked": ("out/scans", "forced"),
+LINKS: dict[str, tuple[str, str, str | None]] = {
+    # a link under the output directory: where it is, what it points to
+    # (relative to the repository; "/" for outside it), and what is made there
+    # first ("file", "dir", or None to leave the link dangling)
+    "scans to unignored": ("out/scans", "published", None),
+    "scans to ignored": ("out/scans", "linked/scans", None),
+    "existing scans to ignored": ("out/scans", "linked/scans", "dir"),
+    "scans to outside": ("out/scans", "/elsewhere/scans", None),
+    "result file to unignored": ("out/results/guardian.csv", "published/g.csv", None),
+    "result file into ignored": ("out/results/guardian.csv", "linked/g.csv", "file"),
+    "result file named as an ignored directory": (
+        "out/results/claude_code.csv",
+        "linked",
+        "file",
+    ),
+    "dangling file named as an ignored directory": (
+        "out/results/claude_code.csv",
+        "linked",
+        None,
+    ),
+    "nested to unignored": ("out/cache/guardian/x", "published", None),
+    "outside back to unignored": ("../outside/scans", "published", None),
+    "to tracked": ("out/scans", "forced", None),
 }
 
 
@@ -858,8 +871,13 @@ LINKS: dict[str, tuple[str, str]] = {
     [
         ("scans to unignored", "out", "a link under --out"),
         ("scans to ignored", "out", None),
+        ("existing scans to ignored", "out", None),
         ("scans to outside", "out", None),
         ("result file to unignored", "out", "does not ignore it"),
+        ("result file into ignored", "out", None),
+        # `linked/` ignores a directory of that name, not a file
+        ("result file named as an ignored directory", "out", "does not ignore it"),
+        ("dangling file named as an ignored directory", "out", "does not ignore it"),
         ("nested to unignored", "out", "does not ignore it"),
         ("outside back to unignored", "../outside", "a link under --out"),
         ("to tracked", "out", "holds files git tracks"),
@@ -869,10 +887,15 @@ def test_a_link_under_the_output_directory_must_resolve_somewhere_safe(
     tmp_path: Path, link: str, root: str, refused: str | None
 ) -> None:
     repository = _repository(tmp_path / "repo")
-    at, to = LINKS[link]
+    at, to, made = LINKS[link]
     path = repository / at
     path.parent.mkdir(parents=True, exist_ok=True)
     target = tmp_path / to.lstrip("/") if to.startswith("/") else repository / to
+    if made == "dir":
+        target.mkdir(parents=True)
+    elif made == "file":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x")
     path.symlink_to(target)
     reason = check_out(repository / root, repository)
     if refused is None:
