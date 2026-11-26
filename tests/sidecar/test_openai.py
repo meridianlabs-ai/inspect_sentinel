@@ -1820,9 +1820,20 @@ async def test_a_chat_request_with_empty_content_and_a_refusal_is_unreadable(
 
 
 @pytest.mark.anyio
-async def test_a_span_inside_reasoning_is_read_in_the_reasoning() -> None:
-    said = f"<think>Hmm. {_ONE_SPAN}</think>A quiet day."
-    body = _chat_said({"role": "assistant", "content": said})
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        pytest.param(f"Hmm. {_ONE_SPAN}", id="in reasoning"),
+        pytest.param(f"<summary>{_ONE_SPAN}</summary>Hmm.", id="in its summary"),
+    ],
+)
+@pytest.mark.parametrize("as_part", [False, True], ids=["a string", "a text part"])
+async def test_a_span_inside_reasoning_is_read_in_the_reasoning(
+    reasoning: str, as_part: bool
+) -> None:
+    said = f"<think>{reasoning}</think>A quiet day."
+    content = [{"type": "text", "text": said}] if as_part else said
+    body = _chat_said({"role": "assistant", "content": content})
 
     messages = await read_request("openai", json.dumps(body).encode())
 

@@ -138,6 +138,13 @@ def test_a_value_dropped_is_unreadable(
             [ContentReasoning(reasoning=f"Hmm. {_SPAN}"), ContentText(text="Rain.")],
             id="in reasoning",
         ),
+        pytest.param(
+            [
+                ContentReasoning(reasoning="Hmm.", summary=f"Short. {_SPAN}"),
+                ContentText(text="Rain."),
+            ],
+            id="in a reasoning summary",
+        ),
         pytest.param(f"Rain.\n{_SPAN}", id="in a text read whole"),
     ],
 )

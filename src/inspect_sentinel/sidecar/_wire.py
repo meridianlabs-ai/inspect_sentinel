@@ -857,7 +857,7 @@ def check_internal_kept(
 ) -> None:
     """Refuse a body whose `<content-internal>` values inspect_ai's readers dropped.
 
-    inspect_ai's providers write an item's `internal` value into its text as a `<content-internal>` span. A reader takes the span out and keeps its value on a part, or leaves it in a text it reads whole, such as reasoning. This checks what the readers read, not how they read it.
+    inspect_ai's providers write an item's `internal` value into its text as a `<content-internal>` span. A reader takes the span out and keeps its value on a part, or leaves it in a text it reads whole: a part's text, or reasoning or its summary. This checks what the readers read, not how they read it.
 
     Args:
         texts: The texts of the body that inspect_ai's readers take `<content-internal>` spans out of. Each reader passes its own: the others are read whole, and a span in them is kept.
@@ -885,7 +885,7 @@ def check_internal_kept(
         for part in message.content:
             if part.internal is not None:
                 kept.add(internal_key(part.internal))
-            for name in ("text", "reasoning", "refusal"):
+            for name in ("text", "reasoning", "summary"):
                 read = getattr(part, name, None)
                 if isinstance(read, str):
                     kept.update(internal_values(read))
