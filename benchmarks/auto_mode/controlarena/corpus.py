@@ -70,7 +70,7 @@ def load(version: str, dest: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("version")
     parser.add_argument("--dest", type=Path, required=True)
     args = parser.parse_args()
