@@ -113,6 +113,7 @@ def test_single_child_runners_are_gone() -> None:
 def test_integration_module_exports_the_host_surface() -> None:
     assert set(inspect_sentinel._integration.__all__) == {
         "Recorder",
+        "TimedRecorder",
         "HostContext",
         "Sentinels",
         "sentinel_from_config",
@@ -123,6 +124,7 @@ def test_integration_module_exports_the_host_surface() -> None:
         "step_types",
         "supersedes",
         "watched_stages",
+        "watching_channels",
         "run_sentinel",
         "source_fallback",
         "HostNative",
