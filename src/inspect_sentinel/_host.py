@@ -319,7 +319,8 @@ def answers_from_record(host: Host) -> bool:
 # What a host that must know while human() waits on a channel sets around
 # run_sentinel: the sidecar, which cancels such a wait when the eval ends the
 # sample or a sentinel ends the run, as it cancels its own questions to a
-# person. human() enters it around each call to a channel.
+# person, and Inspect, which counts the questions. human() enters it around
+# each call to a channel.
 ChannelWait: TypeAlias = Callable[[], AbstractAsyncContextManager[None]]
 
 _channel_wait: ContextVar[ChannelWait | None] = ContextVar(
@@ -414,6 +415,38 @@ class Recorder(TypingProtocol):
             factory: Registry name of the instance's factory, package prefix included, e.g. `inspect_sentinel/concurrent`: the code that ran.
             step: The step the protocol was examining.
             reported: The decision that did not take effect, with its instance identity.
+        """
+        ...
+
+
+@runtime_checkable
+class TimedRecorder(Recorder, TypingProtocol):
+    """A `Recorder` that is also told when each monitor or protocol function starts and ends on a step, so it can time the records it writes. Runner-facing; authors never call it.
+
+    The runner calls `began` just before a function runs and `ended` when it returns, raises or is cancelled, before any record of what it did. Each record then names the function it describes, or, for `cancelled` and `bypassed`, its instance, whose latest function is the one that was running. A record can be written well after its function ended: a `decide_final()` decision is recorded at the root, and a `superseded` one after the race it lost.
+
+    A recorder that doesn't implement both methods is still a `Recorder`, and the runner calls neither.
+    """
+
+    def began(self, context: Context, factory: str, step: Step, function: str) -> None:
+        """Note that a monitor or protocol function started on the step.
+
+        Args:
+            context: The instance's context; its `path` identifies the instance.
+            factory: Registry name of the instance's factory, package prefix included, e.g. `inspect_sentinel/concurrent`: the code that ran.
+            step: The step the function examines.
+            function: The function's name, which tells apart the functions of an instance whose factory returned several.
+        """
+        ...
+
+    def ended(self, context: Context, factory: str, step: Step, function: str) -> None:
+        """Note that a monitor or protocol function returned, raised or was cancelled.
+
+        Args:
+            context: The instance's context; its `path` identifies the instance.
+            factory: Registry name of the instance's factory, package prefix included, e.g. `inspect_sentinel/concurrent`: the code that ran.
+            step: The step the function examined.
+            function: The function's name, as given to `began`.
         """
         ...
 

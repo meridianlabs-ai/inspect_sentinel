@@ -46,6 +46,7 @@ from inspect_sentinel._types import (
 )
 from tests._fakes import (
     ListRecorder,
+    TimedListRecorder,
     after_step,
     before_step,
     host_context,
@@ -2117,3 +2118,93 @@ async def test_a_terminate_superseded_by_a_final_names_its_factory() -> None:
         ("t", registry_info(decides).name)
     ]
     assert recorder.cancelled_instances == []
+
+
+@monitor
+def monitor_raises() -> Monitor:
+    async def check(context: Context, step: BeforeToolCall) -> Observation | None:
+        raise RuntimeError("monitor exploded")
+
+    return check
+
+
+@protocol
+def runs_monitors(monitors: Monitors) -> Protocol:
+    async def decide(
+        context: Context, step: Step, escalations: Escalations
+    ) -> Decision | None:
+        await run_monitors(monitors, context, step)
+        return Decision.proceed()
+
+    return decide
+
+
+def _timed(recorder: TimedListRecorder, path: str) -> list[str]:
+    return [method for method, at, _ in recorder.calls if at == path]
+
+
+@pytest.mark.anyio
+async def test_each_function_is_timed_around_its_run_before_its_record() -> None:
+    recorder = TimedListRecorder()
+    root = runs_monitors({"a": scores(), "b": monitor_raises(), "c": abstains()})
+    await run_sentinel(root, host_context(recorder=recorder), before_step())
+    assert _timed(recorder, "a") == ["began", "ended", "record"]
+    assert _timed(recorder, "b") == ["began", "ended", "failed"]
+    # an abstaining function is timed, though nothing records it
+    assert _timed(recorder, "c") == ["began", "ended"]
+    assert _timed(recorder, "") == ["began", "ended", "record"]
+    assert recorder.calls[0] == ("began", "", "decide")
+
+
+@pytest.mark.anyio
+async def test_a_protocol_that_raises_is_ended() -> None:
+    recorder = TimedListRecorder()
+    with pytest.raises(RuntimeError, match="exploded"):
+        await run_sentinel(raises(), host_context(recorder=recorder), before_step())
+    assert recorder.calls == [("began", "", "decide"), ("ended", "", "decide")]
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_function_is_ended_before_its_cancellation_is_recorded() -> (
+    None
+):
+    recorder = TimedListRecorder()
+    root = concurrent({"t": decides("terminate"), "w": waits_forever()})
+    with anyio.fail_after(5):
+        await run_sentinel(root, host_context(recorder=recorder), before_step())
+    assert _timed(recorder, "w") == ["began", "ended", "cancelled"]
+
+
+@pytest.mark.anyio
+async def test_a_final_decision_is_recorded_after_every_function_it_passed_ended() -> (
+    None
+):
+    recorder = TimedListRecorder()
+    root = wrapper(cast(Any, {"f": finalizes()}))
+    await run_sentinel(root, host_context(recorder=recorder), before_step())
+    assert recorder.calls == [
+        ("began", "", "decide"),
+        ("began", "f", "decide"),
+        ("ended", "f", "decide"),
+        ("ended", "", "decide"),
+        ("bypassed", "", "wrapper"),
+        ("record", "f", "decide"),
+    ]
+
+
+class _EndedRaises(TimedListRecorder):
+    def ended(self, context: Context, factory: str, step: Step, function: str) -> None:
+        raise OSError("recorder failed")
+
+
+@pytest.mark.anyio
+async def test_a_recorder_whose_ended_raises_fails_the_layer() -> None:
+    recorder = _EndedRaises()
+    with pytest.raises(OSError, match="recorder failed"):
+        await run_sentinel(
+            runs_monitors({"a": scores()}),
+            host_context(recorder=recorder),
+            before_step(),
+        )
+    # not taken for the monitor's own failure
+    assert recorder.failures == []

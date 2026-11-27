@@ -13,7 +13,7 @@ from inspect_ai.util import LimitExceededError
 from ._context import Context, validate_instance_name
 from ._decorators import invoke, members
 from ._final import Final, Origin
-from ._host import HostContext, enter_layer, layer, running_step
+from ._host import HostContext, TimedRecorder, enter_layer, layer, running_step
 from ._report import Decision, Escalations, Failed, Observation, Report, Reported
 from ._results import Decisions, Observations, Reports
 from ._step import Step
@@ -394,6 +394,9 @@ async def _run_member(
     finals: list[Final] = []
     failure: BaseException | None = None
     node = invocation(function.__name__, child_context.path)
+    timed = recorder if isinstance(recorder, TimedRecorder) else None
+    if timed is not None:
+        timed.began(child_context, factory, step, function.__name__)
     try:
         with running(node):
             # a monitor is never handed the escalations
@@ -416,6 +419,11 @@ async def _run_member(
                 failure = limits[0]
     except Exception as ex:
         failure = ex
+    finally:
+        # outside the function's own failures: a recorder that raises here
+        # fails the layer, as one that raises from record() does
+        if timed is not None:
+            timed.ended(child_context, factory, step, function.__name__)
     if failure is not None:
         if (
             kind == "monitor"

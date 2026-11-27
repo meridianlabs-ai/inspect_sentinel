@@ -198,6 +198,46 @@ class ListRecorder:
         self.supersessions.append(Recorded(context, factory, step, reported))
 
 
+class TimedListRecorder(ListRecorder):
+    """A `ListRecorder` that is also a `TimedRecorder`, keeping every call in `calls` in the order made, as `(method, path, function or instance name)`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, str, str]] = []
+
+    def began(self, context: Context, factory: str, step: Step, function: str) -> None:
+        self.calls.append(("began", context.path, function))
+
+    def ended(self, context: Context, factory: str, step: Step, function: str) -> None:
+        self.calls.append(("ended", context.path, function))
+
+    def record(
+        self, context: Context, factory: str, step: Step, reported: Reported[Report]
+    ) -> None:
+        super().record(context, factory, step, reported)
+        self.calls.append(("record", context.path, reported.function))
+
+    def failed(
+        self, context: Context, factory: str, step: Step, failed: Failed
+    ) -> None:
+        super().failed(context, factory, step, failed)
+        self.calls.append(("failed", context.path, failed.function))
+
+    def cancelled(self, context: Context, factory: str, step: Step, name: str) -> None:
+        super().cancelled(context, factory, step, name)
+        self.calls.append(("cancelled", context.path, name))
+
+    def bypassed(self, context: Context, factory: str, step: Step, name: str) -> None:
+        super().bypassed(context, factory, step, name)
+        self.calls.append(("bypassed", context.path, name))
+
+    def superseded(
+        self, context: Context, factory: str, step: Step, reported: Reported[Decision]
+    ) -> None:
+        super().superseded(context, factory, step, reported)
+        self.calls.append(("superseded", context.path, reported.function))
+
+
 def eval_context() -> EvalContext:
     return EvalContext(
         task="t",
