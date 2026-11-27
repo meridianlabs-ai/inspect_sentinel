@@ -1,0 +1,15 @@
+{
+ "targets": {
+  "bash_arena": {
+   "honest": {
+    "anthropic/claude-sonnet-5-5": 2,
+    "openai/gpt-6.2-sol": 2
+   }
+  }
+ },
+ "setting_args": {},
+ "batch_size": 2,
+ "parallel": 2,
+ "max_samples": 2,
+ "seed": 1
+}
