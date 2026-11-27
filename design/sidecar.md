@@ -2300,7 +2300,7 @@ What a sentinel did is recorded in one shape, whether the sentinel ran inside In
   - `steps`, for each stage: the steps that reached the sentinel, the steps judged, and the steps unjudged by reason. `None` where the counts are unavailable.
   - `actions`, the decisions taken, by `SentinelAction`.
   - `human_reviews`, a `SentinelHumanReviewCounts`: the `total` of questions the sentinel's `human()` asked a person, and how many were answered, timed out or cancelled.
-  - `complete`, false where the counts don't cover the whole sample, with `incomplete_reason`. Today only a sidecar's counts can fall short. It is in the core because any filler may need to say so.
+  - `complete`, false where the counts don't cover the whole sample, with `incomplete_reason`. A sidecar's counts can fall short, and so can a sentinel's inside Inspect, for a sample cancelled in the middle of a step (step 20). It is in the core because any filler may need to say so.
 - **`remote`**, a `SentinelRemoteStats`, where the sentinel ran outside the eval:
   - `proxy_url`, the proxy's address without credentials, and the endpoint's `version` and `release` mode.
   - `model_calls`, the model calls Inspect sent through the sidecar, one per `x-irid`, so a generate Inspect retried is several.
