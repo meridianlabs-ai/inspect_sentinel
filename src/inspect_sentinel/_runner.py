@@ -398,16 +398,12 @@ async def _run_member(
     if timed is not None:
         timed.began(child_context, factory, step, function.__name__)
     try:
-        try:
-            with running(node):
-                # a monitor is never handed the escalations
-                if kind == "monitor":
-                    report = await invoke(function, child_context, step)
-                else:
-                    report = await invoke(function, child_context, step, escalations)
-        finally:
-            if timed is not None:
-                timed.ended(child_context, factory, step, function.__name__)
+        with running(node):
+            # a monitor is never handed the escalations
+            if kind == "monitor":
+                report = await invoke(function, child_context, step)
+            else:
+                report = await invoke(function, child_context, step, escalations)
     except Final as ex:
         finals = [ex]
     except BaseExceptionGroup as ex:
@@ -423,6 +419,11 @@ async def _run_member(
                 failure = limits[0]
     except Exception as ex:
         failure = ex
+    finally:
+        # outside the function's own failures: a recorder that raises here
+        # fails the layer, as one that raises from record() does
+        if timed is not None:
+            timed.ended(child_context, factory, step, function.__name__)
     if failure is not None:
         if (
             kind == "monitor"

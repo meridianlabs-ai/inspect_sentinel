@@ -2190,3 +2190,21 @@ async def test_a_final_decision_is_recorded_after_every_function_it_passed_ended
         ("bypassed", "", "wrapper"),
         ("record", "f", "decide"),
     ]
+
+
+class _EndedRaises(TimedListRecorder):
+    def ended(self, context: Context, factory: str, step: Step, function: str) -> None:
+        raise OSError("recorder failed")
+
+
+@pytest.mark.anyio
+async def test_a_recorder_whose_ended_raises_fails_the_layer() -> None:
+    recorder = _EndedRaises()
+    with pytest.raises(OSError, match="recorder failed"):
+        await run_sentinel(
+            runs_monitors({"a": scores()}),
+            host_context(recorder=recorder),
+            before_step(),
+        )
+    # not taken for the monitor's own failure
+    assert recorder.failures == []

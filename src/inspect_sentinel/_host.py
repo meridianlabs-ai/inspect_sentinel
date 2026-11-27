@@ -319,7 +319,8 @@ def answers_from_record(host: Host) -> bool:
 # What a host that must know while human() waits on a channel sets around
 # run_sentinel: the sidecar, which cancels such a wait when the eval ends the
 # sample or a sentinel ends the run, as it cancels its own questions to a
-# person. human() enters it around each call to a channel.
+# person, and Inspect, which counts the questions. human() enters it around
+# each call to a channel.
 ChannelWait: TypeAlias = Callable[[], AbstractAsyncContextManager[None]]
 
 _channel_wait: ContextVar[ChannelWait | None] = ContextVar(
