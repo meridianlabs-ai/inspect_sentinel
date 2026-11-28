@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,7 @@ from ..trajectory_score import (
     ABLATIONS,
     JUDGES,
     TrajectorySettings,
+    pending,
     read_calls,
     read_usage,
     runnable,
@@ -60,10 +61,29 @@ from .importer import import_logs
 from .ledger import MARGIN, Entry, price, record, spent
 from .refusals import classify
 
-PRIOR_PER_CALL = {"claude_code": 0.006}
-"""Dollars per judged tool call assumed for a monitor before any has been measured; others 0.004."""
+PRIOR_PER_CALL = {
+    "claude_code": ModelUsage(
+        input_tokens=10,
+        output_tokens=700,
+        input_tokens_cache_read=75_000,
+        input_tokens_cache_write=13_000,
+    )
+}
+"""The tokens per judged tool call assumed for a monitor before any has been measured, priced at its judge model's price: about a quarter above what Claude Haiku 5.5 used on the glm-v1 corpus."""
 
-DEFAULT_PER_CALL = 0.004
+DEFAULT_PER_CALL = ModelUsage(
+    input_tokens=10,
+    output_tokens=900,
+    input_tokens_cache_read=2_800,
+    input_tokens_cache_write=27_500,
+)
+"""`PRIOR_PER_CALL` for the other monitors."""
+
+OTHER_MODEL = 1.5
+"""How much more a judge model may use per call than the model its tokens were measured on, since replies differ in length and caching: Claude Sonnet 5.5's calls cost 1.6 times Claude Haiku 5.5's tokens priced at Sonnet's rates."""
+
+CHUNK = 50
+"""Trajectories scanned between checks of a monitor's spend against its projection."""
 
 OVER_CAP = 5
 """How much more a judge prompt over the cap costs: Haiku's price above 100K tokens."""
@@ -148,6 +168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     common(p)
     p.add_argument("--plan", type=Path, required=True)
     p.add_argument("--ablation-subset", type=int, default=None)
+    p.add_argument("--judge-model", default="anthropic/claude-haiku-5-5")
 
     args = parser.parse_args(argv)
     data: Path = args.data
@@ -162,7 +183,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(status(data))
         return 0
     if command == "forecast":
-        print(forecast(Plan.read(args.plan), data, out, args.ablation_subset))
+        print(
+            forecast(
+                Plan.read(args.plan), data, out, args.ablation_subset, args.judge_model
+            )
+        )
         return 0
     with _locked(data):
         return _command(args, command, data, out, ledger)
@@ -248,49 +273,61 @@ def _command(
         ablated = subset(trajectories, args.ablation_subset)
         for name in names:
             chosen = ablated if name in ABLATIONS else trajectories
-            if _scored(out, name, chosen):
+            model = settings.models.get(name, settings.judge_model)
+            todo = pending(name, chosen, settings)
+            if not todo:
                 print(f"{name}: already scored.")
                 continue
-            calls = sum(len(t.calls()) for t in chosen)
-            projected = calls * _per_call(out, name)
+            calls = sum(len(t.calls()) for t in todo)
+            projected = calls * _per_call(out, name, model)
             if spent(ledger) + projected + MARGIN > args.budget:
                 print(
-                    f"{name}: not scored; projected ${projected:.2f} for {calls} calls, with ${spent(ledger):.2f} spent of ${args.budget:.2f}.",
+                    f"{name}: not scored; projected ${projected:.2f} for {calls} calls on {model}, with ${spent(ledger):.2f} spent of ${args.budget:.2f}.",
                     file=sys.stderr,
                 )
                 continue
-            # the projection is charged before the scan and reversed once its
-            # real cost is recorded, so a scan that dies is still counted
+            # the projection is charged before the scan and reversed once it
+            # ends, so a scan that dies is still counted; each chunk's real
+            # cost is recorded as it ends, and scanning stops once that passes
+            # the projection
             record(
                 ledger,
-                [
-                    Entry(
-                        "judge-reserved",
-                        name,
-                        args.judge_model,
-                        ModelUsage(),
-                        projected,
-                    )
-                ],
+                [Entry("judge-reserved", name, model, ModelUsage(), projected)],
             )
-            file = score_trajectories(
-                name, trajectories, settings, only=chosen if name in ABLATIONS else None
-            )
-            used = read_usage(file.with_suffix(".usage.csv"))
-            cost = _record_judging(ledger, name, args.judge_model, used)
-            record(
-                ledger,
-                [
-                    Entry(
-                        "judge-reserved",
-                        name,
-                        args.judge_model,
-                        ModelUsage(),
-                        -projected,
-                    )
-                ],
-            )
-            print(f"{name}: scored {calls} calls for ${cost:.2f}.")
+            cost = 0.0
+
+            def keep_going(
+                used: Sequence[Mapping[str, Any]],
+                name: str = name,
+                model: str = model,
+                projected: float = projected,
+            ) -> bool:
+                nonlocal cost
+                cost += _record_judging(ledger, name, model, used)
+                return cost <= projected
+
+            try:
+                score_trajectories(
+                    name,
+                    trajectories,
+                    settings,
+                    only=chosen if name in ABLATIONS else None,
+                    chunk=CHUNK,
+                    keep_going=keep_going,
+                )
+            finally:
+                record(
+                    ledger,
+                    [Entry("judge-reserved", name, model, ModelUsage(), -projected)],
+                )
+            left = len(pending(name, chosen, settings))
+            if left:
+                print(
+                    f"{name}: stopped with {left} of {len(chosen)} trajectories unscored; ${cost:.2f} spent, past the ${projected:.2f} projected. Run again to score the rest, from the measured cost.",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"{name}: scored {calls} calls for ${cost:.2f}.")
     if command in ("report", "run", "score"):
         report = write_trajectory_report(trajectories, out)
         print(report.read_text())
@@ -321,12 +358,18 @@ def status(data: Path) -> str:
     return "\n".join(lines)
 
 
-def forecast(plan: Plan, data: Path, out: Path, ablation_subset: int | None) -> str:
-    """What `plan` still costs to generate and judge, from the measured costs: a line per tier of attacker, then judging, then the ablations."""
+def forecast(
+    plan: Plan,
+    data: Path,
+    out: Path,
+    ablation_subset: int | None,
+    judge_model: str = "anthropic/claude-haiku-5-5",
+) -> str:
+    """What `plan` still costs to generate and judge on `judge_model`, from the measured costs: a line per tier of attacker, then judging, then the ablations."""
     have = counts(data)
     halted = stopped(data)
     measured = _calls_per_trajectory(out)
-    per_call = {name: _per_call(out, name) for name in JUDGES + ABLATIONS}
+    per_call = {name: _per_call(out, name, judge_model) for name in JUDGES + ABLATIONS}
     lines = ["| part | trajectories | dollars |", "|---|---|---|"]
     totals: dict[str, tuple[int, float]] = {}
     judged = 0
@@ -391,23 +434,13 @@ def _logs_match(trajectories: Sequence[Trajectory], log_dir: Path) -> bool:
     return True
 
 
-def _scored(out: Path, name: str, chosen: Sequence[Trajectory]) -> bool:
-    # a monitor whose usage file covers exactly these trajectories as they
-    # are now is not scored again
-    file = out / "trajectory_results" / f"{name}.usage.csv"
-    if not file.exists():
-        return False
-    rows = read_usage(file)
-    return {r["trajectory"]: r["digest"] for r in rows} == {
-        t.id: trajectory_digest(t) for t in chosen
-    }
-
-
-def _per_call(out: Path, name: str) -> float:
-    # the monitor's measured cost per judged tool call, else the most
-    # expensive measured among the others with a quarter more, else the prior
+def _per_call(out: Path, name: str, model: str) -> float:
+    # dollars per judged tool call for monitor `name` on `model`: the tokens
+    # measured per call (the monitor's own, else the most expensive other's
+    # with a quarter more, else the prior) priced at `model`'s rates, with a
+    # half more where they were measured on another model
     directory = out / "trajectory_results"
-    measured: dict[str, float] = {}
+    measured: dict[str, tuple[ModelUsage, bool]] = {}
     files: list[Path] = (
         sorted(directory.glob("*.usage.csv")) if directory.exists() else []
     )
@@ -415,17 +448,33 @@ def _per_call(out: Path, name: str) -> float:
         monitor = file.name.removesuffix(".usage.csv")
         calls = read_calls(directory / f"{monitor}.csv")
         judged = sum(1 for c in calls if c["call"] is not None)
-        if judged:
-            measured[monitor] = sum(r["cost"] or 0.0 for r in read_usage(file)) / judged
+        rows = read_usage(file)
+        if judged and rows:
+            measured[monitor] = (
+                ModelUsage(
+                    input_tokens=sum(r["input_tokens"] for r in rows) // judged,
+                    output_tokens=sum(r["output_tokens"] for r in rows) // judged,
+                    input_tokens_cache_read=sum(r["cache_read_tokens"] for r in rows)
+                    // judged,
+                    input_tokens_cache_write=sum(r["cache_write_tokens"] for r in rows)
+                    // judged,
+                ),
+                all(r["model"] == model for r in rows),
+            )
+
+    def priced(usage: ModelUsage, same: bool) -> float:
+        return price(model, usage) * (1.0 if same else OTHER_MODEL)
+
     if name in measured:
-        return measured[name] * 1.1
+        return priced(*measured[name]) * 1.1
     if measured:
-        return max(measured.values()) * 1.25
-    return PRIOR_PER_CALL.get(name, DEFAULT_PER_CALL)
+        return max(priced(*m) for m in measured.values()) * 1.25
+    prior = PRIOR_PER_CALL.get(name, DEFAULT_PER_CALL)
+    return priced(prior, model == "anthropic/claude-haiku-5-5")
 
 
 def _record_judging(
-    ledger: Path, name: str, model: str, used: Sequence[dict[str, Any]]
+    ledger: Path, name: str, model: str, used: Sequence[Mapping[str, Any]]
 ) -> float:
     # priced by the ledger's own table, like generation, so the budget is
     # checked against one set of prices; a trajectory any of whose prompts

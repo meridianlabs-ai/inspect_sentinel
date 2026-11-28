@@ -201,25 +201,100 @@ def score_trajectories(
     trajectories: Sequence[Trajectory],
     settings: TrajectorySettings,
     only: Sequence[Trajectory] | None = None,
+    *,
+    chunk: int | None = None,
+    keep_going: Callable[[Sequence[Mapping[str, Any]]], bool] | None = None,
 ) -> Path:
     """Scan the trajectory logs with monitor `name` at every call, write its results and usage files, and return the results file. `only` limits the scan to some of `trajectories` (`subset()`), whose logs are checked all the same.
+
+    A trajectory already scored by the same judge (`pending()`) is kept, not scanned again. The rest are scanned `chunk` at a time (all at once without it), and the files are rewritten after each chunk. `keep_going` is given each chunk's usage rows; when it returns False no further chunk is scanned, and the files hold only the trajectories scored so far.
 
     Raises:
         UnsafeOutput: If the output directory, or a link beneath it, resolves to where git would take what is written there.
         ValueError: If the logs are not exactly those of `trajectories` as they are now.
-        RuntimeError: If the scan did not complete, or gave a result for anything but `trajectories`.
+        RuntimeError: If a scan did not complete, or gave a result for anything but its trajectories.
     """
     require_safe(settings.out)
     log_dir = settings.out / "trajectory_logs"
     digests = check_manifest(trajectories, log_dir, trajectory_digest)
-    files = log_files(trajectories, log_dir, trajectory_digest)
-    if only is not None:
-        chosen = {t.id for t in only}
-        files = [f for t, f in zip(trajectories, files, strict=True) if t.id in chosen]
-        digests = {i: d for i, d in digests.items() if i in chosen}
+    files = dict(
+        zip(
+            (t.id for t in trajectories),
+            log_files(trajectories, log_dir, trajectory_digest),
+            strict=True,
+        )
+    )
+    chosen = trajectories if only is None else only
     model = settings.models.get(name, settings.judge_model)
     cap_judge_model(model, settings.cap)
     prompt = identity(name, settings)
+    directory = settings.out / "trajectory_results"
+    todo = {t.id for t in pending(name, chosen, settings)}
+    calls, usage = _kept(directory, name, {t.id for t in chosen} - todo)
+    ordered = [t.id for t in chosen if t.id in todo]
+    size = chunk or len(ordered) or 1
+    file = directory / f"{name}.csv"
+    for start in range(0, len(ordered), size):
+        part = ordered[start : start + size]
+        part_calls, part_usage = _scan(
+            name,
+            [files[i] for i in part],
+            {i: digests[i] for i in part},
+            model,
+            prompt,
+            settings,
+        )
+        calls += part_calls
+        usage += part_usage
+        _write(directory / f"{name}.usage.csv", USAGE_FIELDS, usage)
+        _write(file, CALL_FIELDS, calls)
+        if keep_going is not None and not keep_going(part_usage):
+            break
+    if not ordered:
+        _write(directory / f"{name}.usage.csv", USAGE_FIELDS, usage)
+        _write(file, CALL_FIELDS, calls)
+    return file
+
+
+def pending(
+    name: str, chosen: Sequence[Trajectory], settings: TrajectorySettings
+) -> list[Trajectory]:
+    """Those of `chosen` that monitor `name` has not yet scored as they are now, with the same judge model and prompt identity (the policy's hash among it)."""
+    file = settings.out / "trajectory_results" / f"{name}.usage.csv"
+    if not file.exists():
+        return list(chosen)
+    model = settings.models.get(name, settings.judge_model)
+    prompt = identity(name, settings)
+    done = {
+        str(r["trajectory"]): r["digest"]
+        for r in read_usage(file)
+        if r["model"] == model and r["prompt"] == prompt
+    }
+    return [t for t in chosen if done.get(t.id) != trajectory_digest(t)]
+
+
+def _kept(
+    directory: Path, name: str, keep: set[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    # the earlier results and usage rows of the trajectories in `keep`
+    usage_file = directory / f"{name}.usage.csv"
+    calls_file = directory / f"{name}.csv"
+    if not keep or not usage_file.exists() or not calls_file.exists():
+        return [], []
+    usage = [r for r in read_usage(usage_file) if str(r["trajectory"]) in keep]
+    calls = [r for r in read_calls(calls_file) if str(r["trajectory"]) in keep]
+    return calls, usage
+
+
+def _scan(
+    name: str,
+    files: Sequence[Path],
+    digests: Mapping[str, str],
+    model: str,
+    prompt: str,
+    settings: TrajectorySettings,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    # one scan of `files`, whose trajectories' digests are `digests`
     with scan_buffer(settings.out / "cache" / "scanbuffer"):
         status = scan(
             scanners={
@@ -264,11 +339,7 @@ def score_trajectories(
     for row in usage:
         row["digest"] = digests[str(row["trajectory"])]
         row["prompt"] = prompt
-    directory = settings.out / "trajectory_results"
-    _write(directory / f"{name}.usage.csv", USAGE_FIELDS, usage)
-    file = directory / f"{name}.csv"
-    _write(file, CALL_FIELDS, calls)
-    return file
+    return calls, usage
 
 
 def results(

@@ -26,6 +26,10 @@ from inspect_ai.tool import ToolCall
 
 from benchmarks.auto_mode.claude_code import transcript_lines
 from benchmarks.auto_mode.controlarena import generate as generation
+from benchmarks.auto_mode.controlarena.__main__ import (
+    OTHER_MODEL,
+    _per_call,  # pyright: ignore[reportPrivateUsage]
+)
 from benchmarks.auto_mode.controlarena.__main__ import main as controlarena_main
 from benchmarks.auto_mode.controlarena.importer import (
     RESULT_CHARS,
@@ -57,8 +61,11 @@ from benchmarks.auto_mode.trajectories import (
 )
 from benchmarks.auto_mode.trajectory_report import judge, summarize
 from benchmarks.auto_mode.trajectory_score import (
+    TrajectorySettings,
     auto_mode_without_results,
+    pending,
     read_usage,
+    score_trajectories,
     subset,
 )
 from inspect_sentinel import auto_mode
@@ -525,6 +532,84 @@ def test_the_trajectory_pipeline_scores_every_call_and_reports_catches(
     assert spent(data / "ledger.csv", "judge") >= 0
     report = (out / "trajectory_report" / "report.md").read_text()
     assert "## Ablations" in report
+
+
+def test_the_judging_projection_prices_the_measured_tokens_at_the_judge_models_rates(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "out"
+    results = out / "trajectory_results"
+    results.mkdir(parents=True)
+    haiku, sonnet = "anthropic/claude-haiku-5-5", "anthropic/claude-sonnet-5-5"
+    (results / "auto_mode.csv").write_text(
+        "trajectory,call,score,native_block,category,error,left_out\n"
+        "t1,0,0.1,False,,,\nt1,1,0.1,False,,,\n"
+    )
+    (results / "auto_mode.usage.csv").write_text(
+        "trajectory,digest,prompt,model,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,cost,seconds,max_prompt_tokens,error\n"
+        f"t1,d,p,{haiku},2,10,1000,4000,40000,0,,1,20000,\n"
+    )
+    per_call = ModelUsage(
+        input_tokens=5,
+        output_tokens=500,
+        input_tokens_cache_read=2000,
+        input_tokens_cache_write=20000,
+    )
+    assert _per_call(out, "auto_mode", haiku) == pytest.approx(
+        price(haiku, per_call) * 1.1
+    )
+    # measured on Haiku, projected for Sonnet: Sonnet's rates, and a half more
+    assert _per_call(out, "auto_mode", sonnet) == pytest.approx(
+        price(sonnet, per_call) * OTHER_MODEL * 1.1
+    )
+    assert _per_call(out, "auto_mode", sonnet) > 25 * _per_call(out, "auto_mode", haiku)
+    # with nothing measured, the prior is priced at the judge model's rates too
+    assert _per_call(tmp_path / "empty", "auto_mode", sonnet) > 25 * _per_call(
+        tmp_path / "empty", "auto_mode", haiku
+    )
+
+
+def test_scoring_stops_between_chunks_and_resumes_with_only_the_unscored_trajectories(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "out"
+    trajectories = [
+        _trajectory("honest-1", "honest", ["ls", "make"]),
+        _trajectory("honest-2", "honest", ["ls", "make test"]),
+        _trajectory("honest-3", "honest", ["ls", "echo done"]),
+    ]
+    write_trajectories(trajectories, out / "trajectories" / "controlarena.yaml")
+    common = ["--data", str(tmp_path / "data"), "--out", str(out), "--budget", "100"]
+    assert controlarena_main(["logs", *common]) == 0
+    settings = TrajectorySettings(out=out, judge_model="auto_mode_bench_stub/judge")
+    chunks: list[int] = []
+
+    def stop_after_one(used: Any) -> bool:
+        chunks.append(len(used))
+        return False
+
+    score_trajectories(
+        "auto_mode", trajectories, settings, chunk=1, keep_going=stop_after_one
+    )
+    assert chunks == [1]
+    usage = out / "trajectory_results" / "auto_mode.usage.csv"
+    first = read_usage(usage)
+    assert len(first) == 1
+    assert [t.id for t in pending("auto_mode", trajectories, settings)] == [
+        t.id for t in trajectories if t.id != first[0]["trajectory"]
+    ]
+    score_trajectories("auto_mode", trajectories, settings)
+    rows = read_usage(usage)
+    assert {r["trajectory"] for r in rows} == {t.id for t in trajectories}
+    # the first trajectory's row was kept, not scanned again
+    assert (
+        next(r for r in rows if r["trajectory"] == first[0]["trajectory"]) == first[0]
+    )
+    assert len(list((out / "trajectory_scans" / "auto_mode").glob("scan_id=*"))) == 2
+    assert pending("auto_mode", trajectories, settings) == []
+    # another judge model, or another prompt, is not the same judge
+    other = replace(settings, models={"auto_mode": "auto_mode_bench_stub/other"})
+    assert pending("auto_mode", trajectories, other) == trajectories
 
 
 def _answer_risk() -> ModelOutput:

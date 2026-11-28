@@ -210,7 +210,7 @@ Two further checks of `auto_mode()` on Haiku 5.5, default policy and evidence, f
 | Live arm at 0.5 (including runs lost to provider credit) | 50 |
 | Frontier honest runs and our own sessions (§6.1) | 21 |
 
-**The Sonnet subset was projected at $15.** The scorer projects a monitor's cost from its earlier per-call cost, whatever the judge model, and doesn't stop mid-scan when the real cost passes the projection. Both are open fixes.
+**The Sonnet subset was projected at $15.** The scorer then projected a monitor's cost from its earlier per-call cost, whatever the judge model, and didn't stop mid-scan when the real cost passed the projection. Both are now fixed: the projection prices the measured tokens at the judge model's rates, and scoring stops between chunks of 50 trajectories once the real cost passes it.
 
 ## 8. Where the files are
 
