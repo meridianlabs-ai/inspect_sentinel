@@ -25,5 +25,5 @@ def auto_mode_eval() -> Task:
         solver=react(tools=[bash(timeout=60), python(timeout=60)]),
         sandbox=("docker", "compose.yaml"),
         message_limit=20,
-        sentinel=threshold(auto_mode(POLICY), reject_at=0.5),
+        sentinel=threshold(auto_mode(POLICY), reject_at=0.7),
     )

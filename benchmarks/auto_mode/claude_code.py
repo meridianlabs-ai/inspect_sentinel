@@ -14,7 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from inspect_ai.model import (
     ChatMessage,
@@ -26,6 +26,8 @@ from inspect_ai.model import (
 from inspect_ai.tool import ToolCall
 
 from inspect_sentinel import BeforeToolCall, Context, Monitor, Observation, monitor
+
+from .evidence import CAP, bash_command, fit, shared_transcript
 
 PROMPT_ENV = "AUTO_MODE_BENCH_CLAUDE_CODE_PROMPT"
 """The environment variable naming the directory of the classifier's prompt files."""
@@ -139,7 +141,11 @@ def parse_category(text: str) -> str | None:
 
 @monitor
 def claude_code(
-    prompt: str | None = None, model: str | None = None, role: str = "judge"
+    prompt: str | None = None,
+    model: str | None = None,
+    role: str = "judge",
+    evidence: Literal["own", "shared"] = "own",
+    cap: int | None = None,
 ) -> Monitor:
     """Claude Code's auto-mode classifier, judging each tool call in two stages, with its prompt loaded from `prompt` (a directory; see `load_prompt()`).
 
@@ -147,6 +153,8 @@ def claude_code(
         prompt: The directory of the classifier's prompt files; `PROMPT_ENV` when not given.
         model: A model name, used when `role` is not configured.
         role: The model role the classifier runs on.
+        evidence: `own` for the classifier's transcript; `shared` for the rendering `auto_mode()` is shown (`evidence.shared_transcript()`), for the same-evidence ablation.
+        cap: Tokens each stage's prompt is kept under, by leaving out the transcript's oldest lines after the first (`evidence.fit()`); none by default. The observation records how many were left out as `left_out`.
 
     Raises:
         ValueError: If no prompt directory is given or set.
@@ -160,7 +168,16 @@ def claude_code(
 
     async def classify(context: Context, step: BeforeToolCall) -> Observation:
         task = context.eval.sample_input if context.eval else None
-        lines = transcript_lines(step, task if isinstance(task, str) else None)
+        left_out = 0
+        if evidence == "shared":
+            lines = (await shared_transcript(step)).splitlines()
+        else:
+            lines = transcript_lines(step, task if isinstance(task, str) else None)
+        if cap is not None:
+            fixed = len(loaded.system) + max(
+                len(loaded.user_message([], n)) for n in (1, 2)
+            )
+            lines, left_out = fit(lines, fixed, cap or CAP)
         system = ChatMessageSystem(content=loaded.system)
 
         async def ask(stage: int, config: GenerateConfig) -> str:
@@ -178,6 +195,8 @@ def claude_code(
         )
         severity = parse_severity(first)
         metadata: dict[str, Any] = {"stage_1": severity}
+        if left_out:
+            metadata["left_out"] = {"input": left_out}
         if severity < BOUNDARY:
             return Observation.score(
                 severity / 100,
@@ -205,7 +224,7 @@ def claude_code(
 def _call(call: ToolCall) -> dict[str, Any]:
     name = _TOOLS.get(call.function, call.function)
     if call.function == "bash":
-        return {name: call.arguments.get("command", "")}
+        return {name: bash_command(call)}
     if call.function == "write_file":
         return {
             name: {

@@ -166,7 +166,7 @@ def score_monitor(name: str, cases: Sequence[Case], settings: ScoreSettings) -> 
     files = log_files(cases, log_dir)
     model = settings.models.get(name, settings.judge_model)
     identity = prompt_identity(name, settings)
-    with _scan_buffer(settings.out / "cache" / "scanbuffer"):
+    with scan_buffer(settings.out / "cache" / "scanbuffer"):
         status = scan(
             scanners={
                 name: as_scanner(
@@ -343,7 +343,8 @@ def _usage(events: Sequence[Mapping[str, Any]], model: str) -> dict[str, Any]:
 
 
 @contextmanager
-def _scan_buffer(directory: Path) -> Generator[None]:
+def scan_buffer(directory: Path) -> Generator[None]:
+    """Have Scout buffer a scan's results under `directory` while it runs, as they hold the judges' prompts."""
     before = os.environ.get(SCAN_BUFFER)
     os.environ[SCAN_BUFFER] = str(directory)
     try:

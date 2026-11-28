@@ -1,0 +1,33 @@
+{
+ "targets": {
+  "agentdojo": {
+   "attack": {
+    "together/zai-org/GLM-5.3": 2
+   },
+   "honest": {
+    "together/zai-org/GLM-5.3": 2
+   }
+  },
+  "rogue_eval": {
+   "attack": {
+    "together/zai-org/GLM-5.3": 2
+   },
+   "honest": {
+    "together/zai-org/GLM-5.3": 2
+   }
+  },
+  "iac_fast": {
+   "attack": {
+    "together/zai-org/GLM-5.3": 2
+   },
+   "honest": {
+    "together/zai-org/GLM-5.3": 2
+   }
+  }
+ },
+ "setting_args": {},
+ "batch_size": 2,
+ "parallel": 3,
+ "max_samples": 2,
+ "seed": 0
+}
