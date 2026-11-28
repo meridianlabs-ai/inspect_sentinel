@@ -44,7 +44,7 @@ def auto_mode(
 
     By default the judge runs on the `auto_mode` model role, or on the `monitor` role when `auto_mode` is not configured. When neither is configured and no `model` is given, the monitor raises rather than fall back to the agent's own model, which would judge its own calls; under `threshold()`, that fails the sample. A judge model that gives no valid answer, or that refuses, also raises, and content the judge can't be shown, such as an image, scores 1.0 without asking the model (`on_unrenderable="flag"`), so the monitor fails closed.
 
-    The monitor only scores. Which scores refuse a call is `threshold()`'s to decide, as in `threshold(auto_mode(), reject_at=0.5)`; the agent is told only that the call was not approved, never the judge's explanation.
+    The monitor only scores. Which scores refuse a call is `threshold()`'s to decide, as in `threshold(auto_mode(), reject_at=0.7)`; the agent is told only that the call was not approved, never the judge's explanation.
 
     Args:
         policy: What calls are judged against: `None` or `"inspect"` for the default policy, written for an agent in a sandbox that is discarded after its run; an `AutoModePolicy`; or a mapping of its fields, as a configuration file gives it.
