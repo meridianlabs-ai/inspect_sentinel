@@ -1,0 +1,876 @@
+{
+ "bucket": "docker-breakout-transcripts",
+ "source": "https://github.com/UKGovernmentBEIS/sandbox_escape_bench",
+ "objects": [
+  {
+   "name": "logs/deepseek-oss/2026-01-27T10-37-27+00-00_bpf-privesc_4kqwbcdVFrtgVwQN2eALVr.eval",
+   "generation": "1770044251968840",
+   "md5": "wSZaq1lMGGSLwB/B/ZP9sQ==",
+   "size": 12640824
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-27T10-37-27+00-00_cgroup-release-agent_E574kRh9AA6SqTeqJ6yWuf.eval",
+   "generation": "1770044259351370",
+   "md5": "i4C68khOIDuKLdiZ6xytGQ==",
+   "size": 15759413
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-27T10-37-27+00-00_dac-read-search_iHzAFNDgfRTqhsMvEgitVF.eval",
+   "generation": "1770044297074458",
+   "md5": "RXO7bTv8ACFgQqshUvcfXA==",
+   "size": 14328869
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-27T10-37-27+00-00_dirty-pipe_Sf3iakaKLkkZ4SFDjVajUT.eval",
+   "generation": "1770044263739344",
+   "md5": "fTKPUFutg+h73u6uQ3KZhQ==",
+   "size": 16559421
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-27T10-37-27+00-00_docker-socket_3LBFbochVaWDvBfBdLhT78.eval",
+   "generation": "1770044205465781",
+   "md5": "gT+eVsJFPOSQ1ByqNLGEgQ==",
+   "size": 342717
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-27T10-37-27+00-00_docker-socket_FEwzfKaWCiBJTtuB7RvvqA.eval",
+   "generation": "1770044207393742",
+   "md5": "pruo7nD5AyDRb0apOZ9PSQ==",
+   "size": 759091
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-02+00-00_privileged_PwEq44j3gSc9Y7Kvwnjo4U.eval",
+   "generation": "1770044210595485",
+   "md5": "YjKS7lmCFwsiFruPRvpoPQ==",
+   "size": 2476025
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_k8s-route-localnet_RJiuRqM8FCnKzH8EMB6aar.eval",
+   "generation": "1770044322810379",
+   "md5": "xCTgof/DLGbA0iY1SY3ziw==",
+   "size": 28618895
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_k8s-runc_cSATeK2VoCEKeJenpARLs2.eval",
+   "generation": "1770044257381954",
+   "md5": "AC4o2pj34MXgbNvHZhpZBA==",
+   "size": 17660448
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_packet-socket_W5iCaJJN9PJaVtwoDLtE5E.eval",
+   "generation": "1770044308292153",
+   "md5": "82mylfVFsvI021EfKqZJ6g==",
+   "size": 23275831
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_pid-namespace_YbcQnbGinW5DdhWFaG6pC3.eval",
+   "generation": "1770044213071274",
+   "md5": "/C9sF+KSFxy1VXdSNDxtjQ==",
+   "size": 750568
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_privileged_WRZugHSpu8NEpeMjMYEpaL.eval",
+   "generation": "1770044276125941",
+   "md5": "c39HI+i9ennlN7RVUqpLVg==",
+   "size": 19942632
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_runc-overwrite_hWL6d6F9XksgCPAByaRQNK.eval",
+   "generation": "1770044276035137",
+   "md5": "r+edWQe1T9tzSWSEb14r0Q==",
+   "size": 19606735
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_sys-admin_c7cE6s4oeoCVfaWEbZxDwb.eval",
+   "generation": "1770044262885936",
+   "md5": "l/p0ZGmnVILWYNZl6CywRQ==",
+   "size": 17413337
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T02-04-03+00-00_sys-module_EjpnEfRoHsEFZWZ4yPVqsd.eval",
+   "generation": "1770044279098613",
+   "md5": "47XPTTVian+TvNi3yK9R7w==",
+   "size": 16393959
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T11-24-29+00-00_dirty-cow_juP6uXrSpCdpTv72KrTRA9.eval",
+   "generation": "1770044246467094",
+   "md5": "5Y0cNJMS1HtHobgtvSvvlw==",
+   "size": 15786094
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T11-24-29+00-00_hostpath-etc_BpGyvcJSFS9zYfFC2i6tBr.eval",
+   "generation": "1770044256926735",
+   "md5": "uT1zNc6TZojgOaB4VOno9Q==",
+   "size": 14714639
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T11-24-29+00-00_k8s-crio-escape_6V4nHmrXAq6yubhnc4EMAc.eval",
+   "generation": "1770044283937856",
+   "md5": "rzhsQcaeOv3STYZITTF4og==",
+   "size": 17520895
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T11-24-29+00-00_k8s-malicious-binary_moRV5UEty8dPC3WNKeGdBz.eval",
+   "generation": "1770044263227853",
+   "md5": "W60+2SuOPVZl6FFGlSGApw==",
+   "size": 17364448
+  },
+  {
+   "name": "logs/deepseek-oss/2026-01-28T11-24-29+00-00_k8s-rbac-permissions_7CGCadec9EstotSREQdBnb.eval",
+   "generation": "1770044263267586",
+   "md5": "fro+GG2ZnnoSoc/tAyS/Lg==",
+   "size": 13866933
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_bpf-privesc_JqoempJQ2wMwripGoy3QKo.eval",
+   "generation": "1770044242213427",
+   "md5": "B6rluSZrIoKUhvWhqnWK2g==",
+   "size": 3115
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_bpf-privesc_eEn69VrFpgdWRvrPPAcTYN.eval",
+   "generation": "1770044258553714",
+   "md5": "XYc88RV32ppPscmNOG2tDA==",
+   "size": 3108
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_cgroup-release-agent_Mdfvy7UeiMJaHGfgDgUuzy.eval",
+   "generation": "1770044242006718",
+   "md5": "L61W0A+vMaGoNIwg6WXiQg==",
+   "size": 3095
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_cgroup-release-agent_mNhHPzwEQBPxdQ76zKvVFd.eval",
+   "generation": "1770044230794458",
+   "md5": "VtHmXQcLkvzpOE2ly8taxg==",
+   "size": 3090
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_dac-read-search_b7u3VetPuRhTHF57LGZZ4v.eval",
+   "generation": "1770044258622885",
+   "md5": "B27A/23ghGkZ/YmJQACH+A==",
+   "size": 1811315
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_dac-read-search_eHiuhUCiPzjQwqd2PRJCGK.eval",
+   "generation": "1770044260471609",
+   "md5": "hZ5s6KhQSvUwgoaGqNA4hg==",
+   "size": 3064
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_dirty-cow_DF5aBghDuA5PmDzJ4JHQBv.eval",
+   "generation": "1770044242954575",
+   "md5": "WtBCd8dh75nxZ3wUfz7/AQ==",
+   "size": 3072
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_dirty-cow_iiUDHruLybj9KVQUDiMMMe.eval",
+   "generation": "1770044266941498",
+   "md5": "5iua1uaPy4Sv1LmoPvzY6A==",
+   "size": 2719270
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_dirty-pipe_bmohahmGHB9Wd3LH7YQT37.eval",
+   "generation": "1770044257715368",
+   "md5": "1Le3fwqO96vbmjMOlKwfOw==",
+   "size": 3079
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T20-53-57+00-00_dirty-pipe_j7UkQ4BGi2RAxy4HETT8kM.eval",
+   "generation": "1770044244427439",
+   "md5": "8FilsjGGPmFBoQIkrq12ZA==",
+   "size": 2482085
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_docker-socket_7Hmc4vccry4p2FqzefaoQw.eval",
+   "generation": "1770044231552898",
+   "md5": "7n/cPgSZF2tt1jkxtOu7mA==",
+   "size": 475218
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_docker-socket_cyxwtWUgZY7FRQ7eGiQckU.eval",
+   "generation": "1770044245524716",
+   "md5": "A/IEKaplc4l+bX5mh+R7/Q==",
+   "size": 557668
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_hostpath-etc_gfyM2sRTuE7gb8ydeTriYk.eval",
+   "generation": "1770044236461543",
+   "md5": "kRdLhs0ipMk9J5meK6N+IQ==",
+   "size": 942875
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_hostpath-etc_hU5JbFXDpDgbGrHPa6HCS7.eval",
+   "generation": "1770044241325959",
+   "md5": "2ZlYMF54wqi7YTZX5gwflw==",
+   "size": 3921080
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-crio-escape_Ex6SuFXnSJRPimRUGEFK73.eval",
+   "generation": "1770044259983176",
+   "md5": "lqcqnPTo0kkHeIKDKrdz9w==",
+   "size": 10356697
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-crio-escape_JPnKhX5kuPxwsrbdNztxFc.eval",
+   "generation": "1770044281563657",
+   "md5": "bQlWnPoki9EDVVp9gOKNrA==",
+   "size": 10618297
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-malicious-binary_VNyDsCvB6g6XFGXmozSwGe.eval",
+   "generation": "1770044336355310",
+   "md5": "Mn3bjvfYFi+QOIltLVeyUg==",
+   "size": 12164986
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-malicious-binary_j5KCC3RkFGpzXWpqTkX54Q.eval",
+   "generation": "1770044290028715",
+   "md5": "mzBTq/Kaj3r4WxgiU66hvA==",
+   "size": 11218411
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-rbac-permissions_7JGRxSraytrCrTb8jaTEgy.eval",
+   "generation": "1770044247000330",
+   "md5": "jd71Qi0lWbk/naTylZka/g==",
+   "size": 1716844
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-rbac-permissions_bHZRoXLKtVngAgoc6HNtcW.eval",
+   "generation": "1770044265890468",
+   "md5": "r3zHP4ZLxHZKfPd4+ZM+Gw==",
+   "size": 5760634
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-route-localnet_XNejN7t5JFrNe6GQhLsu4P.eval",
+   "generation": "1770044283575561",
+   "md5": "mEOGfaMPu1I2MNzHj9gBmQ==",
+   "size": 8294897
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-route-localnet_cJadKsvi3fBp8LMSKMwJ5Q.eval",
+   "generation": "1770044267402821",
+   "md5": "ej1+7YXyzohF44AbXzPdkg==",
+   "size": 9056472
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-runc_3yecm8MzAsmg5Jyoh6tfaL.eval",
+   "generation": "1770044276524175",
+   "md5": "9tvW4fmnvaAeRLK1e5G0oQ==",
+   "size": 9273916
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_k8s-runc_SWZoLd7eMaPiQuCFANTeYs.eval",
+   "generation": "1770044280762279",
+   "md5": "D4FaoYUVr7kx+nAFgf/0Sg==",
+   "size": 7896512
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_packet-socket_SzWefAzJiRPtd9jKQDdUSu.eval",
+   "generation": "1770044275525260",
+   "md5": "v814qykKGBY2rQ9JkQaSiA==",
+   "size": 10276120
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_pid-namespace_MjJeRzLpPv5ZDUDTJEhrJX.eval",
+   "generation": "1770044238823357",
+   "md5": "my34+ZA9o2qhrfuzyubxIg==",
+   "size": 2104380
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_pid-namespace_bWcj8pG3amNJev4RQrBWM7.eval",
+   "generation": "1770044241765694",
+   "md5": "yHZyLIEH+p8+KqmD1aOQyQ==",
+   "size": 546489
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_privileged_9z3PxLasDuACakMXmxn6Ar.eval",
+   "generation": "1770044261505459",
+   "md5": "kXP8gSvmU8AGn7ZO5qjY9w==",
+   "size": 1642594
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_privileged_EGLpyQ3HbxNiqrUfS6MBzC.eval",
+   "generation": "1770044252908112",
+   "md5": "PQvr1eGkR/LXnS1+H12HIQ==",
+   "size": 2594302
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_runc-overwrite_Ma2EgCQwNurT667VHLh5Fg.eval",
+   "generation": "1770044258315007",
+   "md5": "GDq8vSkG4Cq0LV8d+WNdBw==",
+   "size": 10571644
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_runc-overwrite_WNJ3WQd7sFLX2atX8o3r29.eval",
+   "generation": "1770044278118615",
+   "md5": "qgjQ34mEHBo2ZT/uuadi1Q==",
+   "size": 12133143
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_sys-admin_UnNdcv4eAqrjXd939xAjpE.eval",
+   "generation": "1770044298301855",
+   "md5": "s0hJauA3C+Jma8mQWuKKDg==",
+   "size": 13177941
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_sys-admin_eMZCmMbj2fPV63t6Dwhf3B.eval",
+   "generation": "1770044279249376",
+   "md5": "ViOmRZ1IDW2vV0a7cjc8fQ==",
+   "size": 7285298
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_sys-module_arWQJN3u7PRu5jcZdWXrks.eval",
+   "generation": "1770044293091589",
+   "md5": "I078oPHHjXqzM9CSzzqB5A==",
+   "size": 12047304
+  },
+  {
+   "name": "logs/gpt-5-gpt-5-mini/2026-01-27T21-25-50+00-00_sys-module_mbbEL8fpf9ZEdpv8mG6YZw.eval",
+   "generation": "1770044296932710",
+   "md5": "Vf2JmMPO9pAIeZPAwrzieQ==",
+   "size": 16223118
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_bpf-privesc_3Li3X9Ywx2i7mYzrTk9wR7.eval",
+   "generation": "1770044310036777",
+   "md5": "ibp56UAONxROgkmIsGDPZA==",
+   "size": 6303191
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_bpf-privesc_D2mR6vVaBhwJ2r9wrsdE6x.eval",
+   "generation": "1770044306698536",
+   "md5": "yIy3jhHy2jwzrtl2MKRHNQ==",
+   "size": 10347227
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_cgroup-release-agent_KknLgJVSN5s5bckeMjrVXS.eval",
+   "generation": "1770044312949203",
+   "md5": "/8dv8mgMafHJinDMuCyJuw==",
+   "size": 10755523
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_cgroup-release-agent_WP3jhxMsThFgg7HeCKUED7.eval",
+   "generation": "1770044300472578",
+   "md5": "0NoRjPjMnl4xXfrRTPxH5A==",
+   "size": 7923492
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_dac-read-search_JZjbAYWSaLWRm8JnWT2TU6.eval",
+   "generation": "1770044312290314",
+   "md5": "Q5f5TKFAcg9eUEduvpTEAQ==",
+   "size": 12186190
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_dac-read-search_jSTz3UcnH2iBeF8HG5VWkd.eval",
+   "generation": "1770044284987213",
+   "md5": "lDNFk5jVYBuZE4c6jESNFQ==",
+   "size": 1898720
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_dirty-cow_ZZ68FPLdH8oWYdADVzSmo8.eval",
+   "generation": "1770044320048700",
+   "md5": "+0l1JjsktMccICsCdPhIww==",
+   "size": 11412990
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_dirty-cow_eVbgS76pZf4mfntc3BA67E.eval",
+   "generation": "1770044316773946",
+   "md5": "swMqBqg0CPhDZluH7O+i4A==",
+   "size": 6661499
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_dirty-pipe_hXvU9z9WywAJJ6gjGdBndv.eval",
+   "generation": "1770044321873834",
+   "md5": "yu3DoY3GrSeG25DNEraH9w==",
+   "size": 8198229
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_dirty-pipe_kYdNDqEq72wZEskDs8U5q3.eval",
+   "generation": "1770044331071574",
+   "md5": "1lAxomeANZfYVtn0oyY4KQ==",
+   "size": 12643051
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_docker-socket_BnENesKzz6UYXov6jqFkJf.eval",
+   "generation": "1770044284751326",
+   "md5": "SDU9fcrkz41gGM52l5nSjA==",
+   "size": 166067
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_docker-socket_Y47ypr7HEZLeeY9DxhDTLd.eval",
+   "generation": "1770044280006585",
+   "md5": "1whaTvYxdhAtCfBTkIjC5w==",
+   "size": 238210
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_hostpath-etc_ZDUekPMfBLXP5ZgWUy7A9f.eval",
+   "generation": "1770044292416059",
+   "md5": "UEJCZ9gby4+mvHdbVY63qg==",
+   "size": 1870076
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_hostpath-etc_aZ9fHhuCEg49grDz5uFGGp.eval",
+   "generation": "1770044312484807",
+   "md5": "l9hFD9J1hAERWchw+Yny9g==",
+   "size": 12418520
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-crio-escape_Kn49TL5UmVKcCsdufCLSK5.eval",
+   "generation": "1770044283549054",
+   "md5": "kqgP1MN3+Z3iQsQMLwkCIw==",
+   "size": 2809783
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-crio-escape_c2VbwQj3LNjubhYBM37f8f.eval",
+   "generation": "1770044311832160",
+   "md5": "E9/IUhSSLi9ngMyKNeSJuQ==",
+   "size": 9190440
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-malicious-binary_XLu6an44LwNoZe6Syg4gdS.eval",
+   "generation": "1770044305265257",
+   "md5": "xOtFIPgIiJ1HML+zjCdY3g==",
+   "size": 6118646
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-malicious-binary_hGR4GRipapjpPgJtnW4TCg.eval",
+   "generation": "1770044310081446",
+   "md5": "rnqPc0JTRyJQ9J3KfQ9KxA==",
+   "size": 10899825
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-rbac-permissions_TGqWfsdKiXALL8xw64HyTq.eval",
+   "generation": "1770044280713717",
+   "md5": "FUejgYKGqRFfa2m7Is/zjw==",
+   "size": 2641178
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-rbac-permissions_VcGRBkrnJBvsQFp4rbejtz.eval",
+   "generation": "1770044286399810",
+   "md5": "+kBIUGyM7AVQ4ZzeomX3ww==",
+   "size": 1096891
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-route-localnet_QPrvXx7idfpG9ynvFfBzDd.eval",
+   "generation": "1770044325433048",
+   "md5": "fCDTxeSa78OVhr31Y9KS1Q==",
+   "size": 10171484
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-route-localnet_jpoKWkat8GDgZG7MiqWExh.eval",
+   "generation": "1770044304933496",
+   "md5": "I3LrPQ1tCu/dnuFtY5xbaA==",
+   "size": 6564908
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-runc_kyCy6NTL8DU26SMLHuw3qn.eval",
+   "generation": "1770044289194016",
+   "md5": "zyebuw+hE5joGhiuYwiwtA==",
+   "size": 4417552
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_k8s-runc_nUqwHpq6AKnnUzvbE8Lj5C.eval",
+   "generation": "1770044312438505",
+   "md5": "0YdFiFZyn5DJADLaNaM1nA==",
+   "size": 8647326
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_packet-socket_SVJQWUHnFrMFxqY7fYZDrs.eval",
+   "generation": "1770044324396861",
+   "md5": "VuJBXp+jfx9ncjrZBAZdSQ==",
+   "size": 14632056
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_packet-socket_bi56h6JthM48ECbK8kRBVo.eval",
+   "generation": "1770044298042386",
+   "md5": "8Mcqt1w/ppM84NuOmzDmJQ==",
+   "size": 6997270
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_pid-namespace_X5WZtrDqYieEP85HyYKr8X.eval",
+   "generation": "1770044295541895",
+   "md5": "UsM7S9JASUjQYRYU7pHiag==",
+   "size": 922293
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_pid-namespace_ktUHeqVjFGWFhKWopsnSkb.eval",
+   "generation": "1770044293115920",
+   "md5": "oJza6B/P6tX5tkN5qBEmJw==",
+   "size": 420409
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_privileged_WkmfR522bBFKr4GUGGHjuh.eval",
+   "generation": "1770044297838464",
+   "md5": "uqQvzQM2Ed+MR/XqdM5tTg==",
+   "size": 221587
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_privileged_hNNr2uVDs5rTMuP6X88kvt.eval",
+   "generation": "1770044281778903",
+   "md5": "0RPrY99L0COuyQrMLyq8lw==",
+   "size": 907592
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_runc-overwrite_N5jU3F32BFojDpAyDzpx2q.eval",
+   "generation": "1770044308306577",
+   "md5": "qUCytJM70p95rPlGe1DFng==",
+   "size": 8297099
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_runc-overwrite_TEwztumJWpsfppXQoYRhPv.eval",
+   "generation": "1770044314894423",
+   "md5": "axbdEBALPQKkOxwyeyx5vQ==",
+   "size": 10774666
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_sys-admin_H8uJW8eyUGw3ipvowvx57X.eval",
+   "generation": "1770044333614534",
+   "md5": "GphYjw0fYJ5vvyNKRxZWPg==",
+   "size": 11214740
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_sys-admin_SobbvLNJi7jJWLSiZGSgWd.eval",
+   "generation": "1770044281099509",
+   "md5": "rAwJ7QXiSG1higzB9lFjXg==",
+   "size": 854194
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_sys-module_8YcEb6XTP852PVjdajTTVH.eval",
+   "generation": "1770044301572595",
+   "md5": "47j3kL/CFNpBkEmhuxf4Fw==",
+   "size": 2413737
+  },
+  {
+   "name": "logs/opus-4-5-gpt-5.2/2026-01-26T15-46-52+00-00_sys-module_FJ7XECfa4W8ydABmLTht5R.eval",
+   "generation": "1770044311657588",
+   "md5": "13tJOp3yVc0Zw8qVMw7JsQ==",
+   "size": 11845507
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-14+00-00_bpf-privesc_EQ6DQ9sHLe5U5WMM9FqL8j.eval",
+   "generation": "1770044374767114",
+   "md5": "h0ou3JiEV5G09qLr8RwiIQ==",
+   "size": 25722438
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-14+00-00_cgroup-release-agent_fk2Y2iZLTwTsHYEMQLtXgn.eval",
+   "generation": "1770044365545823",
+   "md5": "BWfnFFsT3Dq+GZ4/ErijPQ==",
+   "size": 24225042
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-14+00-00_dac-read-search_8HcmUqQCHrqodXU2zFRnFD.eval",
+   "generation": "1770044373542785",
+   "md5": "7BL9OrZzfKIOc8k0Nd8I8A==",
+   "size": 22498964
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-14+00-00_dirty-cow_5kTataMWZPUgPv4gS5eMnn.eval",
+   "generation": "1770044371265388",
+   "md5": "MVnnX/F5NJEFGaS+z0tZhg==",
+   "size": 23537387
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-14+00-00_dirty-pipe_8QiKVUEoNr7Z84pdjJqZpZ.eval",
+   "generation": "1770044376009540",
+   "md5": "UkgWnmA94jL45d/DLx08uA==",
+   "size": 25163282
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-14+00-00_docker-socket_WVHbDUuCqpBY9sZytAu3FP.eval",
+   "generation": "1770044350879850",
+   "md5": "az/u8VqLNMd3zWBpO0nT2Q==",
+   "size": 8449563
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_bpf-privesc_BAKo6KddGde4qvHy3WMdBN.eval",
+   "generation": "1770044339622245",
+   "md5": "JMSH3K5gYGm803L2+2Xz3A==",
+   "size": 8290395
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_bpf-privesc_W4eFZp4S3TQrJriLr5VASX.eval",
+   "generation": "1770044330588687",
+   "md5": "mrOvQLNtqH9wBd3LBQB7JQ==",
+   "size": 9420594
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_cgroup-release-agent_LHwwH5pVHxMywkqdFzjJU6.eval",
+   "generation": "1770044344308535",
+   "md5": "SMKNugC5l1fAsdNPzbpGnQ==",
+   "size": 7933545
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_cgroup-release-agent_Wxf4ptC7ZeNKwm4CHb923P.eval",
+   "generation": "1770044340549025",
+   "md5": "4PMHTibbfjAt2bq6eQdLpA==",
+   "size": 10289681
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_dac-read-search_etMfqUr2Y3p27oLKfHkJvN.eval",
+   "generation": "1770044336776534",
+   "md5": "JvVgd2tYLbNqgFAEZa7NgQ==",
+   "size": 7719916
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_dac-read-search_jVqZD4i2BiWPCpr8dET9fS.eval",
+   "generation": "1770044336338924",
+   "md5": "lzHLHjvoer3Ni9dC9eqWGQ==",
+   "size": 9026640
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_dirty-cow_YWWwSqzwJnBYNgbWtpeGAo.eval",
+   "generation": "1770044342312775",
+   "md5": "VORh1lvtRGLHhR7cYlePcQ==",
+   "size": 11165946
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_dirty-cow_hU8xnZbNaKqkNvfRH8iVAY.eval",
+   "generation": "1770044356664741",
+   "md5": "t9PeMLsu8hFYd1S/ghc2AQ==",
+   "size": 9250379
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_dirty-pipe_Q5vJW6qG4HZofHVzLTKUdp.eval",
+   "generation": "1770044332436707",
+   "md5": "yw+HSMvjSACmlfbf9EyEOw==",
+   "size": 7899140
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_dirty-pipe_fvHxTWBsshqSEFb3VYAkhK.eval",
+   "generation": "1770044348397651",
+   "md5": "cdxtMwFA7GyX20/ee2+9Sw==",
+   "size": 9791140
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_docker-socket_6fuueToxZ4GpjV5dVZdHSA.eval",
+   "generation": "1770044312955321",
+   "md5": "xub/fpc7srF4AFVWcvlIRw==",
+   "size": 396029
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_docker-socket_8crZK7aq2ZMJWGLRhdQKEV.eval",
+   "generation": "1770044337904580",
+   "md5": "lqcZt6uUH9n6/4k+33Qxvw==",
+   "size": 712238
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_hostpath-etc_2CkADovZZB4HjzXeyPEYfb.eval",
+   "generation": "1770044342584274",
+   "md5": "VhTXWZMk/MOKECh99wyGEg==",
+   "size": 8920095
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_hostpath-etc_MnnqahgkXWzgMCQ42VC28F.eval",
+   "generation": "1770044353929430",
+   "md5": "5QNUCcBixlZbW17T6eRFqw==",
+   "size": 18531616
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_hostpath-etc_h2QzqP99X5oLEXSMpJog5C.eval",
+   "generation": "1770044315923096",
+   "md5": "JyrAtbLjTdoiVPlWr4iiww==",
+   "size": 2480297
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-crio-escape_JVHKK3ioYjsM8iTqDrb7Dg.eval",
+   "generation": "1770044361849459",
+   "md5": "c13WQ6oe7NOE4h651ZpG0A==",
+   "size": 21092856
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-crio-escape_VvBVU5SVciayFBrFfzteEX.eval",
+   "generation": "1770044353859625",
+   "md5": "xBEeURkCvRkzQtl8C2zvBQ==",
+   "size": 9132880
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-crio-escape_gbFs3Z4ji7hhXaK4si5WDK.eval",
+   "generation": "1770044354735406",
+   "md5": "rjtstDBCnZECiVuyJoDp6w==",
+   "size": 9363546
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-malicious-binary_iadaMAQQGuMDnknhyN9DRm.eval",
+   "generation": "1770044340903360",
+   "md5": "CPovfqBZJHbCmjG/dUDC9w==",
+   "size": 8073052
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-malicious-binary_ktS3pfvCaiZ3LuFyHeeJqZ.eval",
+   "generation": "1770044339122537",
+   "md5": "ZNVgu92agUuIQXe2kxewcQ==",
+   "size": 10081405
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-malicious-binary_nDd8eSx923RRgb8ZDVNbKu.eval",
+   "generation": "1770044369951937",
+   "md5": "rFQ+S+f0FwIK/7hrqEj/lQ==",
+   "size": 23754211
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-rbac-permissions_Do4wvRqERn7q7qGJ8Xjo25.eval",
+   "generation": "1770044370761421",
+   "md5": "PnyyxEQH7dAPupxCPI/BXg==",
+   "size": 22725394
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-rbac-permissions_QBMKtzaGqH4CEUCSaYNBAf.eval",
+   "generation": "1770044329363176",
+   "md5": "SroqaySA/VYq4wetF+7Phg==",
+   "size": 8049709
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-rbac-permissions_nhc8xat9yofcs6S3gJE7GL.eval",
+   "generation": "1770044338817021",
+   "md5": "0t6HGsgYPjVHl5IJjxfW8Q==",
+   "size": 5755464
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-route-localnet_9JEAgovfKSHM7o5KxPg9mv.eval",
+   "generation": "1770044338982001",
+   "md5": "3SyfHf0jNlRHm1OSYTFIYQ==",
+   "size": 9618436
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-route-localnet_PdHTL3w5h8AQbVdiSp7jCz.eval",
+   "generation": "1770044354335283",
+   "md5": "84S7qV62UbM7m3aKEXKWmQ==",
+   "size": 8564031
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-route-localnet_jJCTHrExHH2v5pds5oTo3D.eval",
+   "generation": "1770044368546896",
+   "md5": "EswAGNWw9b+K7OGNrZeu1Q==",
+   "size": 25578355
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-runc_TkUQX6NecrijEDMDrigNBV.eval",
+   "generation": "1770044335468295",
+   "md5": "lVj3GimSeCdkNwoMiWiY7g==",
+   "size": 7887154
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-runc_XoLx3En9FRFdQC8E3NSGZ9.eval",
+   "generation": "1770044342858300",
+   "md5": "jqQUFiVWT0/GuWht2NIgUw==",
+   "size": 8299464
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_k8s-runc_jh6FnYScCG7yzjFhUKYAfh.eval",
+   "generation": "1770044371224056",
+   "md5": "2+Ozs6psvDQkjxcL+FBwWQ==",
+   "size": 21665529
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_packet-socket_8LnVSBA8kACmoK2KWYco9j.eval",
+   "generation": "1770044340281435",
+   "md5": "GP2QBiIJNc7/Amq8CO6rxQ==",
+   "size": 7690965
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_packet-socket_93KsderAp6SyjMvV9aUcZU.eval",
+   "generation": "1770044351020578",
+   "md5": "LoMjVAgJPSsKDoQwGKMLpw==",
+   "size": 9610065
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_packet-socket_SPV5bF2KmDUqaR7syFkNdM.eval",
+   "generation": "1770044372949076",
+   "md5": "128WpXuWDpgJgdtlBLfb1w==",
+   "size": 21061165
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_pid-namespace_EBRqRZMzL8hBZS5Vx4jvTf.eval",
+   "generation": "1770044324405621",
+   "md5": "DwYhsfo3XJ4wUu1hfGLktw==",
+   "size": 1571849
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_pid-namespace_PPrMxjgDd2ruTLroQVERhJ.eval",
+   "generation": "1770044318256935",
+   "md5": "IOEvjdafOmEL1ipu2RgpOg==",
+   "size": 1379792
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_pid-namespace_kWomCPDKirYdqctRap6BQJ.eval",
+   "generation": "1770044307603741",
+   "md5": "n93UvPkEhfg38Z2FqBia2g==",
+   "size": 724281
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_privileged_5Ru9hrsdbg7eWcCdVeRJCr.eval",
+   "generation": "1770044305771773",
+   "md5": "UuxoN9e3UsBXQh5jFTWJIg==",
+   "size": 195172
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_privileged_9Nd34E22mpnhyf4yE5s5J9.eval",
+   "generation": "1770044363651233",
+   "md5": "oBg1+Qus2Wvsa9yyiG2c7A==",
+   "size": 19091001
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_privileged_bknrjGzLhxNqgbNwjQDMki.eval",
+   "generation": "1770044309051288",
+   "md5": "wioBTwSScluk1abiIdYoWQ==",
+   "size": 481304
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_runc-overwrite_4NjtFdjpoFBr7bvKpSs4UT.eval",
+   "generation": "1770044365178777",
+   "md5": "GLWxY05Au9NrMDEJVTfvMQ==",
+   "size": 23907919
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_runc-overwrite_4T68UvLGgxi2eKziiwwi4a.eval",
+   "generation": "1770044351690966",
+   "md5": "adcnS7aiT9OED80c6mK4ww==",
+   "size": 9037870
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_runc-overwrite_ap7Mrc6GjiczpbZMN38Zty.eval",
+   "generation": "1770044344306262",
+   "md5": "KKXjgMTpwhEhtSaoJ/rpjQ==",
+   "size": 9509499
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_sys-admin_3BjBcXG39tA7zygY356GUt.eval",
+   "generation": "1770044344917593",
+   "md5": "7fNFqtgeK32DsP0IzuR1qA==",
+   "size": 4675330
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_sys-admin_7wHK55MHcorAFRmgDF4UNe.eval",
+   "generation": "1770044353458108",
+   "md5": "zVfST4Yj7rccxoY2qWOqcQ==",
+   "size": 21841246
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_sys-admin_GLvqBdFoJoXD5P9UYPdS5k.eval",
+   "generation": "1770044348608033",
+   "md5": "6O3x47iImz2kjtGG4WvvGw==",
+   "size": 8708449
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_sys-module_6tAUDEur3uawY6GS5N5k7X.eval",
+   "generation": "1770044368824873",
+   "md5": "CDpC4w/EGMyTu27KZbGCsg==",
+   "size": 23578763
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_sys-module_YSFn2rjjH8K6unnSFsoTQf.eval",
+   "generation": "1770044336599233",
+   "md5": "ES+BGQDlhnFdEwzpWxKB7Q==",
+   "size": 10739113
+  },
+  {
+   "name": "logs/smaller-models-anthropic-openai/2026-01-26T18-32-15+00-00_sys-module_khht55umCPMdNZoaxG6roc.eval",
+   "generation": "1770044335000786",
+   "md5": "hX/j77ypwxiX8XCp/mEO/Q==",
+   "size": 9209570
+  }
+ ]
+}
